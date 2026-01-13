@@ -7,6 +7,7 @@ import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import { Box, Button, FormControl, InputLabel, MenuItem, Select, Typography } from '@mui/material';
 import CodeMirror from '@uiw/react-codemirror';
 import { useState } from 'react';
+import { Runtime } from 'runtime';
 
 type Language = 'javascript' | 'python';
 
@@ -59,22 +60,7 @@ export default function CodeEditor() {
     setIsRunning(true);
 
     try {
-      // TODO: Replace this with your actual API call to the backend
-      // Example:
-      // const response = await fetch('/api/run-code', {
-      //   method: 'POST',
-      //   headers: { 'Content-Type': 'application/json' },
-      //   body: JSON.stringify({ code, language }),
-      // })
-      // const result = await response.json()
-      //
-      // if (result.error) {
-      //   // Handle error - display in output panel
-      //   console.error('Execution error:', result.error)
-      // } else {
-      //   // Handle success - display output
-      //   console.log('Output:', result.output)
-      // }
+      await Runtime.create('c');
 
       // Placeholder: Simulate API call
       await new Promise((resolve) => setTimeout(resolve, 500));

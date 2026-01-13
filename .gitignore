@@ -15,6 +15,7 @@
 
 # production
 /dist
+/pkg
 
 # misc
 .DS_Store
@@ -38,3 +39,8 @@ next-env.d.ts
 
 # CS198 development local storage dir
 local/
+
+
+# Added by cargo
+
+/target
