@@ -1,5 +1,5 @@
 import init, * as wasm from '../../pkg/runtime.js';
-import wasmUrl from '../../pkg/runtime_bg.wasm?url';
+import wasmBinary from '../../pkg/runtime_bg.wasm';
 
 export type Lang = 'c';
 
@@ -23,7 +23,7 @@ export class Runtime {
     // worker.onmessage = (result) => console.log(result);
     // throw new Error(lang);
 
-    await init(wasmUrl);
+    await init(wasmBinary);
     wasm.main();
     throw new Error(lang);
   }
@@ -32,7 +32,7 @@ export class Runtime {
     throw new Error();
   }
 
-  /* visit later: 
+  /* visit later:
         runtime.stdout.pipeTo(console.log);
         runtime.stdin.write("haha ");
    */
