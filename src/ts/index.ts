@@ -1,3 +1,4 @@
+import { WorkerIn, WorkerOut } from '../../pkg/runtime';
 import RustWorker from './worker?worker&inline';
 
 export type Lang = 'c';
@@ -24,10 +25,12 @@ export class Runtime {
 
     const worker = new RustWorker();
     await new Promise<void>((resolve) => {
-      worker.onmessage = (e) => e.data.length === 0 && resolve();
+      worker.onmessage = (e: MessageEvent<WorkerOut>) => e.data.type === 'ready' && resolve();
     });
 
     /** At this point in the code, the worker is ready to receive messages */
+    worker.onmessage = (e) => console.log(e);
+    worker.postMessage({ type: 'start' } as WorkerIn);
 
     throw new Error(lang);
   }
