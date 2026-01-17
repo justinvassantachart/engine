@@ -25,6 +25,7 @@ function wasm(): PluginOption {
     name: 'fix-wasm-import',
     async closeBundle() {
       const file = path.join(outDir, 'runtime.js');
+      if (!fs.existsSync(file)) return; // in worker builds this file doesn't exist yet
       let js = fs.readFileSync(file, { encoding: 'utf-8' });
       js = js.replaceAll(/(["'`])data:application\/wasm[^"'`]*\1/g, '""');
       fs.writeFileSync(file, js, { encoding: 'utf-8' });
