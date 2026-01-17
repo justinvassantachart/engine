@@ -1,4 +1,4 @@
-import { WorkerIn, WorkerOut } from '../../pkg/runtime';
+import { WorkerOut, WorkerStart } from '../../pkg/runtime';
 import RustWorker from './worker?worker&inline';
 
 export type Lang = 'c';
@@ -7,22 +7,6 @@ export type ExecutionResult = never;
 
 export class Runtime {
   static async create(lang: Lang): Promise<void> {
-    // const origin = window.location.origin;
-    // const name = 'runtime';
-    // const blob = new Blob([
-    //   // 1) Import `pkg/runtime.js`, which has inside of it a `wasm_bindgen`
-    //   // 2) expose the .wasm file
-    //   `importScripts("${origin}/${name}.js");
-    //    wasm_bindgen("${origin}/${name}_bg.wasm");`,
-    // ]);
-
-    // const url = URL.createObjectURL(blob);
-    // const worker = new Worker(url);
-
-    // worker.postMessage([2, 5]);
-    // worker.onmessage = (result) => console.log(result);
-    // throw new Error(lang);
-
     const worker = new RustWorker();
     await new Promise<void>((resolve) => {
       worker.onmessage = (e: MessageEvent<WorkerOut>) => e.data.type === 'ready' && resolve();
@@ -30,7 +14,12 @@ export class Runtime {
 
     /** At this point in the code, the worker is ready to receive messages */
     worker.onmessage = (e) => console.log(e);
-    worker.postMessage({ type: 'start' } as WorkerIn);
+    const message: WorkerStart = {
+      fs: {
+        'main.c': `#include <stdio.h>`,
+      },
+    };
+    worker.postMessage(message);
 
     throw new Error(lang);
   }
