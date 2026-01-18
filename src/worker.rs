@@ -1,3 +1,4 @@
+use console_error_panic_hook;
 use flate2::read::GzDecoder;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -133,6 +134,7 @@ async fn start(msg: WorkerStart) {
 
 #[wasm_bindgen]
 pub fn main() {
+    console_error_panic_hook::set_once();
     web_sys::console::log_1(&"worker starting".into());
 
     let scope = DedicatedWorkerGlobalScope::from(JsValue::from(js_sys::global()));
