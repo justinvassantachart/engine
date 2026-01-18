@@ -2,8 +2,8 @@ use console_error_panic_hook;
 use flate2::read::GzDecoder;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::fs;
 use std::io::{Cursor, Read};
+use std::path::Path;
 use std::path::PathBuf;
 use tar::Archive;
 use tsify::Tsify;
@@ -87,6 +87,36 @@ async fn extract_tar_gz(data: Vec<u8>) -> Result<mem_fs::FileSystem, std::io::Er
     Ok(fs)
 }
 
+async fn inject_files(
+    fs: &mem_fs::FileSystem,
+    base_path: &PathBuf,
+    node: &FsNode,
+) -> Result<(), std::io::Error> {
+    match node {
+        FsNode::File(contents) => {
+            let mut file = fs
+                .new_open_options()
+                .create(true)
+                .write(true)
+                .open(base_path)?;
+            file.write_all(contents.as_bytes())
+                .await
+                .expect("Failed to write injected file");
+        }
+        FsNode::Dir(children) => {
+            create_dir_all(fs, base_path)?;
+            for (name, child_node) in children {
+                let mut child_path = base_path.clone();
+                child_path.push(name);
+                Box::pin(inject_files(fs, &child_path, child_node))
+                    .await
+                    .expect("Failed to create injected children files")
+            }
+        }
+    }
+    Ok(())
+}
+
 // ============================================================================
 // Worker
 // ============================================================================
@@ -108,14 +138,13 @@ async fn start(msg: WorkerStart) {
 
     let fs = extract_tar_gz(sysroot_bytes)
         .await
-        .expect("Failed to extract fs");
+        .expect("Failed to extract sysroot into mem_fs");
 
-    // TODO (DEBUG): Remove this
-    // for (path, _) in &fs {
-    //     web_sys::console::log_1(&format!("File: {:?}", path).into());
-    // }
+    inject_files(&fs, &PathBuf::from("/"), &FsNode::Dir(msg.fs))
+        .await
+        .expect("Failed to inject user files into mem_fs");
 
-    // // Must call instatiate after writing files
+    // Must call instatiate after writing files
     // let (instance, env) = WasiEnv::builder("clang")
     //     .fs(Box::new(fs)) // Mount the virtual filesystem
     //     .preopen_dir("/") // Preopen root so clang can access files
