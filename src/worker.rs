@@ -2,13 +2,16 @@ use console_error_panic_hook;
 use flate2::read::GzDecoder;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::fs;
 use std::io::{Cursor, Read};
+use std::path::PathBuf;
 use tar::Archive;
 use tsify::Tsify;
 use wasm_bindgen::{JsCast, prelude::*};
 use wasm_bindgen_futures::JsFuture;
 use wasmer::{Module, Store};
 use wasmer_wasix::WasiEnv;
+use wasmer_wasix::virtual_fs::create_dir_all;
 use wasmer_wasix::virtual_fs::{AsyncWriteExt, FileSystem, mem_fs};
 use web_sys::{DedicatedWorkerGlobalScope, MessageEvent};
 
@@ -53,22 +56,35 @@ async fn fetch_bytes(url: &str) -> Result<Vec<u8>, JsValue> {
     Ok(js_sys::Uint8Array::new(&buffer).to_vec())
 }
 
-fn extract_tar_gz(data: Vec<u8>) -> Result<HashMap<String, Vec<u8>>, std::io::Error> {
+async fn extract_tar_gz(data: Vec<u8>) -> Result<mem_fs::FileSystem, std::io::Error> {
     let decoder = GzDecoder::new(Cursor::new(data));
     let mut archive = Archive::new(decoder);
 
-    archive
-        .entries()?
-        .map(
-            |entry: Result<tar::Entry<'_, GzDecoder<Cursor<Vec<u8>>>>, std::io::Error>| {
-                let mut entry = entry?;
-                let path = entry.path()?.to_path_buf();
-                let mut contents = Vec::new();
-                entry.read_to_end(&mut contents)?;
-                Ok((path.to_string_lossy().into_owned(), contents))
-            },
-        )
-        .collect::<Result<HashMap<String, Vec<u8>>, std::io::Error>>()
+    let fs = mem_fs::FileSystem::default();
+
+    for entry in archive.entries()? {
+        let mut entry = entry?;
+        let is_dir = entry.header().entry_type().is_dir();
+        let abs_path = PathBuf::from(format!("/{}", entry.path()?.to_string_lossy()));
+
+        if is_dir {
+            fs.create_dir(&abs_path)
+                .expect("Failed to create directory")
+        } else {
+            create_dir_all(&fs, &abs_path).expect("Failed to create parent directories");
+            let mut file = fs
+                .new_open_options()
+                .create(true)
+                .write(true)
+                .open(&abs_path)
+                .expect("Failed to create file");
+
+            let mut contents = Vec::new();
+            entry.read_to_end(&mut contents)?;
+            file.write(&contents).await.expect("Failed to write file");
+        }
+    }
+    Ok(fs)
 }
 
 // ============================================================================
@@ -90,46 +106,22 @@ async fn start(msg: WorkerStart) {
     let clang_binary =
         Module::from_binary(&store, &clang_wasm_bytes).expect("Failed to compile clang module");
 
-    let sysroot_map = extract_tar_gz(sysroot_bytes).expect("Failed to extract sysroot");
+    let fs = extract_tar_gz(sysroot_bytes)
+        .await
+        .expect("Failed to extract fs");
 
     // TODO (DEBUG): Remove this
-    for (path, _) in &sysroot_map {
-        web_sys::console::log_1(&format!("File: {:?}", path).into());
-    }
+    // for (path, _) in &fs {
+    //     web_sys::console::log_1(&format!("File: {:?}", path).into());
+    // }
 
-    let fs = mem_fs::FileSystem::default();
-
-    // Write the files into the virtual filesystem
-    for (path, contents) in sysroot_map {
-        let abs_path = format!("/{}", path);
-
-        if let Some(parent) = std::path::Path::new(&abs_path).parent() {
-            let mut current = std::path::PathBuf::from("/");
-            for component in parent.components().skip(1) {
-                current.push(component);
-                let _ = fs.create_dir(&current);
-            }
-        }
-
-        // TODO (DEBUG): Remove this
-        web_sys::console::log_1(&format!("Creating file: {:?}", abs_path).into());
-
-        let mut file = fs
-            .new_open_options()
-            .create(true)
-            .write(true)
-            .open(&abs_path)
-            .expect("Failed to create file");
-        file.write(&contents).await.expect("Failed to write file");
-    }
-
-    // Must call instatiate after writing files
-    let (instance, env) = WasiEnv::builder("clang")
-        .fs(Box::new(fs)) // Mount the virtual filesystem
-        .preopen_dir("/") // Preopen root so clang can access files
-        .expect("preopen failed")
-        .instantiate(clang_binary, &mut store)
-        .expect("Failed to instantiate WASI");
+    // // Must call instatiate after writing files
+    // let (instance, env) = WasiEnv::builder("clang")
+    //     .fs(Box::new(fs)) // Mount the virtual filesystem
+    //     .preopen_dir("/") // Preopen root so clang can access files
+    //     .expect("preopen failed")
+    //     .instantiate(clang_binary, &mut store)
+    //     .expect("Failed to instantiate WASI");
 }
 
 #[wasm_bindgen]
