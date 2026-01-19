@@ -3,7 +3,6 @@ use flate2::read::GzDecoder;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::{Cursor, Read};
-use std::path::Path;
 use std::path::PathBuf;
 use tar::Archive;
 use tsify::Tsify;
@@ -14,6 +13,8 @@ use wasmer_wasix::WasiEnv;
 use wasmer_wasix::virtual_fs::create_dir_all;
 use wasmer_wasix::virtual_fs::{AsyncWriteExt, FileSystem, mem_fs};
 use web_sys::{DedicatedWorkerGlobalScope, MessageEvent};
+
+mod runtime;
 
 const CLANG_WASM_URL: &str = "https://runno.dev/langs/clang.wasm";
 const CLANG_SYSROOT_URL: &str = "https://runno.dev/langs/clang-fs.tar.gz";
@@ -145,12 +146,18 @@ async fn start(msg: WorkerStart) {
         .expect("Failed to inject user files into mem_fs");
 
     // Must call instatiate after writing files
-    // let (instance, env) = WasiEnv::builder("clang")
-    //     .fs(Box::new(fs)) // Mount the virtual filesystem
-    //     .preopen_dir("/") // Preopen root so clang can access files
-    //     .expect("preopen failed")
-    //     .instantiate(clang_binary, &mut store)
-    //     .expect("Failed to instantiate WASI");
+    let (instance, env) = WasiEnv::builder("clang")
+        .runtime(runtime::JsRuntime::instance())
+        .fs(Box::new(fs)) // Mount the virtual filesystem
+        .instantiate(clang_binary, &mut store)
+        .expect("Failed to instantiate WASI");
+
+    let start = instance
+        .exports
+        .get_function("_start")
+        .expect("Failed to find _start function");
+
+    start.call(&mut store, &[]).expect("Failed to run _start");
 }
 
 #[wasm_bindgen]

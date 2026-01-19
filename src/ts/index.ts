@@ -16,7 +16,7 @@ export class Runtime {
     worker.onmessage = (e) => console.log(e);
     const message: WorkerStart = {
       fs: {
-        'main.c': `#include <stdio.h>`,
+        'main.c': `#include <stdio.h> \n\n int main() { return 0; }`,
       },
     };
     worker.postMessage(message);
