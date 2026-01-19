@@ -149,6 +149,7 @@ async fn start(msg: WorkerStart) {
     let (instance, env) = WasiEnv::builder("clang")
         .runtime(runtime::JsRuntime::instance())
         .fs(Box::new(fs)) // Mount the virtual filesystem
+        .args(&["clang", "/main.c"])
         .instantiate(clang_binary, &mut store)
         .expect("Failed to instantiate WASI");
 
@@ -158,6 +159,14 @@ async fn start(msg: WorkerStart) {
         .expect("Failed to find _start function");
 
     start.call(&mut store, &[]).expect("Failed to run _start");
+
+    // Print out the filesystem toplevel for debugging
+    let root = fs
+        .read_dir(PathBuf::from("/").as_path())
+        .expect("Failed to read root dir");
+    for entry in root {
+        web_sys::console::log_1(&format!("FS Entry: {:?}", entry).into());
+    }
 }
 
 #[wasm_bindgen]
