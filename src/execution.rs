@@ -73,8 +73,8 @@ impl<'a> Step<'a> {
 
     pub async fn run(self) -> Result<(), RuntimeError> {
         // TODO: This is just placeholder for now
-        let fs = std::mem::replace(&mut self.exec.fs, mem_fs::FileSystem::default());
-        self.builder.fs(Box::new(fs));
+        // let fs = std::mem::replace(&mut self.exec.fs, mem_fs::FileSystem::default());
+        self.builder.fs(Box::new(self.exec.fs.clone()));
         Ok(())
     }
 }
