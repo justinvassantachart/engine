@@ -78,22 +78,21 @@ async fn extract_tar_gz(data: Vec<u8>) -> Result<mem_fs::FileSystem, std::io::Er
         let abs_path = PathBuf::from(format!("/{}", entry.path()?.to_string_lossy()));
 
         if is_dir {
-            fs.create_dir(&abs_path)
-                .expect("Failed to create directory")
+            fs.create_dir(&abs_path).expect("Created directory")
         } else {
             if let Some(parent) = abs_path.parent() {
-                create_dir_all(&fs, &parent).expect("Failed to create parent directories");
+                create_dir_all(&fs, &parent).expect("Created parent directories");
             }
             let mut file = fs
                 .new_open_options()
                 .create(true)
                 .write(true)
                 .open(&abs_path)
-                .expect("Failed to create file");
+                .expect("Created file");
 
             let mut contents = Vec::new();
             entry.read_to_end(&mut contents)?;
-            file.write(&contents).await.expect("Failed to write file");
+            file.write(&contents).await.expect("Wrote file");
         }
     }
     Ok(fs)
@@ -140,30 +139,35 @@ async fn start(msg: WorkerStart) {
 
     // Parallelizes the two fetches
     let (clang_wasm_bytes, sysroot_bytes) =
+        // the sysroot is a tar.gz archive that is the root filesystem for clang 
         futures::try_join!(fetch_bytes(CLANG_WASM_URL), fetch_bytes(CLANG_SYSROOT_URL),)
-            .expect("Failed to fetch binaries");
+            .expect("fetched clang wasm and sysroot");
 
+    // this is the wasmer store that holds the state of the module
     let mut store = Store::default();
 
     // Need to pass bytes to Module::from_binary
     // https://wasmerio.github.io/wasmer/crates/doc/wasmer/struct.Module.html
     let clang_binary =
-        Module::from_binary(&store, &clang_wasm_bytes).expect("Failed to compile clang module");
+        Module::from_binary(&store, &clang_wasm_bytes).expect("Succeeded compiling clang module");
 
     let fs = extract_tar_gz(sysroot_bytes)
         .await
-        .expect("Failed to extract sysroot into mem_fs");
+        .expect("extracted sysroot filesystem into mem fs");
 
+    // overlay user files onto the sysroot
     inject_files(&fs, &PathBuf::from("/"), &FsNode::Dir(msg.fs))
         .await
-        .expect("Failed to inject user files into mem_fs");
+        .expect("injected user files");
 
     web_sys::console::log_1(&format!("FS: {:?}", fs).into());
 
     // Must call instatiate after writing files
-    let mut builder = WasiEnv::builder("clang")
+    // WasiEnv builder to configure the environment
+    let mut builder = WasiEnv::builder("clang") // name becomes argv[0]
         .runtime(runtime::JsRuntime::instance())
-        .fs(Box::new(fs)) // Mount the virtual filesystem
+        // We are going to put fs into a box to satisfy the trait object requirement.
+        .fs(Box::new(fs)) // Mount the virtual filesystem. A box is a pointer type in Rust
         .args(&[
             // "--version",
             "-cc1",
@@ -191,25 +195,27 @@ async fn start(msg: WorkerStart) {
         .stdout(Box::new(ConsoleFile::default()))
         .stderr(Box::new(ConsoleFile::default()));
 
+    // This guy preopens the root directory of the virtual FS to the WASI module
+    // it is what allows the module to see the files we put in there
     builder.add_preopen_dir("/").expect("preopen");
 
     let (instance, env) = builder
         .instantiate(clang_binary, &mut store)
-        .expect("Failed to instantiate WASI");
+        .expect("Instantiated clang module");
 
     let start = instance
         .exports
         .get_function("_start")
-        .expect("Failed to find _start function");
+        .expect("Found _start function");
 
-    start.call(&mut store, &[]).expect("Failed to run _start");
+    start.call(&mut store, &[]).expect("Ran _start function");
 
     let fs = env.data(&store).fs_root();
 
     // Print out the filesystem toplevel for debugging
     let root = fs
         .read_dir(PathBuf::from("/").as_path())
-        .expect("Failed to read root dir");
+        .expect("Read root dir");
     for entry in root {
         web_sys::console::log_1(&format!("FS Entry: {:?}", entry).into());
     }
