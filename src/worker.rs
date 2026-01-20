@@ -1,43 +1,17 @@
 use console_error_panic_hook;
-use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::path::PathBuf;
-use tsify::Tsify;
 use wasm_bindgen::prelude::*;
 use wasmer_wasix::virtual_fs::{AsyncWriteExt, FileSystem, create_dir_all, mem_fs};
 use web_sys::{DedicatedWorkerGlobalScope, MessageEvent};
 
 use crate::execution::Execution;
+use crate::types::*;
 
 mod console;
 mod execution;
 mod runtime;
 mod io;
-
-// ============================================================================
-// Types
-// ============================================================================
-
-#[derive(Debug, Tsify, Serialize, Deserialize)]
-#[serde(untagged)]
-pub enum FsNode {
-    File(String),
-    Dir(HashMap<String, FsNode>),
-}
-
-#[derive(Debug, Tsify, Serialize, Deserialize)]
-pub struct WorkerStart {
-    fs: HashMap<String, FsNode>,
-}
-
-#[derive(Tsify, Serialize, Deserialize)]
-#[serde(tag = "type")]
-pub enum WorkerOut {
-    #[serde(rename = "ready")]
-    Ready,
-    #[serde(rename = "stdout")]
-    Stdout { data: String },
-}
+mod types;
 
 // ============================================================================
 // Helpers
@@ -178,11 +152,5 @@ pub fn main() {
     onmessage.forget();
 
     // The worker must send a message to indicate that it's ready to receive messages.
-    scope
-        .post_message(
-            &serde_wasm_bindgen::to_value(&WorkerOut::Ready)
-                .expect("serialization worked")
-                .into(),
-        )
-        .expect("posting ready message succeeds!");
+    WorkerOut::Ready.send();
 }
