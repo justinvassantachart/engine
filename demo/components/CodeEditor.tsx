@@ -75,15 +75,13 @@ export default function CodeEditor() {
 
       const rt = Runtime.create('c');
 
-      const createTerminalWriter = () =>
-        new WritableStream<string>({
-          write(chunk) {
-            terminalRef.current?.write(chunk);
-          },
+      const terminal = () =>
+        new WritableStream<Uint8Array>({
+          write: (chunk) => terminalRef.current?.write(chunk),
         });
 
-      rt.stdout.pipeThrough(new TextDecoderStream()).pipeTo(createTerminalWriter());
-      rt.stderr.pipeThrough(new TextDecoderStream()).pipeTo(createTerminalWriter());
+      rt.stdout.pipeTo(terminal());
+      rt.stderr.pipeTo(terminal());
 
       await rt.run();
     } catch (error) {

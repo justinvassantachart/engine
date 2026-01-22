@@ -5,8 +5,8 @@ import '@xterm/xterm/css/xterm.css';
 import React from 'react';
 
 type TerminalHandle = {
-  write: (data: string) => void;
-  writeln: (data: string) => void;
+  write: (data: string | Uint8Array) => void;
+  writeln: (data: string | Uint8Array) => void;
   clear: () => void;
   focus: () => void;
 };
