@@ -8,6 +8,7 @@ export class Runtime {
 
   private out = new StdoutStream(1);
   private err = new StdoutStream(2);
+  private in = new StdinStream();
 
   stdin: WritableStream<Uint8Array<ArrayBuffer>>;
   stdout: ReadableStream<Uint8Array<ArrayBuffer>>;
@@ -51,6 +52,7 @@ export class Runtime {
       fs: {
         'main.c': `#include <iostream> \n\n int main() { std::cout << "hello world" << std::endl; return 0; }`,
       },
+      stdin_buffer: this.in.buffer,
     };
     worker.postMessage(message);
 
@@ -101,4 +103,8 @@ class StdoutStream {
   public removeWorker(worker: Worker) {
     worker.removeEventListener('message', this.callback);
   }
+}
+
+class StdinStream {
+  public readonly buffer = new SharedArrayBuffer(8 * 1024);
 }
