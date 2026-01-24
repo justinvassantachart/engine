@@ -22,6 +22,7 @@ use std::fmt::Debug;
 
 pub struct Execution {
     pub fs: mem_fs::FileSystem,
+    pub stdin_buffer: js_sys::SharedArrayBuffer,
 }
 
 pub struct Step<'a> {
@@ -34,9 +35,10 @@ pub struct Step<'a> {
 }
 
 impl Execution {
-    pub fn new() -> Self {
+    pub fn new(stdin_buffer: SharedArrayBuffer) -> Self {
         Self {
             fs: mem_fs::FileSystem::default(),
+            stdin_buffer,
         }
     }
 

@@ -52,7 +52,7 @@ export class Runtime {
       },
       stdin_buffer: this.in.buffer,
     };
-    worker.postMessage(message);
+    worker.postMessage(message, [this.in.buffer]);
 
     /* Wait for the worker to send us a Stop message */
     await new Promise<void>((resolve) => {
@@ -104,15 +104,57 @@ class StdoutStream {
 }
 
 class StdinStream {
-  public readonly buffer = new SharedArrayBuffer(8 * 1024);
+  /**
+   * Ring buffer to store stdin data.
+   *
+   * - TypeScript controls write_index, Rust controls read_index
+   * - One slot is always kept empty to distinguish full from empty
+   */
+
+  private static readonly BUFFER_SIZE = 8 * 1024;
+  private static readonly HEADER_SIZE = 8; // 2 x i32
+  private static readonly DATA_SIZE = StdinStream.BUFFER_SIZE - StdinStream.HEADER_SIZE;
+  private static readonly READ_IDX = 0;
+  private static readonly WRITE_IDX = 1;
+
+  public readonly buffer = new SharedArrayBuffer(StdinStream.BUFFER_SIZE);
   public readonly stream: WritableStream<Uint8Array>;
+
+  // Made this to manage indexes easier
+  private readonly indices: Int32Array;
+  private readonly data: Int8Array;
 
   constructor() {
     this.stream = new WritableStream({
-      write(_chunk) {
-        // TODO: Place `chunk` into the buffer so that the worker can read
-        throw _chunk;
-      },
+      write: (chunk) => this.write(chunk),
     });
+    this.indices = new Int32Array(this.buffer, 0, 2);
+    this.data = new Int8Array(this.buffer, StdinStream.HEADER_SIZE);
+  }
+
+  private async write(chunk: Uint8Array): Promise<void> {
+    const { DATA_SIZE, READ_IDX, WRITE_IDX } = StdinStream;
+    let offset = 0;
+
+    while (offset < chunk.length) {
+      const readIdx = Atomics.load(this.indices, READ_IDX);
+      const writeIdx = Atomics.load(this.indices, WRITE_IDX);
+
+      const available = readIdx <= writeIdx ? DATA_SIZE - writeIdx - 1 : readIdx - writeIdx - 1;
+
+      if (available === 0) {
+        await Atomics.waitAsync(this.indices, READ_IDX, readIdx).value;
+        continue;
+      }
+
+      const toWrite = Math.min(chunk.length - offset, available);
+
+      this.data.set(chunk.subarray(offset, offset + toWrite), writeIdx);
+
+      // Write index & notify reader
+      Atomics.store(this.indices, WRITE_IDX, (writeIdx + toWrite) % DATA_SIZE);
+      Atomics.notify(this.indices, WRITE_IDX);
+      offset += toWrite;
+    }
   }
 }

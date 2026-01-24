@@ -64,7 +64,7 @@ async fn start(msg: WorkerStart) {
         .await
         .expect("created user files filesystem");
 
-    let mut exec = Execution::new();
+    let mut exec = Execution::new(msg.stdin_buffer);
 
     exec.step("clang")
         .binary("https://runno.dev/langs/clang.wasm")
