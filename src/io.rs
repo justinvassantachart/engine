@@ -6,7 +6,7 @@ use std::{
 
 use wasm_bindgen::JsCast;
 
-use wasmer_wasix::virtual_fs::{AsyncRead, AsyncSeek, AsyncWrite, Result, VirtualFile};
+use wasmer_wasix::virtual_fs::{FsError, AsyncSeek, AsyncWrite, Result, VirtualFile};
 
 use crate::types::{StdoutMode, WorkerOut};
 
@@ -16,7 +16,6 @@ use crate::types::{StdoutMode, WorkerOut};
 
 #[derive(Debug)]
 pub struct Stdin {
-    
 }
 
 impl Stdin {
@@ -140,17 +139,17 @@ impl AsyncRead for Stdout {
         _cx: &mut Context<'_>,
         _buf: &mut wasmer_wasix::virtual_fs::ReadBuf<'_>,
     ) -> Poll<io::Result<()>> {
-        Poll::Ready(Ok(()))
+        Poll::Ready(Err(io::Error::new(io::ErrorKind::Unsupported, "cannot read from stdout")))
     }
 }
 
 impl AsyncSeek for Stdout {
     fn start_seek(self: Pin<&mut Self>, _position: io::SeekFrom) -> io::Result<()> {
-        Ok(())
+        Err(io::Error::new(io::ErrorKind::Unsupported, "cannot seek from stdout"))
     }
 
     fn poll_complete(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<u64>> {
-        Poll::Ready(Ok(0))
+        Poll::Ready(Err(io::Error::new(io::ErrorKind::Unsupported, "cannot seek from stdout")))
     }
 }
 
@@ -169,19 +168,19 @@ impl VirtualFile for Stdout {
     }
 
     fn set_len(&mut self, _new_size: u64) -> Result<()> {
-        Ok(())
+        Err(FsError::Unsupported)
     }
 
     fn unlink(&mut self) -> Result<()> {
-        Ok(())
+        Err(FsError::Unsupported)
     }
 
     fn get_special_fd(&self) -> Option<u32> {
-        Some(1) // stdout
+        Some(if let StdoutMode::Stderr = self.mode { 2 } else { 1 })
     }
 
     fn poll_read_ready(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<usize>> {
-        Poll::Ready(Ok(0))
+        Poll::Ready(Err(io::Error::new(io::ErrorKind::Unsupported, "cannot read from stdout")))
     }
 
     fn poll_write_ready(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<usize>> {

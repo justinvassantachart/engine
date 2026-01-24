@@ -25,6 +25,7 @@ pub struct Execution {
 }
 
 pub struct Step<'a> {
+    // exec cannot outlive Step
     exec: &'a mut Execution,
     builder: WasiEnvBuilder,
     binary: Option<String>,
