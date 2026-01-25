@@ -3,17 +3,61 @@ import RustWorker from './worker?worker&inline';
 
 export type Lang = 'c';
 
-export class Runtime {
-  public readonly lang: Lang;
+// TODO: Find a way to re-use the generated types in `pkg/runtime.d.ts`
+export type FsNode = string | DirNode;
+export type DirNode = { [name: string]: FsNode };
 
+export class Runtime {
   private out = new StdoutStream(1);
   private err = new StdoutStream(2);
   private in = new StdinStream();
 
-  public fs: WorkerStart['fs'] = {};
-  public stdin: WritableStream<Uint8Array<ArrayBuffer>>;
-  public stdout: ReadableStream<Uint8Array<ArrayBuffer>>;
-  public stderr: ReadableStream<Uint8Array<ArrayBuffer>>;
+  /**
+   * The programming language of this runtime.
+   */
+  public readonly lang: Lang;
+
+  /**
+   * The *initial* filesystem that the code sees.
+   *
+   * This is neither updated while the code is running, nor
+   * will updating it have any effect on code that is already running.
+   */
+  public fs: DirNode = {};
+
+  /**
+   * A [WritableStream](https://developer.mozilla.org/en-US/docs/Web/API/WritableStream) for writing to the program's `stdin` (fd 0).
+   *
+   * Note that any previous input pushed to `stdin` will be cleared when the program finishes
+   * running. This is to prevent subsequent runs of a program from seeing `stdin` from the previous one.
+   *
+   * @example
+   * ```ts
+   *  const rt = Runtime.create('c');
+   *
+   *  const encoder = new TextEncoder();
+   *  const writer = rt.stdin.getWriter();
+   *
+   *  writer.write(encoder.encode('hello world\n'));
+   * ```
+   */
+  public get stdin() {
+    return this.in.stream;
+  }
+
+  /**
+   * A [ReadableStream](https://developer.mozilla.org/en-US/docs/Web/API/ReadableStream) for reading the program's `stdout` (fd 1).
+   */
+  public get stdout() {
+    return this.out.stream;
+  }
+
+  /**
+   * A [ReadableStream](https://developer.mozilla.org/en-US/docs/Web/API/ReadableStream) for reading the program's `stderr` (fd 2).
+   */
+  public get stderr() {
+    return this.err.stream;
+  }
 
   static create(lang: Lang): Runtime {
     return new Runtime(lang);
@@ -21,9 +65,6 @@ export class Runtime {
 
   private constructor(lang: Lang) {
     this.lang = lang;
-    this.stdin = this.in.stream;
-    this.stdout = this.out.stream;
-    this.stderr = this.err.stream;
   }
 
   // TODO: Make this function reentrant
@@ -47,14 +88,13 @@ export class Runtime {
 
     /* At this point in the code, the worker is ready to receive messages */
     worker.onmessage = (e) => console.log(e);
-    const message: WorkerStart = {
-      fs: this.fs,
-      stdin_buffer: this.in.buffer,
-    };
-    worker.postMessage(message);
 
-    /* Wait for the worker to send us a Stop message */
-    await new Promise<void>((resolve) => {
+    /**
+     * Run the worker, and wait for it to send us a Stop message.
+     * Note that we must set up the listener *before* running the worker
+     * to avoid a race condition.
+     */
+    const stop = new Promise<void>((resolve) => {
       const callback = (message: MessageEvent<WorkerOut>) => {
         if (message.data.type === 'stop') {
           worker.removeEventListener('message', callback);
@@ -64,9 +104,18 @@ export class Runtime {
       worker.addEventListener('message', callback);
     });
 
+    const message: WorkerStart = {
+      fs: this.fs,
+      stdin_buffer: this.in.buffer,
+    };
+    worker.postMessage(message);
+
+    await stop;
+
     /* This is just good hygiene */
     this.out.removeWorker(worker);
     this.err.removeWorker(worker);
+    this.in.clear();
   }
 
   /* visit later:
@@ -131,6 +180,10 @@ class StdinStream {
     this.data = new Int8Array(this.buffer, StdinStream.HEADER_SIZE);
   }
 
+  public clear() {
+    this.indices.fill(0);
+  }
+
   private async write(chunk: Uint8Array): Promise<void> {
     const { DATA_SIZE, READ_IDX, WRITE_IDX } = StdinStream;
     let offset = 0;
@@ -155,7 +208,5 @@ class StdinStream {
       Atomics.notify(this.indices, WRITE_IDX);
       offset += toWrite;
     }
-
-    console.log(this.buffer);
   }
 }
