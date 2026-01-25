@@ -1,42 +1,28 @@
 'use client';
 
-import { javascript } from '@codemirror/lang-javascript';
-import { python } from '@codemirror/lang-python';
+import { cpp } from '@codemirror/lang-cpp';
 import { oneDark } from '@codemirror/theme-one-dark';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
-import { Box, Button, FormControl, InputLabel, MenuItem, Select, Typography } from '@mui/material';
+import { Box, Button, Typography } from '@mui/material';
 import CodeMirror from '@uiw/react-codemirror';
 import { useRef, useState } from 'react';
 import { Runtime } from 'runtime';
 
 import Terminal, { TerminalHandle } from '@/components/Terminal';
 
-type Language = 'javascript' | 'python';
+const defaultCode = `#include <iostream>
 
-const defaultCode = {
-  javascript: `// Welcome to the Code Editor
-function greet(name) {
-  return \`Hello, \${name}!\`;
-}
-
-console.log(greet('World'));`,
-  python: `# Welcome to the Code Editor
-def greet(name):
-    return f"Hello, {name}!"
-
-print(greet('World'))`,
-};
+int main() {
+  int x;
+  std::cin >> x;
+  std::cout << x << std::endl;
+  return 0;
+}`;
 
 export default function CodeEditor() {
-  const [code, setCode] = useState<string>(defaultCode.javascript);
-  const [language, setLanguage] = useState<Language>('javascript');
+  const [code, setCode] = useState<string>(defaultCode);
   const [isRunning, setIsRunning] = useState<boolean>(false);
   const terminalRef = useRef<TerminalHandle | null>(null);
-
-  const handleLanguageChange = (newLanguage: Language) => {
-    setLanguage(newLanguage);
-    setCode(defaultCode[newLanguage]);
-  };
 
   /**
    * Handle Run Button Click
@@ -82,6 +68,11 @@ export default function CodeEditor() {
 
       rt.stdout.pipeTo(terminal());
       rt.stderr.pipeTo(terminal());
+      rt.fs = { 'main.c': code };
+
+      const encoder = new TextEncoder();
+      const writer = rt.stdin.getWriter();
+      writer.write(encoder.encode('hello world\n'));
 
       await rt.run();
     } catch (error) {
@@ -92,7 +83,7 @@ export default function CodeEditor() {
     }
   };
 
-  const extensions = language === 'javascript' ? [javascript({ jsx: true })] : [python()];
+  const extensions = [cpp()];
 
   return (
     <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
@@ -109,27 +100,6 @@ export default function CodeEditor() {
           gap: 2,
         }}
       >
-        <FormControl size="small" sx={{ minWidth: 140 }}>
-          <InputLabel sx={{ fontSize: '0.875rem' }}>Language</InputLabel>
-          <Select
-            value={language}
-            label="Language"
-            onChange={(e) => handleLanguageChange(e.target.value as Language)}
-            sx={{
-              fontSize: '0.875rem',
-              '& .MuiOutlinedInput-notchedOutline': {
-                borderColor: 'rgba(255, 255, 255, 0.12)',
-              },
-              '&:hover .MuiOutlinedInput-notchedOutline': {
-                borderColor: 'rgba(255, 255, 255, 0.2)',
-              },
-            }}
-          >
-            <MenuItem value="javascript">JavaScript</MenuItem>
-            <MenuItem value="python">Python</MenuItem>
-          </Select>
-        </FormControl>
-
         <Box
           sx={{
             display: 'flex',

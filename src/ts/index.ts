@@ -10,9 +10,10 @@ export class Runtime {
   private err = new StdoutStream(2);
   private in = new StdinStream();
 
-  stdin: WritableStream<Uint8Array<ArrayBuffer>>;
-  stdout: ReadableStream<Uint8Array<ArrayBuffer>>;
-  stderr: ReadableStream<Uint8Array<ArrayBuffer>>;
+  public fs: WorkerStart['fs'] = {};
+  public stdin: WritableStream<Uint8Array<ArrayBuffer>>;
+  public stdout: ReadableStream<Uint8Array<ArrayBuffer>>;
+  public stderr: ReadableStream<Uint8Array<ArrayBuffer>>;
 
   static create(lang: Lang): Runtime {
     return new Runtime(lang);
@@ -47,12 +48,10 @@ export class Runtime {
     /* At this point in the code, the worker is ready to receive messages */
     worker.onmessage = (e) => console.log(e);
     const message: WorkerStart = {
-      fs: {
-        'main.c': `#include <iostream> \n\n int main() { std::cout << "hello world" << std::endl; return 0; }`,
-      },
+      fs: this.fs,
       stdin_buffer: this.in.buffer,
     };
-    worker.postMessage(message, [this.in.buffer]);
+    worker.postMessage(message);
 
     /* Wait for the worker to send us a Stop message */
     await new Promise<void>((resolve) => {
@@ -111,7 +110,7 @@ class StdinStream {
    * - One slot is always kept empty to distinguish full from empty
    */
 
-  private static readonly BUFFER_SIZE = 8 * 1024;
+  private static readonly BUFFER_SIZE = 16;
   private static readonly HEADER_SIZE = 8; // 2 x i32
   private static readonly DATA_SIZE = StdinStream.BUFFER_SIZE - StdinStream.HEADER_SIZE;
   private static readonly READ_IDX = 0;
@@ -138,8 +137,9 @@ class StdinStream {
 
     while (offset < chunk.length) {
       const readIdx = Atomics.load(this.indices, READ_IDX);
-      const writeIdx = Atomics.load(this.indices, WRITE_IDX);
+      let writeIdx = Atomics.load(this.indices, WRITE_IDX);
 
+      if (writeIdx === DATA_SIZE - 1 && readIdx > 0) writeIdx = 0;
       const available = readIdx <= writeIdx ? DATA_SIZE - writeIdx - 1 : readIdx - writeIdx - 1;
 
       if (available === 0) {
@@ -148,7 +148,6 @@ class StdinStream {
       }
 
       const toWrite = Math.min(chunk.length - offset, available);
-
       this.data.set(chunk.subarray(offset, offset + toWrite), writeIdx);
 
       // Write index & notify reader
@@ -156,5 +155,7 @@ class StdinStream {
       Atomics.notify(this.indices, WRITE_IDX);
       offset += toWrite;
     }
+
+    console.log(this.buffer);
   }
 }

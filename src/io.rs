@@ -13,7 +13,7 @@ use crate::types::{StdoutMode, WorkerOut};
 // ============================================================================
 
 // Must match TypeScript StdinStream constants
-const BUFFER_SIZE: u32 = 8 * 1024;
+const BUFFER_SIZE: u32 = 16;
 const HEADER_SIZE: u32 = 8;
 const DATA_SIZE: u32 = BUFFER_SIZE - HEADER_SIZE;
 const READ_IDX: u32 = 0;
@@ -81,11 +81,19 @@ impl AsyncRead for Stdin {
             js_sys::Atomics::load(&self.indices, WRITE_IDX).expect("Loaded write_idx") as u32;
 
         // Calculate contiguous available bytes (no wrap-around handling)
-        let available =  if read_idx <= write_idx {
+        let available = if read_idx <= write_idx {
             write_idx - read_idx
         } else {
             DATA_SIZE - read_idx
         };
+
+        web_sys::console::log_1(
+            &format!(
+                "R: {:?}, W: {:?}, Available: {:?}",
+                read_idx, write_idx, available
+            )
+            .into(),
+        );
 
         if available == 0 {
             // Wait on the write index

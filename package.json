@@ -36,6 +36,7 @@
     "vite-plugin-dts": "^4.5.4"
   },
   "dependencies": {
+    "@codemirror/lang-cpp": "^6.0.3",
     "tsify": "^5.0.4"
   }
 }
