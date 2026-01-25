@@ -13,9 +13,7 @@ use crate::types::{StdoutMode, WorkerOut};
 // ============================================================================
 
 // Must match TypeScript StdinStream constants
-const BUFFER_SIZE: u32 = 16;
 const HEADER_SIZE: u32 = 8;
-const DATA_SIZE: u32 = BUFFER_SIZE - HEADER_SIZE;
 const READ_IDX: u32 = 0;
 const WRITE_IDX: u32 = 1;
 
@@ -36,10 +34,9 @@ impl Stdin {
             0,
             2, // 2 i32s: read_index and write_index
         );
-        let data = js_sys::Uint8Array::new_with_byte_offset_and_length(
+        let data = js_sys::Uint8Array::new_with_byte_offset(
             stdin_buffer,
-            HEADER_SIZE,
-            DATA_SIZE,
+            HEADER_SIZE
         );
         Self { indices, data }
     }
@@ -84,7 +81,7 @@ impl AsyncRead for Stdin {
         let available = if read_idx <= write_idx {
             write_idx - read_idx
         } else {
-            DATA_SIZE - read_idx
+            self.data.length() - read_idx
         };
 
         web_sys::console::log_1(
@@ -108,7 +105,7 @@ impl AsyncRead for Stdin {
         buf.put_slice(slice.to_vec().as_slice());
 
         // Update read index atomically
-        let new_read_idx = (read_idx + to_read) % DATA_SIZE;
+        let new_read_idx = (read_idx + to_read) % self.data.length();
         js_sys::Atomics::store(&self.indices, READ_IDX, new_read_idx as i32)
             .expect("Stored new read_idx");
 
