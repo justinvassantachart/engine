@@ -17,7 +17,8 @@ pub struct WorkerStart {
     pub fs: HashMap<String, FsNode>,
 
     #[serde(with = "serde_wasm_bindgen::preserve")]
-    pub stdin_buffer: js_sys::SharedArrayBuffer
+    pub stdin_buffer: js_sys::SharedArrayBuffer,
+    pub is_debug: bool,
 }
 
 #[derive(Clone, Copy, Debug, Tsify, Serialize_repr)]
@@ -40,12 +41,28 @@ pub enum WorkerOut<'a> {
         data: &'a [u8],
         mode: StdoutMode,
     },
+    #[serde(rename = "debug")]
+    Debug {
+        breakpoints: Vec<LocationInfo>,
+        files: Vec<String>,
+        /// Bitfield where index N corresponds to breakpoint N.
+        /// Index 0 is a sentinel (always 0). Length = breakpoints.len() + 1.
+        #[serde(with = "serde_wasm_bindgen::preserve")]
+        breakpoint_buffer: js_sys::SharedArrayBuffer,
+    },
 
     // TODO: This can be expanded later to return a result back to the JS side,
     // but we should think critically what info the client cares about.
     // Exit code? Filesystem? etc. etc.
     #[serde(rename = "stop")]
     Stop
+}
+
+#[derive(Debug, Clone, Tsify, Serialize)]
+pub struct LocationInfo {
+    pub file: u32,
+    pub line: u32,
+    pub col: u32,
 }
 
 impl<'a> WorkerOut<'a> {

@@ -6,10 +6,12 @@ use web_sys::{DedicatedWorkerGlobalScope, MessageEvent};
 
 use crate::execution::Execution;
 use crate::types::*;
+use crate::debug::*;
 
+mod debug;
 mod execution;
-mod runtime;
 mod io;
+mod runtime;
 mod types;
 
 // ============================================================================
@@ -65,36 +67,46 @@ async fn start(msg: WorkerStart) {
 
     let mut exec = Execution::new(msg.stdin_buffer);
 
+    // Build clang args, conditional on is_debug
+    let mut clang_args = vec![
+        "-cc1",
+        "-Werror",
+        "-emit-obj",
+        "-disable-free",
+        "-isysroot",
+        "/sys",
+        "-internal-isystem",
+        "/sys/include/c++/v1",
+        "-internal-isystem",
+        "/sys/include",
+        "-internal-isystem",
+        "/sys/lib/clang/8.0.1/include",
+        "-ferror-limit",
+        "4",
+        "-fmessage-length",
+        "80",
+        "-fcolor-diagnostics",
+        "-x",
+        "c++",
+        "/main.c",
+    ];
+
+    if msg.is_debug {
+        clang_args.insert(1, "-g");
+        clang_args.insert(2, "-O0");
+    }
+
     exec.step("clang")
         .binary("https://runno.dev/langs/clang.wasm")
         .sysroot("https://runno.dev/langs/clang-fs.tar.gz")
         .fs(Box::new(fs))
-        .args(&[
-            "-cc1",
-            "-Werror",
-            "-emit-obj",
-            "-disable-free",
-            "-isysroot",
-            "/sys",
-            "-internal-isystem",
-            "/sys/include/c++/v1",
-            "-internal-isystem",
-            "/sys/include",
-            "-internal-isystem",
-            "/sys/lib/clang/8.0.1/include",
-            "-ferror-limit",
-            "4",
-            "-fmessage-length",
-            "80",
-            "-fcolor-diagnostics",
-            "-O2",
-            "-x",
-            "c++",
-            "/main.c",
-        ])
+        .args(&clang_args)
         .run()
         .await
         .expect("Compilation succeeded");
+
+    // TODO: instrument the binary for debugging
+    if msg.is_debug {}
 
     exec.step("wasm-ld")
         .binary("https://runno.dev/langs/wasm-ld.wasm")

@@ -107,6 +107,7 @@ export class Runtime {
     const message: WorkerStart = {
       fs: this.fs,
       stdin_buffer: this.in.buffer,
+      is_debug: false,
     };
     worker.postMessage(message);
 
