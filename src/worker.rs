@@ -147,6 +147,10 @@ async fn start(msg: WorkerStart) {
         // minimal amount of bytes needed to store the breakpoints where each bit represents a breakpoint
         let buffer = SharedArrayBuffer::new(bytes_needed);
 
+        // TODO:remove after debugging
+        // web_sys::console::log_1(&format!("Dwarf info: {:?}", dwarf_info).into());
+        // web_sys::console::log_1(&format!("Wasm bytes: {:?}", wasm_bytes).into());
+
         WorkerOut::Debug {
             breakpoints: dwarf_info.0,
             files: dwarf_info.1,
