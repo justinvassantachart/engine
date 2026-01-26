@@ -3,8 +3,64 @@ use gimli::{EndianSlice, LittleEndian, Reader};
 use object::{Object, ObjectSection};
 use std::borrow::Cow;
 use std::collections::HashMap;
+use wasmer_wasix::virtual_fs::{AsyncReadExt, AsyncWriteExt, FileSystem, create_dir_all, mem_fs};
 
 type GimliReader<'a> = EndianSlice<'a, LittleEndian>;
+
+/// ============================================================================
+/// HELPERS
+/// ============================================================================
+
+/// Get the WASM bytes from the filesystem.
+/// Returns the WASM bytes or an error if the file does not exist.
+pub async fn get_wasm_bytes(
+    fs: &mem_fs::FileSystem,
+    path: &str,
+) -> Result<Vec<u8>, std::io::Error> {
+    let mut file = fs
+        .new_open_options()
+        .read(true)
+        .open(path)
+        .expect(&format!("{} exists", path));
+
+    let mut wasm_bytes = Vec::new();
+    file.read_to_end(&mut wasm_bytes)
+        .await
+        .expect("Read main.wasm");
+
+    Ok(wasm_bytes)
+}
+
+/// Build a filename from a file entry, handling directory prefixes.
+fn build_filename<R: Reader>(
+    dwarf: &gimli::Dwarf<R>,
+    unit: &gimli::Unit<R>,
+    file_entry: &gimli::FileEntry<R>,
+) -> Result<String, gimli::Error> {
+    let mut path = String::new();
+
+    // Add directory if present
+    if let Some(dir) = file_entry.directory(unit.line_program.as_ref().unwrap().header()) {
+        let dir_str = dwarf.attr_string(unit, dir)?;
+        let dir_str = dir_str.to_string_lossy()?;
+        if !dir_str.is_empty() && dir_str != "." {
+            path.push_str(&dir_str);
+            if !path.ends_with('/') {
+                path.push('/');
+            }
+        }
+    }
+
+    // Add filename
+    let name = dwarf.attr_string(unit, file_entry.path_name())?;
+    path.push_str(&name.to_string_lossy()?);
+
+    Ok(path)
+}
+
+/// ============================================================================
+/// DWARF PARSING
+/// ============================================================================
 
 /// Parse DWARF debug info from WASM bytes to extract breakpoint locations.
 ///
@@ -40,9 +96,8 @@ fn parse_dwarf_inner(wasm_bytes: &[u8]) -> Result<(Vec<LocationInfo>, Vec<String
     };
 
     let dwarf_sections = gimli::DwarfSections::load(load_section)?;
-    let dwarf = dwarf_sections.borrow(|section| {
-        EndianSlice::new(Cow::as_ref(section), LittleEndian)
-    });
+    let dwarf =
+        dwarf_sections.borrow(|section| EndianSlice::new(Cow::as_ref(section), LittleEndian));
 
     let mut locations = Vec::new();
     let mut files: Vec<String> = Vec::new();
@@ -101,29 +156,11 @@ fn parse_dwarf_inner(wasm_bytes: &[u8]) -> Result<(Vec<LocationInfo>, Vec<String
     Ok((locations, files))
 }
 
-/// Build a filename from a file entry, handling directory prefixes.
-fn build_filename<R: Reader>(
-    dwarf: &gimli::Dwarf<R>,
-    unit: &gimli::Unit<R>,
-    file_entry: &gimli::FileEntry<R>,
-) -> Result<String, gimli::Error> {
-    let mut path = String::new();
+/// ============================================================================
+/// DWARF INSTRUMENTATION
+/// ============================================================================
 
-    // Add directory if present
-    if let Some(dir) = file_entry.directory(unit.line_program.as_ref().unwrap().header()) {
-        let dir_str = dwarf.attr_string(unit, dir)?;
-        let dir_str = dir_str.to_string_lossy()?;
-        if !dir_str.is_empty() && dir_str != "." {
-            path.push_str(&dir_str);
-            if !path.ends_with('/') {
-                path.push('/');
-            }
-        }
-    }
-
-    // Add filename
-    let name = dwarf.attr_string(unit, file_entry.path_name())?;
-    path.push_str(&name.to_string_lossy()?);
-
-    Ok(path)
+// TODO: add a call to the bpkt fn **before** each logical line
+pub fn instrument_binary(wasm_bytes: &[u8]) -> Result<Vec<u8>, std::io::Error> {
+  Ok(wasm_bytes.to_vec())
 }

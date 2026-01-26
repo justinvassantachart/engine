@@ -1,4 +1,5 @@
 use console_error_panic_hook;
+use js_sys::SharedArrayBuffer;
 use std::path::PathBuf;
 use wasm_bindgen::prelude::*;
 use wasmer_wasix::virtual_fs::{AsyncReadExt, AsyncWriteExt, FileSystem, create_dir_all, mem_fs};
@@ -129,26 +130,29 @@ async fn start(msg: WorkerStart) {
         .await
         .expect("Linking succeeded");
 
-    // TODO: instrument the binary for debugging
+    // sends the debug info to the client
     if msg.is_debug {
-        let root = exec
-            .fs
-            .read_dir(PathBuf::from("/").as_path())
-            .expect("Read root dir");
-        let mut file = exec
-            .fs
-            .new_open_options()
-            .read(true)
-            .open("/main.wasm")
-            .expect("main.wasm exists");
-
-        let mut wasm_bytes = Vec::new();
-        file.read_to_end(&mut wasm_bytes)
+        let wasm_bytes = get_wasm_bytes(&exec.fs, "/main.wasm")
             .await
             .expect("Read main.wasm");
 
         let dwarf_info = parse_dwarf_info(&wasm_bytes);
-        web_sys::console::log_1(&format!("DWARF info: {:?}", dwarf_info).into());
+
+        // TODO:instrument the binary so that each logical line has a call to bkpt
+
+        let num_breakpoints = dwarf_info.0.len();
+        let bits_needed = num_breakpoints + 1; // +1 for Atomics wait/resume signal (sentinel)
+        let bytes_needed = ((bits_needed + 7) / 8) as u32;
+
+        // minimal amount of bytes needed to store the breakpoints where each bit represents a breakpoint
+        let buffer = SharedArrayBuffer::new(bytes_needed);
+
+        WorkerOut::Debug {
+            breakpoints: dwarf_info.0,
+            files: dwarf_info.1,
+            breakpoint_buffer: buffer,
+        }
+        .send();
     }
 
     exec.step("main")
