@@ -149,6 +149,7 @@ fn parse_dwarf_inner(wasm_bytes: &[u8]) -> Result<(Vec<LocationInfo>, Vec<String
                 file: file_idx,
                 line,
                 col,
+                address: row.address(),
             });
         }
     }

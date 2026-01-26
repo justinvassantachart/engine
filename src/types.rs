@@ -63,6 +63,8 @@ pub struct LocationInfo {
     pub file: u32,
     pub line: u32,
     pub col: u32,
+    /// Byte offset into the WASM code section for instrumentation
+    pub address: u64,
 }
 
 impl<'a> WorkerOut<'a> {
