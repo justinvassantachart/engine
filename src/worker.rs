@@ -1,14 +1,16 @@
 use console_error_panic_hook;
 use std::path::PathBuf;
 use wasm_bindgen::prelude::*;
-use wasmer_wasix::virtual_fs::{AsyncWriteExt, FileSystem, create_dir_all, mem_fs};
+use wasmer_wasix::virtual_fs::{AsyncReadExt, AsyncWriteExt, FileSystem, create_dir_all, mem_fs};
 use web_sys::{DedicatedWorkerGlobalScope, MessageEvent};
 
 use crate::debug::*;
+use crate::dwarf::*;
 use crate::execution::Execution;
 use crate::types::*;
 
 mod debug;
+mod dwarf;
 mod execution;
 mod io;
 mod runtime;
@@ -107,9 +109,6 @@ async fn start(msg: WorkerStart) {
         .await
         .expect("Compilation succeeded");
 
-    // TODO: instrument the binary for debugging
-    if msg.is_debug {}
-
     exec.step("wasm-ld")
         .binary("https://runno.dev/langs/wasm-ld.wasm")
         .args(&[
@@ -129,6 +128,28 @@ async fn start(msg: WorkerStart) {
         .run()
         .await
         .expect("Linking succeeded");
+
+    // TODO: instrument the binary for debugging
+    if msg.is_debug {
+        let root = exec
+            .fs
+            .read_dir(PathBuf::from("/").as_path())
+            .expect("Read root dir");
+        let mut file = exec
+            .fs
+            .new_open_options()
+            .read(true)
+            .open("/main.wasm")
+            .expect("main.wasm exists");
+
+        let mut wasm_bytes = Vec::new();
+        file.read_to_end(&mut wasm_bytes)
+            .await
+            .expect("Read main.wasm");
+
+        let dwarf_info = parse_dwarf_info(&wasm_bytes);
+        web_sys::console::log_1(&format!("DWARF info: {:?}", dwarf_info).into());
+    }
 
     exec.step("main")
         .binary("/main.wasm")
