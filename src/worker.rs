@@ -4,9 +4,9 @@ use wasm_bindgen::prelude::*;
 use wasmer_wasix::virtual_fs::{AsyncWriteExt, FileSystem, create_dir_all, mem_fs};
 use web_sys::{DedicatedWorkerGlobalScope, MessageEvent};
 
+use crate::debug::*;
 use crate::execution::Execution;
 use crate::types::*;
-use crate::debug::*;
 
 mod debug;
 mod execution;
@@ -92,8 +92,10 @@ async fn start(msg: WorkerStart) {
     ];
 
     if msg.is_debug {
-        clang_args.insert(1, "-g");
-        clang_args.insert(2, "-O0");
+        clang_args.push("-O0");
+        // because of the -cc1 flag
+        clang_args.push("-debug-info-kind=standalone");
+        clang_args.push("-dwarf-version=4");
     }
 
     exec.step("clang")
