@@ -1,6 +1,6 @@
 'use client';
 
-import { Box, Paper, Typography } from '@mui/material';
+import { Box, Paper } from '@mui/material';
 import CssBaseline from '@mui/material/CssBaseline';
 import { createTheme, ThemeProvider } from '@mui/material/styles';
 
@@ -49,17 +49,6 @@ export default function Home() {
           }}
         />
         <Box sx={{ position: 'relative', width: '100%', maxWidth: '1080px' }}>
-          <Box sx={{ textAlign: 'center', mb: 3 }}>
-            {/* <Typography
-              variant="h4"
-              sx={{ fontWeight: 700, color: 'rgba(255, 255, 255, 0.92)', letterSpacing: '-0.02em' }}
-            >
-              Runtime Playground
-            </Typography> */}
-            <Typography variant="body2" sx={{ color: 'rgba(255, 255, 255, 0.6)', mt: 1 }}>
-              Write, run, and inspect code output in one sleek panel.
-            </Typography>
-          </Box>
           <Box
             sx={{
               p: '1px',

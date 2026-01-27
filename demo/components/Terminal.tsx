@@ -22,8 +22,6 @@ type TerminalHandle = {
 type TerminalProps = {
   /** Visual height of the terminal container. */
   height?: number | string;
-  /** Called when the terminal is ready (xterm initialized). */
-  onReady?: () => void;
 };
 
 // Xterm configuration (cursor behavior, font, initial rows).
@@ -59,144 +57,135 @@ const terminalOptions = {
   },
 };
 
-const Terminal = React.forwardRef<TerminalHandle, TerminalProps>(
-  ({ height = 180, onReady }, ref) => {
-    // DOM mount point for Xterm.
-    const terminalEl = React.useRef<HTMLDivElement | null>(null);
-    // Xterm instance. We keep this in a ref to avoid re-renders on output.
-    const terminalRef = React.useRef<import('@xterm/xterm').Terminal | null>(null);
-    // Reference to the container element for toggling pointer events
-    const containerRef = React.useRef<HTMLDivElement | null>(null);
-    // Reference to FitAddon for resizing
-    const fitAddonRef = React.useRef<import('@xterm/addon-fit').FitAddon | null>(null);
-    // Ref to store onReady callback (avoids re-running effect when callback changes)
-    const onReadyRef = React.useRef(onReady);
-    onReadyRef.current = onReady;
+const Terminal = React.forwardRef<TerminalHandle, TerminalProps>(({ height = 180 }, ref) => {
+  // DOM mount point for Xterm.
+  const terminalEl = React.useRef<HTMLDivElement | null>(null);
+  // Xterm instance. We keep this in a ref to avoid re-renders on output.
+  const terminalRef = React.useRef<import('@xterm/xterm').Terminal | null>(null);
+  // Reference to the container element for toggling pointer events
+  const containerRef = React.useRef<HTMLDivElement | null>(null);
+  // Reference to FitAddon for resizing
+  const fitAddonRef = React.useRef<import('@xterm/addon-fit').FitAddon | null>(null);
 
-    // Use useImperativeHandle to expose the terminal methods to the parent component (CodeEditor)
-    React.useImperativeHandle(
-      ref,
-      () => ({
-        // Use these methods from parent components to write output.
-        write: (data) => terminalRef.current?.write(data),
-        writeln: (data) => terminalRef.current?.writeln(data),
-        clear: () => terminalRef.current?.clear(),
-        focus: () => terminalRef.current?.focus(),
-        getTerminal: () => terminalRef.current,
-        enableInput: () => {
-          if (containerRef.current) {
-            const screen = containerRef.current.querySelector('.xterm-screen');
-            if (screen instanceof HTMLElement) {
-              screen.style.pointerEvents = 'auto';
-            }
+  // Use useImperativeHandle to expose the terminal methods to the parent component (CodeEditor)
+  React.useImperativeHandle(
+    ref,
+    () => ({
+      // Use these methods from parent components to write output.
+      write: (data) => terminalRef.current?.write(data),
+      writeln: (data) => terminalRef.current?.writeln(data),
+      clear: () => terminalRef.current?.clear(),
+      focus: () => terminalRef.current?.focus(),
+      getTerminal: () => terminalRef.current,
+      enableInput: () => {
+        if (containerRef.current) {
+          const screen = containerRef.current.querySelector('.xterm-screen');
+          if (screen instanceof HTMLElement) {
+            screen.style.pointerEvents = 'auto';
           }
-        },
-        disableInput: () => {
-          if (containerRef.current) {
-            const screen = containerRef.current.querySelector('.xterm-screen');
-            if (screen instanceof HTMLElement) {
-              screen.style.pointerEvents = 'none';
-            }
+        }
+      },
+      disableInput: () => {
+        if (containerRef.current) {
+          const screen = containerRef.current.querySelector('.xterm-screen');
+          if (screen instanceof HTMLElement) {
+            screen.style.pointerEvents = 'none';
           }
+        }
+      },
+      resize: () => {
+        // Resize terminal to fit its container
+        fitAddonRef.current?.fit();
+      },
+    }),
+    []
+  );
+
+  React.useEffect(() => {
+    let disposed = false;
+    let fitAddon: import('@xterm/addon-fit').FitAddon | null = null;
+
+    // Refit terminal when the window resizes.
+    const onResize = () => fitAddon?.fit();
+
+    const setupTerminal = async () => {
+      if (!terminalEl.current) return;
+
+      // NOTE: Dynamic import avoids "self is not defined" during SSR.
+      // If we ever move to non-SSR or split to client-only routes,
+      // we can switch to static imports.
+      // this could also be solved like this:
+      //   const Terminal = dynamic(() => import("@/components/Terminal"), {
+      //     ssr: false,
+      //   });
+      const [{ Terminal: XTerm }, { FitAddon }] = await Promise.all([
+        import('@xterm/xterm'),
+        import('@xterm/addon-fit'),
+      ]);
+
+      if (disposed || !terminalEl.current) return;
+
+      // Initialize Xterm instance.
+      // This is the spot to add addons like Unicode/Weird width handling later.
+      const term = new XTerm(terminalOptions);
+      fitAddon = new FitAddon();
+      fitAddonRef.current = fitAddon;
+      term.loadAddon(fitAddon);
+      term.open(terminalEl.current);
+      fitAddon.fit();
+
+      terminalRef.current = term;
+      window.addEventListener('resize', onResize);
+    };
+
+    void setupTerminal();
+
+    return () => {
+      disposed = true;
+      window.removeEventListener('resize', onResize);
+      // Ensure Xterm frees all event listeners and DOM nodes.
+      terminalRef.current?.dispose();
+      terminalRef.current = null;
+      fitAddonRef.current = null;
+    };
+  }, []);
+
+  // Resize terminal when height prop changes
+  React.useEffect(() => {
+    if (fitAddonRef.current) {
+      // Use requestAnimationFrame to ensure DOM has updated
+      requestAnimationFrame(() => {
+        fitAddonRef.current?.fit();
+      });
+    }
+  }, [height]);
+
+  return (
+    <Box
+      // ref to the terminal element
+      ref={(el: HTMLDivElement | null) => {
+        terminalEl.current = el;
+        containerRef.current = el;
+      }}
+      sx={{
+        height,
+        width: '100%',
+        px: 2,
+        pb: 1.5,
+        pt: 1,
+        // Container styling — tweak background/border to match the editor theme.
+        background: 'linear-gradient(180deg, rgba(10, 12, 18, 0.75) 0%, rgba(5, 7, 12, 0.9) 100%)',
+        '& .xterm-viewport': {
+          overflowY: 'auto',
         },
-        resize: () => {
-          // Resize terminal to fit its container
-          fitAddonRef.current?.fit();
+        // Input is disabled by default. Use enableInput()/disableInput() to toggle.
+        '& .xterm-screen': {
+          pointerEvents: 'none',
         },
-      }),
-      []
-    );
-
-    React.useEffect(() => {
-      let disposed = false;
-      let fitAddon: import('@xterm/addon-fit').FitAddon | null = null;
-
-      // Refit terminal when the window resizes.
-      const onResize = () => fitAddon?.fit();
-
-      const setupTerminal = async () => {
-        if (!terminalEl.current) return;
-
-        // NOTE: Dynamic import avoids "self is not defined" during SSR.
-        // If we ever move to non-SSR or split to client-only routes,
-        // we can switch to static imports.
-        // this could also be solved like this:
-        //   const Terminal = dynamic(() => import("@/components/Terminal"), {
-        //     ssr: false,
-        //   });
-        const [{ Terminal: XTerm }, { FitAddon }] = await Promise.all([
-          import('@xterm/xterm'),
-          import('@xterm/addon-fit'),
-        ]);
-
-        if (disposed || !terminalEl.current) return;
-
-        // Initialize Xterm instance.
-        // This is the spot to add addons like Unicode/Weird width handling later.
-        const term = new XTerm(terminalOptions);
-        fitAddon = new FitAddon();
-        fitAddonRef.current = fitAddon;
-        term.loadAddon(fitAddon);
-        term.open(terminalEl.current);
-        fitAddon.fit();
-
-        terminalRef.current = term;
-        window.addEventListener('resize', onResize);
-
-        // Notify parent that terminal is ready
-        onReadyRef.current?.();
-      };
-
-      void setupTerminal();
-
-      return () => {
-        disposed = true;
-        window.removeEventListener('resize', onResize);
-        // Ensure Xterm frees all event listeners and DOM nodes.
-        terminalRef.current?.dispose();
-        terminalRef.current = null;
-        fitAddonRef.current = null;
-      };
-    }, []);
-
-    // Resize terminal when height prop changes
-    React.useEffect(() => {
-      if (fitAddonRef.current) {
-        // Use requestAnimationFrame to ensure DOM has updated
-        requestAnimationFrame(() => {
-          fitAddonRef.current?.fit();
-        });
-      }
-    }, [height]);
-
-    return (
-      <Box
-        // ref to the terminal element
-        ref={(el: HTMLDivElement | null) => {
-          terminalEl.current = el;
-          containerRef.current = el;
-        }}
-        sx={{
-          height,
-          width: '100%',
-          px: 2,
-          pb: 1.5,
-          pt: 1,
-          // Container styling — tweak background/border to match the editor theme.
-          background:
-            'linear-gradient(180deg, rgba(10, 12, 18, 0.75) 0%, rgba(5, 7, 12, 0.9) 100%)',
-          '& .xterm-viewport': {
-            overflowY: 'auto',
-          },
-          // Input is disabled by default. Use enableInput()/disableInput() to toggle.
-          '& .xterm-screen': {
-            pointerEvents: 'none',
-          },
-        }}
-      />
-    );
-  }
-);
+      }}
+    />
+  );
+});
 
 Terminal.displayName = 'Terminal';
 

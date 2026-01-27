@@ -6,10 +6,10 @@ import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import StopIcon from '@mui/icons-material/Stop';
 import { Box, Button, FormControl, InputLabel, MenuItem, Select, Typography } from '@mui/material';
 import CodeMirror from '@uiw/react-codemirror';
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
+import { Runtime } from 'runtime';
 
 import Terminal, { TerminalHandle } from '@/components/Terminal';
-import { useCodeExecution } from '@/hooks/useCodeExecution';
 
 const defaultCode = `#include <iostream>
 
@@ -24,26 +24,232 @@ type Language = 'C' | 'C++';
 
 export default function CodeEditor() {
   const [code, setCode] = useState<string>(defaultCode);
+  const [isRunning, setIsRunning] = useState<boolean>(false);
   const [language, setLanguage] = useState<Language>('C++');
+  // Terminal height in pixels (default 170px)
   const [terminalHeight, setTerminalHeight] = useState<number>(170);
-  const [terminalReady, setTerminalReady] = useState(false);
   const terminalRef = useRef<TerminalHandle | null>(null);
-  const containerRef = useRef<HTMLDivElement | null>(null);
+  // Ref to track running state for stdin handler (avoids stale closure)
+  const isRunningRef = useRef<boolean>(false);
+  // Ref to store the current runtime instance for stopping execution (Ctrl+C)
+  const runtimeRef = useRef<Runtime | null>(null);
+  // Ref to track if execution was stopped by user (Ctrl+C)
+  const wasStoppedByUserRef = useRef<boolean>(false);
+  // Refs for drag resizing
   const isDraggingRef = useRef<boolean>(false);
-
-  // Use the simplified code execution hook
-  const { isRunning, runCode, stopCode } = useCodeExecution({ terminalRef, terminalReady });
-
-  const handleTerminalReady = useCallback(() => {
-    setTerminalReady(true);
-  }, []);
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  // Ref to store onData handler for cleanup (prevents duplicate handlers)
+  const onDataHandlerRef = useRef<{ dispose: () => void } | null>(null);
 
   const handleLanguageChange = (newLanguage: Language) => {
     setLanguage(newLanguage);
   };
 
-  const handleRun = () => {
-    runCode(code);
+  /**
+   * Handle Stop Button Click
+   *
+   * Stops the currently running program execution.
+   */
+  const handleStop = () => {
+    if (runtimeRef.current) {
+      runtimeRef.current.stop();
+      // The finally block in handleRun will clean up the state
+    }
+  };
+
+  /**
+   * Handle Run Button Click
+   *
+   * Compiles and runs the user's code, setting up stdin/stdout/stderr streams.
+   * Stdin input is captured from the terminal and only accepted when the program
+   * is actively running and waiting for input.
+   */
+  const handleRun = async () => {
+    setIsRunning(true);
+    isRunningRef.current = true;
+    wasStoppedByUserRef.current = false;
+
+    // Create AbortController to cancel pipeTo connections when stopping
+    // Declared outside try block so it's accessible in finally
+    let abortController: AbortController | null = null;
+
+    try {
+      // Clear terminal output for a fresh run
+      terminalRef.current?.clear();
+      terminalRef.current?.writeln('Running...');
+
+      const rt = Runtime.create('c');
+      runtimeRef.current = rt;
+
+      // Set up stdout/stderr streams to write to the terminal
+      // Convert lone \n to \r\n for proper terminal display (xterm.js expects \r\n)
+
+      // Create AbortController to cancel pipeTo connections when stopping
+      abortController = new AbortController();
+      const signal = abortController.signal;
+
+      const terminal = new WritableStream<Uint8Array>({
+        write: (chunk) => {
+          // Decode bytes to string, normalize newlines, then write
+          const decoder = new TextDecoder();
+          const text = decoder.decode(chunk);
+          // Replace any \n (not already preceded by \r) with \r\n
+          const normalized = text.replace(/\r?\n/g, '\r\n');
+          terminalRef.current?.write(normalized);
+        },
+        abort: () => {
+          // Stream aborted - cleanup
+        },
+      });
+
+      const stderrStream = new WritableStream<Uint8Array>({
+        write: (chunk) => {
+          // Decode bytes to string, normalize newlines, then write
+          const decoder = new TextDecoder();
+          const text = decoder.decode(chunk);
+          const normalized = text.replace(/\r?\n/g, '\r\n');
+          terminalRef.current?.write(normalized);
+          // No timeout logic needed - worker will always send 'stop' message
+          // (both on success and on errors/panics)
+        },
+        abort: () => {
+          // Stream aborted - cleanup
+        },
+      });
+
+      // Store pipeTo promises so we can abort them if needed
+      // Pipes are set up and will be aborted via abortController when needed
+      rt.stdout.pipeTo(terminal, { signal }).catch(() => {
+        // Ignore abort errors
+      });
+      rt.stderr.pipeTo(stderrStream, { signal }).catch(() => {
+        // Ignore abort errors
+      });
+      rt.fs = { 'main.c': code };
+
+      // Get the underlying xterm.js terminal instance for stdin handling
+      const term = terminalRef.current?.getTerminal();
+      if (!term) {
+        throw new Error('Terminal not initialized');
+      }
+
+      // Enable input on the terminal (allows pointer events)
+      terminalRef.current?.enableInput();
+
+      // Set up stdin input handling
+      // Buffer to store user input before sending to stdin
+      let stdinBuffer = '';
+      const encoder = new TextEncoder();
+      const stdinWriter = rt.stdin.getWriter();
+
+      // Dispose any existing handler first to prevent duplicates
+      if (onDataHandlerRef.current) {
+        onDataHandlerRef.current.dispose();
+        onDataHandlerRef.current = null;
+      }
+
+      /**
+       * Handle keyboard input from the terminal.
+       * Only processes input when code is running (checked via isRunningRef).
+       * Supports control sequences:
+       * - Ctrl+C (\x03): Stop execution
+       * - Ctrl+D (\x04): Send EOF to stdin
+       * - Ctrl+L (\x0c): Clear terminal screen
+       */
+      const onData = term.onData((data: string) => {
+        // Only accept input when code is actively running
+        if (!isRunningRef.current) return;
+
+        // Control sequences (single character codes)
+        if (data === '\x03') {
+          // Ctrl+C: Stop execution
+          term.write('^C\r\n');
+          wasStoppedByUserRef.current = true;
+          // Stop the runtime execution
+          // Note: TypeScript types need to be regenerated (npm run build) to recognize stop() method
+          const rt = runtimeRef.current as Runtime & { stop?: () => void };
+          if (rt?.stop) {
+            rt.stop();
+          }
+          // Immediately update UI state when stopped (don't wait for run() to complete)
+          isRunningRef.current = false;
+          setIsRunning(false);
+          terminalRef.current?.disableInput();
+          terminalRef.current?.writeln('Execution stopped by user (Ctrl+C)');
+          return;
+        } else if (data === '\x04') {
+          // Ctrl+D: Send EOF (End of File) to stdin
+          // EOF is typically represented as 0x04 or by closing the stream
+          term.write('^D\r\n');
+          stdinWriter.write(encoder.encode('\x04')); // Send EOF character
+          stdinBuffer = '';
+          return;
+        } else if (data === '\x0c') {
+          // Ctrl+L: Clear terminal screen (form feed)
+          terminalRef.current?.clear();
+          stdinBuffer = '';
+          return;
+        }
+
+        // Regular input handling
+        if (data === '\r') {
+          // Enter key pressed: send buffered input to stdin with newline
+          term.write('\r\n');
+          stdinWriter.write(encoder.encode(`${stdinBuffer}\n`));
+          stdinBuffer = '';
+        } else if (data === '\u007f') {
+          // Backspace: remove last character from buffer and terminal
+          if (stdinBuffer.length > 0) {
+            stdinBuffer = stdinBuffer.slice(0, -1);
+            term.write('\b \b');
+          }
+        } else if (
+          // Ignore arrow keys and other control sequences
+          data === '\x1b[A' || // Up arrow
+          data === '\x1b[B' || // Down arrow
+          data === '\x1b[C' || // Right arrow
+          data === '\x1b[D' // Left arrow
+        ) {
+          return; // Ignore arrow keys
+        } else {
+          // Regular character: add to buffer and echo to terminal
+          stdinBuffer += data;
+          term.write(data);
+        }
+      });
+
+      // Store handler reference for cleanup
+      onDataHandlerRef.current = onData;
+
+      // Run the program
+      // Worker will always send 'stop' message (on success or error)
+      await rt.run();
+    } catch (error) {
+      console.error('Failed to run code:', error);
+      // Check if error was due to user cancellation (Ctrl+C)
+      if (wasStoppedByUserRef.current) {
+        // Execution was stopped by user, error message already shown
+        return;
+      }
+      terminalRef.current?.writeln('Error: So much stuff will be here once the runtime is wired.');
+    } finally {
+      // Clean up: dispose of the stdin event handler (must be in finally to ensure cleanup)
+      // This prevents duplicate handlers on subsequent runs
+      if (onDataHandlerRef.current) {
+        onDataHandlerRef.current.dispose();
+        onDataHandlerRef.current = null;
+      }
+      // Abort any active pipeTo connections to prevent duplicate output
+      if (abortController) {
+        abortController.abort();
+      }
+      // Clean up runtime reference
+      runtimeRef.current = null;
+      // Disable input when code stops running
+      isRunningRef.current = false;
+      terminalRef.current?.disableInput();
+      setIsRunning(false);
+    }
   };
 
   // Handle drag resizing of terminal
@@ -99,7 +305,6 @@ export default function CodeEditor() {
 
   return (
     <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
-      {/* Header */}
       <Box
         sx={{
           px: 3,
@@ -181,30 +386,33 @@ export default function CodeEditor() {
             variant="contained"
             size="small"
             startIcon={isRunning ? <StopIcon /> : <PlayArrowIcon />}
-            onClick={isRunning ? stopCode : handleRun}
+            onClick={isRunning ? handleStop : handleRun}
             sx={{
               minWidth: 100,
               textTransform: 'none',
-              background: isRunning
-                ? 'linear-gradient(135deg, #ef4444 0%, #dc2626 100%)'
-                : 'linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%)',
-              border: '1px solid rgba(255, 255, 255, 0.12)',
-              boxShadow: isRunning
-                ? '0 10px 25px rgba(239, 68, 68, 0.3)'
-                : '0 10px 25px rgba(99, 102, 241, 0.3)',
-              '&:hover': {
-                background: isRunning
-                  ? 'linear-gradient(135deg, #dc2626 0%, #b91c1c 100%)'
-                  : 'linear-gradient(135deg, #5855eb 0%, #7c3aed 100%)',
-              },
+              ...(isRunning
+                ? {
+                    background: 'linear-gradient(135deg, #ef4444 0%, #dc2626 100%)',
+                    border: '1px solid rgba(255, 255, 255, 0.12)',
+                    boxShadow: '0 10px 25px rgba(239, 68, 68, 0.3)',
+                    '&:hover': {
+                      background: 'linear-gradient(135deg, #dc2626 0%, #b91c1c 100%)',
+                    },
+                  }
+                : {
+                    background: 'linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%)',
+                    border: '1px solid rgba(255, 255, 255, 0.12)',
+                    boxShadow: '0 10px 25px rgba(99, 102, 241, 0.3)',
+                    '&:hover': {
+                      background: 'linear-gradient(135deg, #5855eb 0%, #7c3aed 100%)',
+                    },
+                  }),
             }}
           >
             {isRunning ? 'Stop' : 'Run'}
           </Button>
         </Box>
       </Box>
-
-      {/* Main Content */}
       <Box
         ref={containerRef}
         sx={{
@@ -215,7 +423,7 @@ export default function CodeEditor() {
           position: 'relative',
         }}
       >
-        {/* Code Editor */}
+        {/* Code Editor - takes remaining space */}
         <Box sx={{ flex: 1, overflow: 'auto', background: 'rgba(10, 12, 18, 0.6)', minHeight: 0 }}>
           <CodeMirror
             value={code}
@@ -291,8 +499,8 @@ export default function CodeEditor() {
           </Typography>
         </Box>
 
-        {/* Terminal */}
-        <Terminal ref={terminalRef} height={terminalHeight} onReady={handleTerminalReady} />
+        {/* Terminal - fixed height, resizable */}
+        <Terminal ref={terminalRef} height={terminalHeight} />
       </Box>
     </Box>
   );

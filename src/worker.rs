@@ -175,6 +175,7 @@ async fn start(msg: WorkerStart) {
         web_sys::console::log_1(&format!("FS Entry: {:?}", entry).into());
     }
 
+    // Send Stop message on successful completion
     WorkerOut::Stop.send();
 }
 
