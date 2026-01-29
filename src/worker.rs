@@ -1,5 +1,4 @@
 use console_error_panic_hook;
-use js_sys::SharedArrayBuffer;
 use std::path::PathBuf;
 use wasm_bindgen::prelude::*;
 use wasmer_wasix::virtual_fs::{AsyncWriteExt, FileSystem, create_dir_all, mem_fs};

@@ -99,7 +99,7 @@ impl Debugger {
         // TODO: Send BreakpointHit message to TypeScript with stack info
 
         // TODO: remove after debugging
-        console_log::log!("Breakpoint hit at index {}", index);
+        web_sys::console::log_1(&format!("Breakpoint hit at index {}", index).into());
 
         self.wait_for_resume();
         true

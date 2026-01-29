@@ -3,9 +3,7 @@ use gimli::{EndianSlice, LittleEndian, Reader};
 use object::{Object, ObjectSection};
 use std::borrow::Cow;
 use std::collections::HashMap;
-use wasmer_wasix::virtual_fs::{AsyncReadExt, AsyncWriteExt, FileSystem, create_dir_all, mem_fs};
-
-type GimliReader<'a> = EndianSlice<'a, LittleEndian>;
+use wasmer_wasix::virtual_fs::{AsyncReadExt, FileSystem, mem_fs};
 
 /// ============================================================================
 /// HELPERS
@@ -208,7 +206,7 @@ pub fn instrument_binary(wasm_bytes: &[u8], locations: &[LocationInfo]) -> Resul
         };
 
         let entry_block = local_func.entry_block();
-        let mut builder = local_func.builder_mut();
+        let builder = local_func.builder_mut();
         let mut seq = builder.instr_seq(entry_block);
 
         // Gets the ix w original offsets
