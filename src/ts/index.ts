@@ -11,6 +11,8 @@ export class Runtime {
   private out = new StdoutStream(1);
   private err = new StdoutStream(2);
   private in = new StdinStream();
+  private debugger = new Debugger();
+
   private currentWorker: Worker | null = null; // current worker instance
   private stopResolver: ((value: void) => void) | null = null; // promise resolver for stop()
 
@@ -125,6 +127,7 @@ export class Runtime {
     /* Set up handling for stdout/stderr */
     this.out.addWorker(worker);
     this.err.addWorker(worker);
+    this.debugger[DebuggerInternals].addWorker(worker);
 
     /* Wait for the worker to send us a Ready message */
     await new Promise<void>((resolve) => {
@@ -193,6 +196,8 @@ export class Runtime {
     this.out.removeWorker(worker);
     this.err.removeWorker(worker);
     this.in.clear();
+    this.debugger[DebuggerInternals].removeWorker(worker);
+
     this.currentWorker = null;
     this.stopResolver = null;
   }
@@ -288,4 +293,34 @@ class StdinStream {
       offset += toWrite;
     }
   }
+}
+
+// class Breakpoint {
+//   private buffer: SharedArrayBuffer;
+//   private index: number;
+// }
+
+const DebuggerInternals: unique symbol = Symbol();
+
+class Debugger {
+  /**
+   * Access to internal properties of the debugger.
+   * These are put under a special symbol so that they cannot be accessed by
+   * clients of the library.
+   */
+  [DebuggerInternals]: {
+    addWorker(worker: Worker): void;
+    removeWorker(worker: Worker): void;
+  };
+
+  constructor() {
+    this[DebuggerInternals] = {
+      addWorker: this.addWorker,
+      removeWorker: this.removeWorker,
+    };
+  }
+
+  private addWorker(_worker: Worker): void {}
+
+  private removeWorker(_worker: Worker): void {}
 }
