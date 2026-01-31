@@ -11,7 +11,7 @@ export class Runtime {
   private out = new StdoutStream(1);
   private err = new StdoutStream(2);
   private in = new StdinStream();
-  private debugger = new Debugger();
+  public debugger = new Debugger();
 
   /** A function which, when called, rejects the ongoing execution */
   private rejector?: () => void;
@@ -96,7 +96,7 @@ export class Runtime {
     /* Set up handling for stdout/stderr */
     this.out.addWorker(worker);
     this.err.addWorker(worker);
-    this.debugger[DebuggerInternals].addWorker(worker);
+    this.debugger[Internals].addWorker(worker);
 
     try {
       await new Promise<void>(async (resolve, reject) => {
@@ -134,7 +134,7 @@ export class Runtime {
       this.out.removeWorker(worker);
       this.err.removeWorker(worker);
       this.in.clear();
-      this.debugger[DebuggerInternals].removeWorker(worker);
+      this.debugger[Internals].removeWorker(worker);
       worker.terminate();
     }
   }
@@ -227,32 +227,79 @@ class StdinStream {
   }
 }
 
-// class Breakpoint {
-//   private buffer: SharedArrayBuffer;
-//   private index: number;
-// }
+const Internals: unique symbol = Symbol();
 
-const DebuggerInternals: unique symbol = Symbol();
+export class Breakpoint {
+  static [Internals] = {
+    create(buffer: Uint8Array, file: string, line: number, col: number) {
+      return new Breakpoint(buffer, file, line, col);
+    },
+  };
 
-class Debugger {
+  private constructor(
+    private readonly buffer: Uint8Array,
+    public readonly file: string,
+    public readonly line: number,
+    public readonly col: number
+  ) {}
+
+  get set() {
+    return this.buffer[0] > 0;
+  }
+
+  set set(value: boolean) {
+    this.buffer[0] = value ? 1 : 0;
+  }
+}
+
+export class Debugger {
   /**
    * Access to internal properties of the debugger.
    * These are put under a special symbol so that they cannot be accessed by
    * clients of the library.
    */
-  [DebuggerInternals]: {
+  [Internals]: {
     addWorker(worker: Worker): void;
     removeWorker(worker: Worker): void;
   };
 
+  private _breakpoints: Array<Breakpoint> = [];
+  public get breakpoints(): ReadonlyArray<Breakpoint> {
+    return this._breakpoints;
+  }
+
   constructor() {
-    this[DebuggerInternals] = {
+    this[Internals] = {
       addWorker: this.addWorker,
       removeWorker: this.removeWorker,
     };
+
+    this.onMessage = this.onMessage.bind(this);
   }
 
-  private addWorker(_worker: Worker): void {}
+  private addWorker(worker: Worker): void {
+    worker.addEventListener('message', this.onMessage);
+  }
 
-  private removeWorker(_worker: Worker): void {}
+  private onMessage(event: MessageEvent<WorkerOut>) {
+    const data = event.data;
+    if (data.type !== 'debug') return;
+
+    this._breakpoints = [];
+    for (let i = 0; i < data.breakpoints.length; i++) {
+      const bp = data.breakpoints[i];
+      this._breakpoints.push(
+        Breakpoint[Internals].create(
+          new Uint8Array(data.breakpoint_buffer, i, 1),
+          data.files[bp.file],
+          bp.line,
+          bp.col
+        )
+      );
+    }
+  }
+
+  private removeWorker(worker: Worker): void {
+    worker.removeEventListener('message', this.onMessage);
+  }
 }
