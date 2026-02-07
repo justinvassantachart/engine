@@ -43,7 +43,7 @@ pub enum WorkerOut<'a> {
     },
     #[serde(rename = "debug")]
     Debug {
-        breakpoints: Vec<LocationInfo>,
+        locations: Vec<LocationInfo>,
         files: Vec<String>,
         /// Bitfield where index N corresponds to breakpoint N.
         /// Index 0 is a sentinel (always 0). Length = breakpoints.len() + 1.

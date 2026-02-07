@@ -52,7 +52,7 @@ impl Debugger {
 
     pub fn send_debug_info(&self) {
         WorkerOut::Debug {
-            breakpoints: self.locations.clone(),
+            locations: self.locations.clone(),
             files: self.files.clone(),
             breakpoint_buffer: self.buffer.clone(),
         }

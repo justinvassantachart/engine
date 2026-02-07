@@ -229,26 +229,16 @@ class StdinStream {
 
 const Internals: unique symbol = Symbol();
 
+export type Location = {
+  readonly file: string;
+  readonly line: number;
+  readonly col: number;
+};
+
 export class Breakpoint {
-  static [Internals] = {
-    create(buffer: Uint8Array, file: string, line: number, col: number) {
-      return new Breakpoint(buffer, file, line, col);
-    },
-  };
-
-  private constructor(
-    private readonly buffer: Uint8Array,
-    public readonly file: string,
-    public readonly line: number,
-    public readonly col: number
-  ) {}
-
-  get set() {
-    return this.buffer[0] > 0;
-  }
-
-  set set(value: boolean) {
-    this.buffer[0] = value ? 1 : 0;
+  private _location: Location | null = null;
+  public get location(): Location | null {
+    return this._location;
   }
 }
 
@@ -262,6 +252,11 @@ export class Debugger {
     addWorker(worker: Worker): void;
     removeWorker(worker: Worker): void;
   };
+
+  private _locations: Array<Location> = [];
+  public get locations(): ReadonlyArray<Location> {
+    return this._locations;
+  }
 
   private _breakpoints: Array<Breakpoint> = [];
   public get breakpoints(): ReadonlyArray<Breakpoint> {
@@ -285,18 +280,11 @@ export class Debugger {
     const data = event.data;
     if (data.type !== 'debug') return;
 
-    this._breakpoints = [];
-    for (let i = 0; i < data.breakpoints.length; i++) {
-      const bp = data.breakpoints[i];
-      this._breakpoints.push(
-        Breakpoint[Internals].create(
-          new Uint8Array(data.breakpoint_buffer, i, 1),
-          data.files[bp.file],
-          bp.line,
-          bp.col
-        )
-      );
-    }
+    this._locations = data.locations.map((loc) => ({
+      file: data.files[loc.file],
+      line: loc.line,
+      col: loc.col,
+    }));
   }
 
   private removeWorker(worker: Worker): void {
