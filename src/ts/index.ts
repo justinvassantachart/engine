@@ -230,15 +230,138 @@ class StdinStream {
 const Internals: unique symbol = Symbol();
 
 export type Location = {
+  /** The name of a function, e.g. `main`, which begins at this location. */
+  readonly function?: string;
   readonly file: string;
   readonly line: number;
   readonly col: number;
 };
 
+export type BreakpointSpecifier = string | number;
+
+export const BreakpointStatus = {
+  /** Debug symbols have not been loaded yet, so the breakpoint has not been found yet */
+  Pending: 'pending',
+  /** This breakpoint successfully mapped onto a location in the compiled binary */
+  Resolved: 'resolved',
+  /** This breakpoint could not be mapped onto a location in the compiled binary  */
+  Error: 'error',
+  /** This breakpoint has been removed and can no longer be used */
+  Removed: 'removed',
+} as const;
+
+export type BreakpointStatus = (typeof BreakpointStatus)[keyof typeof BreakpointStatus];
+
 export class Breakpoint {
-  private _location: Location | null = null;
-  public get location(): Location | null {
-    return this._location;
+  static [Internals] = {
+    create: (debug: Debugger, where: BreakpointSpecifier) => new Breakpoint(debug, where),
+  };
+
+  [Internals]: {
+    resolve(): void;
+  };
+
+  public readonly where: BreakpointSpecifier;
+
+  private readonly debugger: Debugger;
+  private _enabled = true;
+  private _status: BreakpointStatus = BreakpointStatus.Pending;
+
+  /**
+   * The indices of locations in `debugger.locations` that this breakpoint resolves to.
+   *
+   * Note that a breakpoint can map onto multiple locations: consider an inline function `foo`
+   * with multiple instantiations. Breaking on that function will cause us to break in multiple
+   * different places, even though we only set one breakpoint e.g. `main.c:foo`.
+   *  */
+  private _locations: number[] = [];
+
+  public get enabled() {
+    return this._enabled;
+  }
+
+  public get status() {
+    return this._status;
+  }
+
+  public enable(enabled = true) {
+    if (this.enabled === enabled) return this;
+    this._enabled = enabled;
+    if (this.status !== BreakpointStatus.Resolved) return this;
+    this._locations.forEach((idx) => {
+      const buffer = this.debugger[Internals].buffer;
+      if (idx < 0 || idx >= buffer.length) throw new Error(`OOB breakpoint buffer access: ${idx}`);
+
+      if (enabled) buffer[idx]++;
+      else if (buffer[idx] === 0)
+        throw new Error(`Attempt to make breakpoint buffer at ${idx} negative`);
+      else buffer[idx]--;
+    });
+    return this;
+  }
+
+  public disable() {
+    return this.enable(false);
+  }
+
+  public remove() {
+    this.disable();
+    this._status = BreakpointStatus.Removed;
+  }
+
+  private constructor(debug: Debugger, where: BreakpointSpecifier) {
+    this.debugger = debug;
+    this.where = where;
+    this[Internals] = { resolve: this.resolve };
+  }
+
+  private resolve(): void {
+    if (this._status === BreakpointStatus.Removed) return;
+
+    const locations = this.debugger.locations;
+    this._locations = [];
+
+    if (typeof this.where === 'number') {
+      const idx = this.where;
+      if (idx >= 0 && idx < locations.length) this._locations = [idx];
+    }
+
+    // GDB-style string: [file:][function|line]
+    if (typeof this.where === 'string') {
+      const colon = this.where.indexOf(':');
+      const fileSpec = colon >= 0 ? this.where.slice(0, colon) : undefined;
+      const rest = colon >= 0 ? this.where.slice(colon + 1) : this.where;
+
+      const isLineNum = /^\d+$/.test(rest);
+      const line = isLineNum ? parseInt(rest, 10) : undefined;
+      const fn = isLineNum ? undefined : rest;
+
+      for (let i = 0; i < locations.length; i++) {
+        const loc = locations[i];
+        if (fileSpec !== undefined && loc.file !== fileSpec) continue;
+        if (line !== undefined) {
+          if (loc.line !== line) continue;
+        } else if (fn !== undefined) {
+          if (loc.function !== fn) continue;
+        } else continue;
+
+        this._locations.push(i);
+      }
+    }
+
+    if (this._locations.length > 0) this._status = BreakpointStatus.Resolved;
+    else this._status = BreakpointStatus.Error;
+
+    // TODO: There is a race condition here where, once the worker sends over
+    // the breakpoint buffer, it manages to start running code before the enabled
+    // breakpoints were set in that buffer. However, considering that the linker
+    // must have also ran before that point, I find it hard to believe that the
+    // linker would run faster than this function, so probably not a huge issue
+    // in practice.
+    if (this._enabled) {
+      this._enabled = false;
+      this.enable(true);
+    }
   }
 }
 
@@ -251,6 +374,16 @@ export class Debugger {
   [Internals]: {
     addWorker(worker: Worker): void;
     removeWorker(worker: Worker): void;
+
+    /**
+     * The breakpoint buffer.
+     *
+     * Each byte at index N in this buffer contains the number of breakpoints that are
+     * enabled on the location with index N. For example, if I add two breakpoints, `b1` and `b2`, which
+     * both map to location n, then `buffer[n] = 2`. A location will be "hit" if its number of
+     * enabled breakpoints is positive.
+     */
+    buffer: Uint8Array;
   };
 
   private _locations: Array<Location> = [];
@@ -258,8 +391,8 @@ export class Debugger {
     return this._locations;
   }
 
-  private _breakpoints: Array<Breakpoint> = [];
-  public get breakpoints(): ReadonlyArray<Breakpoint> {
+  private _breakpoints: Set<Breakpoint> = new Set();
+  public get breakpoints(): ReadonlySet<Breakpoint> {
     return this._breakpoints;
   }
 
@@ -267,6 +400,7 @@ export class Debugger {
     this[Internals] = {
       addWorker: this.addWorker,
       removeWorker: this.removeWorker,
+      buffer: new Uint8Array(),
     };
 
     this.onMessage = this.onMessage.bind(this);
@@ -274,6 +408,23 @@ export class Debugger {
 
   private addWorker(worker: Worker): void {
     worker.addEventListener('message', this.onMessage);
+  }
+
+  /**
+   * Adds a breakpoint to the debugger.
+   * @param where Either a GDB-style breakpoint location in the format `[file:][function|line]`
+   * or the index of a specific location in {@link locations} to put a breakpoint on.
+   * @returns A {@link Breakpoint} object that is initially configured to be hit.
+   */
+  public addBreakpoint(where: BreakpointSpecifier) {
+    const bp = Breakpoint[Internals].create(this, where);
+    this._breakpoints.add(bp);
+    return bp;
+  }
+
+  public removeBreakpoint(bp: Breakpoint) {
+    if (!this._breakpoints.delete(bp)) return;
+    bp.remove();
   }
 
   private onMessage(event: MessageEvent<WorkerOut>) {
@@ -285,6 +436,9 @@ export class Debugger {
       line: loc.line,
       col: loc.col,
     }));
+
+    this[Internals].buffer = new Uint8Array(data.breakpoint_buffer);
+    this._breakpoints.forEach((bp) => bp[Internals].resolve());
   }
 
   private removeWorker(worker: Worker): void {
