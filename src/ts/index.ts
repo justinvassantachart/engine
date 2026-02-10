@@ -310,7 +310,7 @@ export class Breakpoint {
   private constructor(debug: Debugger, where: BreakpointSpecifier) {
     this.debugger = debug;
     this.where = where;
-    this[Internals] = { resolve: this.resolve };
+    this[Internals] = { resolve: this.resolve.bind(this) };
   }
 
   private resolve(): void {
@@ -336,7 +336,8 @@ export class Breakpoint {
 
       for (let i = 0; i < locations.length; i++) {
         const loc = locations[i];
-        if (fileSpec !== undefined && loc.file !== fileSpec) continue;
+        if (fileSpec !== undefined && loc.file !== fileSpec && loc.file !== `/${fileSpec}`)
+          continue;
         if (line !== undefined) {
           if (loc.line !== line) continue;
         } else if (fn !== undefined) {
@@ -396,8 +397,8 @@ export class Debugger {
 
   constructor() {
     this[Internals] = {
-      addWorker: this.addWorker,
-      removeWorker: this.removeWorker,
+      addWorker: this.addWorker.bind(this),
+      removeWorker: this.removeWorker.bind(this),
       buffer: new Uint8Array(),
     };
 
