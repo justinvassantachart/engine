@@ -242,10 +242,8 @@ export type BreakpointSpecifier = string | number;
 export const BreakpointStatus = {
   /** Debug symbols have not been loaded yet, so the breakpoint has not been found yet */
   Pending: 'pending',
-  /** This breakpoint successfully mapped onto a location in the compiled binary */
+  /** This breakpoint has mapped onto a location in the most recently compiled binary */
   Resolved: 'resolved',
-  /** This breakpoint could not be mapped onto a location in the compiled binary  */
-  Error: 'error',
   /** This breakpoint has been removed and can no longer be used */
   Removed: 'removed',
 } as const;
@@ -349,8 +347,8 @@ export class Breakpoint {
       }
     }
 
+    this._status = BreakpointStatus.Pending;
     if (this._locations.length > 0) this._status = BreakpointStatus.Resolved;
-    else this._status = BreakpointStatus.Error;
 
     // TODO: There is a race condition here where, once the worker sends over
     // the breakpoint buffer, it manages to start running code before the enabled
@@ -406,10 +404,6 @@ export class Debugger {
     this.onMessage = this.onMessage.bind(this);
   }
 
-  private addWorker(worker: Worker): void {
-    worker.addEventListener('message', this.onMessage);
-  }
-
   /**
    * Adds a breakpoint to the debugger.
    * @param where Either a GDB-style breakpoint location in the format `[file:][function|line]`
@@ -419,12 +413,17 @@ export class Debugger {
   public addBreakpoint(where: BreakpointSpecifier) {
     const bp = Breakpoint[Internals].create(this, where);
     this._breakpoints.add(bp);
+    bp[Internals].resolve();
     return bp;
   }
 
   public removeBreakpoint(bp: Breakpoint) {
     if (!this._breakpoints.delete(bp)) return;
     bp.remove();
+  }
+
+  private addWorker(worker: Worker): void {
+    worker.addEventListener('message', this.onMessage);
   }
 
   private onMessage(event: MessageEvent<WorkerOut>) {
