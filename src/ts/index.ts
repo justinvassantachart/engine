@@ -118,6 +118,17 @@ export class Runtime {
 
         worker.addEventListener('message', (message: MessageEvent<WorkerOut>) => {
           if (message.data.type === 'stop') resolve();
+          if (message.data.type === 'download') {
+            const blob = new Blob([new Uint8Array(message.data.data)]);
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = message.data.filename;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+          }
         });
 
         const message: WorkerStart = {

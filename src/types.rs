@@ -51,6 +51,15 @@ pub enum WorkerOut<'a> {
         breakpoint_buffer: js_sys::SharedArrayBuffer,
     },
 
+    /// Request the main thread to trigger a file download (workers have no document/window).
+    #[serde(rename = "download")]
+    Download {
+        #[tsify(type = "Uint8Array")]
+        #[serde(with = "serde_bytes")]
+        data: Vec<u8>,
+        filename: String,
+    },
+
     // TODO: This can be expanded later to return a result back to the JS side,
     // but we should think critically what info the client cares about.
     // Exit code? Filesystem? etc. etc.

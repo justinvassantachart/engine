@@ -158,96 +158,155 @@ fn parse_dwarf_inner(wasm_bytes: &[u8]) -> Result<(Vec<LocationInfo>, Vec<String
 /// ============================================================================
 /// WASM INSTRUMENTATION
 /// ============================================================================
-use std::collections::BTreeMap;
 
 /// Instrument a WASM binary by inserting `bkpt` calls at line boundaries.
 ///
-/// Only inserts breakpoints at addresses from DWARF line info (line boundaries),
-/// NOT at every WASM instruction. Multiple WASM instructions from the same
-/// source line will share a single breakpoint.
-///
 /// Adds import: `(import "debug" "bkpt" (func (param i32)))`
 /// The i32 param is the breakpoint index (1-based, 0 is sentinel).
-pub fn instrument_binary(wasm_bytes: &[u8], locations: &[LocationInfo]) -> Result<Vec<u8>, String> {
-    use walrus::ir::*;
-    use walrus::*;
+pub fn instrument_binary(
+    wasm_bytes: &[u8],
+    _locations: &[LocationInfo],
+) -> Result<Vec<u8>, String> {
+    use wasm_encoder::reencode::{Error as ReencodeError, Reencode};
+    use wasm_encoder::*;
 
-    // Only unique addresses get breakpoints (line boundaries from DWARF)
-    let mut addr_to_bkpt: BTreeMap<u64, u32> = BTreeMap::new();
-    for (i, loc) in locations.iter().enumerate() {
-        let bkpt_idx = (i + 1) as u32; // 1-based, 0 is sentinel
-        addr_to_bkpt.entry(loc.address).or_insert(bkpt_idx);
+    // First pass: count types and imported functions so we know the indices
+    // for the new type and the new import we're about to add.
+    let mut num_types = 0u32;
+    let mut num_imported_funcs = 0u32;
+
+    for payload in wasmparser::Parser::new(0).parse_all(wasm_bytes) {
+        let payload = payload.map_err(|e| format!("Parse error: {e}"))?;
+        match payload {
+            wasmparser::Payload::TypeSection(reader) => {
+                for rec_group in reader {
+                    rec_group.map_err(|e| format!("Type error: {e}"))?;
+                    num_types += 1;
+                }
+            }
+            wasmparser::Payload::ImportSection(reader) => {
+                for import in reader {
+                    let import = import.map_err(|e| format!("Import error: {e}"))?;
+                    if matches!(import.ty, wasmparser::TypeRef::Func(_)) {
+                        num_imported_funcs += 1;
+                    }
+                }
+            }
+            _ => {}
+        }
     }
 
-    let mut config = ModuleConfig::default();
-    config.preserve_code_transform(true);
-    let mut module = config
-        .parse(wasm_bytes)
-        .map_err(|e| format!("Failed to parse WASM: {:?}", e))?;
+    // Custom reencoder: appends a bkpt type + import, and shifts all local
+    // function indices by 1 to account for the newly-inserted import.
+    struct BkptReencoder {
+        num_types: u32,
+        num_imported_funcs: u32,
+    }
 
-    // Add import: (import "debug" "bkpt" (func (param i32)))
-    let bkpt_type = module.types.add(&[ValType::I32], &[]);
-    let (bkpt_func_id, _) = module.add_import_func("debug", "bkpt", bkpt_type);
+    impl Reencode for BkptReencoder {
+        type Error = std::convert::Infallible;
 
-    let func_ids: Vec<FunctionId> = module
-        .funcs
-        .iter()
-        .filter_map(|f| match &f.kind {
-            FunctionKind::Local(_) => Some(f.id()),
-            _ => None,
-        })
-        .collect();
-
-    // Instrument at the function level
-    for func_id in func_ids {
-        let func = module.funcs.get_mut(func_id);
-        let FunctionKind::Local(local_func) = &mut func.kind else {
-            continue;
-        };
-
-        let entry_block = local_func.entry_block();
-        let builder = local_func.builder_mut();
-        let mut seq = builder.instr_seq(entry_block);
-
-        // Gets the ix w original offsets
-        let instrs: Vec<(Instr, InstrLocId)> = seq.instrs_mut().drain(..).collect();
-
-        // Only interested in those at line boundaries
-        let mut to_insert: Vec<(usize, u32)> = Vec::new();
-        for (idx, (_instr, loc_id)) in instrs.iter().enumerate() {
-            let offset = loc_id.data() as u64;
-            if let Some(&bkpt_idx) = addr_to_bkpt.get(&offset) {
-                to_insert.push((idx, bkpt_idx));
+        fn function_index(&mut self, func: u32) -> u32 {
+            if func >= self.num_imported_funcs {
+                func + 1
+            } else {
+                func
             }
         }
 
-        // Cute trick to avoid indices getting messed up, instrument backwards
-        to_insert.sort_by(|a, b| b.0.cmp(&a.0));
-
-        // The magic
-        let mut instrs = instrs;
-        for (idx, bkpt_idx) in to_insert {
-            // Insert: i32.const <bkpt_idx>; call $bkpt
-            instrs.insert(
-                idx,
-                (Instr::Call(Call { func: bkpt_func_id }), Default::default()),
-            );
-            instrs.insert(
-                idx,
-                (
-                    Instr::Const(Const {
-                        value: Value::I32(bkpt_idx as i32),
-                    }),
-                    Default::default(),
-                ),
-            );
+        fn parse_type_section(
+            &mut self,
+            types: &mut TypeSection,
+            section: wasmparser::TypeSectionReader<'_>,
+        ) -> Result<(), ReencodeError<Self::Error>> {
+            for rec_group in section {
+                self.parse_recursive_type_group(types.ty(), rec_group?)?;
+            }
+            // Append: (func (param i32))
+            types.ty().function(vec![ValType::I32], vec![]);
+            Ok(())
         }
 
-        let mut seq = builder.instr_seq(entry_block);
-        for (instr, _) in instrs {
-            seq.instr(instr);
+        fn parse_import_section(
+            &mut self,
+            imports: &mut ImportSection,
+            section: wasmparser::ImportSectionReader<'_>,
+        ) -> Result<(), ReencodeError<Self::Error>> {
+            for import in section {
+                self.parse_import(imports, import?)?;
+            }
+            // Append: (import "debug" "bkpt" (func <new_type_idx>))
+            imports.import("debug", "bkpt", EntityType::Function(self.num_types));
+            Ok(())
+        }
+
+        fn parse_custom_section(
+            &mut self,
+            module: &mut Module,
+            section: wasmparser::CustomSectionReader<'_>,
+        ) -> Result<(), ReencodeError<Self::Error>> {
+            if section.name().starts_with("reloc..") {
+                return Ok(());
+            }
+
+            let wasmparser::KnownCustom::Linking(reader) = section.as_known() else {
+                return wasm_encoder::reencode::utils::parse_custom_section(self, module, section);
+            };
+
+            let mut linking = LinkingSection::new();
+            let mut sym_tab = SymbolTable::new();
+
+            for subsection in reader {
+                if let wasmparser::Linking::SymbolTable(symbols) = subsection? {
+                    for sym in symbols {
+                        match sym? {
+                            wasmparser::SymbolInfo::Func { flags, index, name } => {
+                                sym_tab.function(flags.bits(), self.function_index(index), name);
+                            }
+                            wasmparser::SymbolInfo::Data {
+                                flags,
+                                name,
+                                symbol,
+                            } => {
+                                sym_tab.data(
+                                    flags.bits(),
+                                    name,
+                                    symbol.map(|s| DataSymbolDefinition {
+                                        index: s.index,
+                                        offset: s.offset,
+                                        size: s.size,
+                                    }),
+                                );
+                            }
+                            wasmparser::SymbolInfo::Global { flags, index, name } => {
+                                sym_tab.global(flags.bits(), index, name);
+                            }
+                            wasmparser::SymbolInfo::Table { flags, index, name } => {
+                                sym_tab.table(flags.bits(), index, name);
+                            }
+                            // Section and Event symbols not yet supported by
+                            // wasm-encoder's SymbolTable — skip for now.
+                            _ => {}
+                        }
+                    }
+                }
+            }
+
+            linking.symbol_table(&sym_tab);
+            module.section(&linking);
+            Ok(())
         }
     }
 
-    Ok(module.emit_wasm())
+    let mut reencoder = BkptReencoder {
+        num_types,
+        num_imported_funcs,
+    };
+
+    let mut module = Module::new();
+    reencoder
+        .parse_core_module(&mut module, wasmparser::Parser::new(0), wasm_bytes)
+        .map_err(|e| format!("Reencode error: {e:?}"))?;
+
+    Ok(module.finish())
 }
