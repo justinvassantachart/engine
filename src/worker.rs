@@ -109,44 +109,6 @@ async fn start(msg: WorkerStart) {
         .await
         .expect("Compilation succeeded");
 
-    // Debug mode: parse DWARF, instrument binary, set up debugger
-    if msg.is_debug {
-        let wasm_bytes = get_wasm_bytes(&exec.fs, "/main.o")
-            .await
-            .expect("Read main.wasm");
-
-        let (locations, files) = parse_dwarf_info(&wasm_bytes);
-        let instrumented_wasm =
-            instrument_binary(&wasm_bytes, &locations).expect("Instrumentation failed");
-
-        // Write the binary back to the fs
-        {
-            let mut file = exec
-                .fs
-                .new_open_options()
-                .write(true)
-                .truncate(true)
-                .open("/main.o")
-                .expect("Open main.wasm for writing");
-            file.write_all(&instrumented_wasm)
-                .await
-                .expect("Write instrumented binary");
-        }
-
-        // so bkpt import can access it
-        let debugger = Debugger::new(locations, files);
-        debugger.send_debug_info();
-        Debugger::set_global(debugger);
-    }
-
-    let wasm_bytes = get_wasm_bytes(&exec.fs, "/main.o");
-    let wasm_bytes = wasm_bytes.await.expect("Read main.o");
-    WorkerOut::Download {
-        data: wasm_bytes,
-        filename: "main.o".into(),
-    }
-    .send();
-
     exec.step("wasm-ld")
         .binary("https://runno.dev/langs/wasm-ld.wasm")
         .args(&[
@@ -166,6 +128,44 @@ async fn start(msg: WorkerStart) {
         .run()
         .await
         .expect("Linking succeeded");
+
+    // Debug mode: parse DWARF, instrument binary, set up debugger
+    if msg.is_debug {
+        let wasm_bytes = get_wasm_bytes(&exec.fs, "/main.wasm")
+            .await
+            .expect("Read main.wasm");
+
+        let (locations, files) = parse_dwarf_info(&wasm_bytes);
+        let instrumented_wasm =
+            instrument_binary(&wasm_bytes, &locations).expect("Instrumentation failed");
+
+        // Write the binary back to the fs
+        {
+            let mut file = exec
+                .fs
+                .new_open_options()
+                .write(true)
+                .truncate(true)
+                .open("/main.wasm")
+                .expect("Open main.wasm for writing");
+            file.write_all(&instrumented_wasm)
+                .await
+                .expect("Write instrumented binary");
+        }
+
+        // so bkpt import can access it
+        let debugger = Debugger::new(locations, files);
+        debugger.send_debug_info();
+        Debugger::set_global(debugger);
+    }
+
+    let wasm_bytes = get_wasm_bytes(&exec.fs, "/main.wasm");
+    let wasm_bytes = wasm_bytes.await.expect("Read main.wasm");
+    WorkerOut::Download {
+        data: wasm_bytes,
+        filename: "main.o".into(),
+    }
+    .send();
 
     // Run the main binary (with debug imports if in debug mode)
     let mut main_step = exec.step("main").binary("/main.wasm");
