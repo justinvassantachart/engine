@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Install wasm-pack
+        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install root dependencies
+        run: npm ci
+
+      - name: Build runtime (Rust → WASM → JS)
+        run: npm run build
+
+      - name: Lint
+        run: npx eslint .
+
+      - name: Install demo dependencies
+        run: npm ci
+        working-directory: demo
+
+      # demo imports 'runtime' via a symlink to the root package
+      - name: Link runtime into demo
+        run: ln -s ../.. demo/node_modules/runtime
+
+      - name: Build demo
+        run: npm run build
+        working-directory: demo
