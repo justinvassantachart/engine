@@ -237,7 +237,7 @@ impl wasm_encoder::reencode::Reencode for Instrumenter {
         section: wasmparser::CodeSectionReader<'_>,
     ) -> Result<(), wasm_encoder::reencode::Error<Self::Error>> {
         self.code_section_start = section.range().start;
-        self.encoder.parse_code_section(code, section)
+        wasm_encoder::reencode::utils::parse_code_section(self, code, section)
     }
 
     fn parse_type_section(
@@ -294,6 +294,7 @@ impl wasm_encoder::reencode::Reencode for Instrumenter {
             let insn = self.instruction(op)?;
             f.instruction(&insn);
         }
+        reader.finish()?;
         code.function(&f);
         Ok(())
     }
