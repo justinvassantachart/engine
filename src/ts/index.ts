@@ -446,6 +446,7 @@ export class Debugger {
       file: data.files[loc.file],
       line: loc.line,
       col: loc.col,
+      address: loc.address,
     }));
 
     this[Internals].buffer = new Uint8Array(data.breakpoint_buffer);

@@ -224,6 +224,8 @@ export default function CodeEditor() {
       // Run the program
       // Worker will always send 'stop' message (on success or error)
       await rt.run();
+
+      console.log(rt.debugger.locations);
     } catch (error) {
       console.error('Failed to run code:', error);
       // Check if error was due to user cancellation (Ctrl+C)

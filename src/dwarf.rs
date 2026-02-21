@@ -237,6 +237,9 @@ impl wasm_encoder::reencode::Reencode for Instrumenter {
         section: wasmparser::CodeSectionReader<'_>,
     ) -> Result<(), wasm_encoder::reencode::Error<Self::Error>> {
         self.code_section_start = section.range().start;
+        web_sys::console::log_1(
+            &format!("Code section start is: 0x{:x}", self.code_section_start).into(),
+        );
         wasm_encoder::reencode::utils::parse_code_section(self, code, section)
     }
 
@@ -288,9 +291,17 @@ impl wasm_encoder::reencode::Reencode for Instrumenter {
                 .map_err(wasm_encoder::reencode::Error::from)?;
             let code_offset = pos.saturating_sub(self.code_section_start) as u64;
             if let Some(&idx) = self.breakpoints.get(&code_offset) {
+                web_sys::console::log_1(
+                    &format!(
+                        "Inserting breakpoint call at code offset 0x{:x}, abs offset 0x{:x}, bkpt idx {}",
+                        code_offset, pos, idx
+                    )
+                    .into(),
+                );
                 f.instruction(&Instruction::I32Const(idx as i32));
                 f.instruction(&Instruction::Call(self.bkpt_fn_index));
             }
+
             let insn = self.instruction(op)?;
             f.instruction(&insn);
         }
