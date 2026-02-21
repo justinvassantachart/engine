@@ -168,16 +168,16 @@ struct Instrumenter {
     num_imported_functions: u32,
     /// Byte offset in the wasm binary where the code section payload starts.
     code_section_start: usize,
-    /// Map from code-section byte offset to location index (0-based).
-    breakpoints: HashMap<u64, usize>,
+    /// Map from code-section byte offset to breakpoint index (1-based; 0 is sentinel).
+    breakpoints: HashMap<u64, u32>,
 }
 
 impl Instrumenter {
     fn new(locations: &[LocationInfo]) -> Self {
-        let breakpoints: HashMap<u64, usize> = locations
+        let breakpoints: HashMap<u64, u32> = locations
             .iter()
             .enumerate()
-            .map(|(i, loc)| (loc.address, i))
+            .map(|(i, loc)| (loc.address, (i + 1) as u32))
             .collect();
         Self {
             encoder: wasm_encoder::reencode::RoundtripReencoder,
@@ -312,6 +312,15 @@ impl wasm_encoder::reencode::Reencode for Instrumenter {
 }
 
 pub fn instrument_binary(wasm_bytes: &[u8], locations: &[LocationInfo]) -> Result<Vec<u8>, String> {
+    web_sys::console::log_1(
+        &format!(
+            "instrument_binary: {} locations, input {} bytes",
+            locations.len(),
+            wasm_bytes.len()
+        )
+        .into(),
+    );
+
     let mut reencoder = Instrumenter::new(locations);
     let mut module = wasm_encoder::Module::new();
     wasm_encoder::reencode::utils::parse_core_module(
@@ -321,5 +330,10 @@ pub fn instrument_binary(wasm_bytes: &[u8], locations: &[LocationInfo]) -> Resul
         wasm_bytes,
     )
     .map_err(|e| format!("Failed to reencode WASM: {:?}", e))?;
-    Ok(module.finish())
+
+    let result = module.finish();
+    web_sys::console::log_1(
+        &format!("instrument_binary: output {} bytes", result.len()).into(),
+    );
+    Ok(result)
 }

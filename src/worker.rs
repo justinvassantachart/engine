@@ -139,6 +139,16 @@ async fn start(msg: WorkerStart) {
         let instrumented_wasm =
             instrument_binary(&wasm_bytes, &locations).expect("Instrumentation failed");
 
+        web_sys::console::log_1(
+            &format!(
+                "Instrumented binary: {} -> {} bytes ({} locations)",
+                wasm_bytes.len(),
+                instrumented_wasm.len(),
+                locations.len()
+            )
+            .into(),
+        );
+
         // Write the binary back to the fs
         {
             let mut file = exec

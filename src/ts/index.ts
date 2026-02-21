@@ -298,13 +298,15 @@ export class Breakpoint {
     this._enabled = enabled;
     if (this.status !== BreakpointStatus.Resolved) return this;
     this._locations.forEach((idx) => {
+      const bufIdx = idx + 1; // +1 to skip sentinel at index 0
       const buffer = this.debugger[Internals].buffer;
-      if (idx < 0 || idx >= buffer.length) throw new Error(`OOB breakpoint buffer access: ${idx}`);
+      if (bufIdx < 1 || bufIdx >= buffer.length)
+        throw new Error(`OOB breakpoint buffer access: ${bufIdx}`);
 
-      if (enabled) buffer[idx]++;
-      else if (buffer[idx] === 0)
-        throw new Error(`Attempt to make breakpoint buffer at ${idx} negative`);
-      else buffer[idx]--;
+      if (enabled) buffer[bufIdx]++;
+      else if (buffer[bufIdx] === 0)
+        throw new Error(`Attempt to make breakpoint buffer at ${bufIdx} negative`);
+      else buffer[bufIdx]--;
     });
     return this;
   }
