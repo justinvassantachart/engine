@@ -3,6 +3,7 @@ use gimli::{EndianSlice, LittleEndian, Reader};
 use object::{Object, ObjectSection};
 use std::borrow::Cow;
 use std::collections::HashMap;
+use wasm_encoder::Instruction;
 use wasmer_wasix::virtual_fs::{AsyncReadExt, FileSystem, mem_fs};
 
 /// ============================================================================
@@ -161,17 +162,30 @@ fn parse_dwarf_inner(wasm_bytes: &[u8]) -> Result<(Vec<LocationInfo>, Vec<String
 
 struct Instrumenter {
     encoder: wasm_encoder::reencode::RoundtripReencoder,
-    bkpt_type_index: Option<u32>,
+    bkpt_type_index: u32,
+    bkpt_fn_index: u32,
     /// Number of function imports in the original module (before we add "debug"."bkpt").
     num_imported_functions: u32,
+    /// Byte offset in the wasm binary where the code section payload starts.
+    code_section_start: usize,
+    /// Map from code-section byte offset to location index (0-based).
+    breakpoints: HashMap<u64, usize>,
 }
 
 impl Instrumenter {
-    fn new() -> Self {
+    fn new(locations: &[LocationInfo]) -> Self {
+        let breakpoints: HashMap<u64, usize> = locations
+            .iter()
+            .enumerate()
+            .map(|(i, loc)| (loc.address, i))
+            .collect();
         Self {
             encoder: wasm_encoder::reencode::RoundtripReencoder,
-            bkpt_type_index: None,
+            bkpt_type_index: 0,
+            bkpt_fn_index: 0,
             num_imported_functions: 0,
+            code_section_start: 0,
+            breakpoints,
         }
     }
 }
@@ -217,6 +231,15 @@ impl wasm_encoder::reencode::Reencode for Instrumenter {
         })
     }
 
+    fn parse_code_section(
+        &mut self,
+        code: &mut wasm_encoder::CodeSection,
+        section: wasmparser::CodeSectionReader<'_>,
+    ) -> Result<(), wasm_encoder::reencode::Error<Self::Error>> {
+        self.code_section_start = section.range().start;
+        self.encoder.parse_code_section(code, section)
+    }
+
     fn parse_type_section(
         &mut self,
         types: &mut wasm_encoder::TypeSection,
@@ -224,7 +247,7 @@ impl wasm_encoder::reencode::Reencode for Instrumenter {
     ) -> Result<(), wasm_encoder::reencode::Error<Self::Error>> {
         self.encoder.parse_type_section(types, section)?;
         types.ty().function([wasm_encoder::ValType::I32], []);
-        self.bkpt_type_index = Some(types.len() - 1);
+        self.bkpt_type_index = types.len() - 1;
         Ok(())
     }
 
@@ -243,19 +266,42 @@ impl wasm_encoder::reencode::Reencode for Instrumenter {
         imports.import(
             "debug",
             "bkpt",
-            wasm_encoder::EntityType::Function(self.bkpt_type_index.unwrap()),
+            wasm_encoder::EntityType::Function(self.bkpt_type_index),
         );
+        self.bkpt_fn_index = self.num_imported_functions;
 
+        Ok(())
+    }
+
+    fn parse_function_body(
+        &mut self,
+        code: &mut wasm_encoder::CodeSection,
+        func: wasmparser::FunctionBody<'_>,
+    ) -> Result<(), wasm_encoder::reencode::Error<Self::Error>> {
+        let mut f = wasm_encoder::reencode::utils::new_function_with_parsed_locals(self, &func)?;
+        let mut reader = func
+            .get_operators_reader()
+            .map_err(wasm_encoder::reencode::Error::from)?;
+        while !reader.eof() {
+            let (op, pos) = reader
+                .read_with_offset()
+                .map_err(wasm_encoder::reencode::Error::from)?;
+            let code_offset = pos.saturating_sub(self.code_section_start) as u64;
+            if let Some(&idx) = self.breakpoints.get(&code_offset) {
+                f.instruction(&Instruction::I32Const(idx as i32));
+                f.instruction(&Instruction::Call(self.bkpt_fn_index));
+            }
+            let insn = self.instruction(op)?;
+            f.instruction(&insn);
+        }
+        code.function(&f);
         Ok(())
     }
 }
 
-pub fn instrument_binary(
-    wasm_bytes: &[u8],
-    _locations: &[LocationInfo],
-) -> Result<Vec<u8>, String> {
+pub fn instrument_binary(wasm_bytes: &[u8], locations: &[LocationInfo]) -> Result<Vec<u8>, String> {
+    let mut reencoder = Instrumenter::new(locations);
     let mut module = wasm_encoder::Module::new();
-    let mut reencoder = Instrumenter::new();
     wasm_encoder::reencode::utils::parse_core_module(
         &mut reencoder,
         &mut module,
