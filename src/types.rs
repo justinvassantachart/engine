@@ -60,9 +60,13 @@ pub enum WorkerOut<'a> {
         filename: String,
     },
 
-    // TODO: This can be expanded later to return a result back to the JS side,
-    // but we should think critically what info the client cares about.
-    // Exit code? Filesystem? etc. etc.
+    /// Sent when execution pauses at an enabled breakpoint.
+    #[serde(rename = "breakpoint_hit")]
+    BreakpointHit {
+        /// 0-based index into the locations array
+        location_index: u32,
+    },
+
     #[serde(rename = "stop")]
     Stop
 }

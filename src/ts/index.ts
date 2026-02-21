@@ -409,6 +409,18 @@ export class Debugger {
     return this._breakpoints;
   }
 
+  private _pausedAt: Location | null = null;
+  /** The location where execution is currently paused, or `null` if running/idle. */
+  public get pausedAt(): Location | null {
+    return this._pausedAt;
+  }
+
+  /** Called when execution pauses at a breakpoint. */
+  public onPause: ((location: Location) => void) | null = null;
+
+  /** Called when execution resumes after being paused. */
+  public onResume: (() => void) | null = null;
+
   constructor() {
     this[Internals] = {
       addWorker: this.addWorker.bind(this),
@@ -438,27 +450,50 @@ export class Debugger {
     bp.remove();
   }
 
+  /** Resume execution after a breakpoint hit. No-op if not paused. */
+  public resume(): void {
+    if (!this._pausedAt) return;
+    this._pausedAt = null;
+
+    Atomics.add(this[Internals].sentinel, 0, 1);
+    Atomics.notify(this[Internals].sentinel, 0);
+
+    this.onResume?.();
+  }
+
   private addWorker(worker: Worker): void {
     worker.addEventListener('message', this.onMessage);
   }
 
   private onMessage(event: MessageEvent<WorkerOut>) {
     const data = event.data;
-    if (data.type !== 'debug') return;
 
-    this._locations = data.locations.map((loc) => ({
-      file: data.files[loc.file],
-      line: loc.line,
-      col: loc.col,
-      address: loc.address,
-    }));
+    if (data.type === 'debug') {
+      this._locations = data.locations.map((loc) => ({
+        file: data.files[loc.file],
+        line: loc.line,
+        col: loc.col,
+        address: loc.address,
+      }));
 
-    this[Internals].sentinel = new Int32Array(data.breakpoint_buffer, 0, 1);
-    this[Internals].flags = new Uint8Array(data.breakpoint_buffer, 4);
-    this._breakpoints.forEach((bp) => bp[Internals].resolve());
+      this[Internals].sentinel = new Int32Array(data.breakpoint_buffer, 0, 1);
+      this[Internals].flags = new Uint8Array(data.breakpoint_buffer, 4);
+      this._breakpoints.forEach((bp) => bp[Internals].resolve());
+      return;
+    }
+
+    // Generated WorkerOut type will include this variant after Rust rebuild
+    const msg = data as unknown as { type: string; location_index: number };
+    if (msg.type === 'breakpoint_hit') {
+      const loc = this._locations[msg.location_index];
+      if (!loc) return;
+      this._pausedAt = loc;
+      this.onPause?.(loc);
+    }
   }
 
   private removeWorker(worker: Worker): void {
     worker.removeEventListener('message', this.onMessage);
+    this._pausedAt = null;
   }
 }
