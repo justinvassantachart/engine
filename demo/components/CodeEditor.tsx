@@ -11,6 +11,12 @@ import { Runtime } from 'runtime';
 
 import Terminal, { TerminalHandle } from '@/components/Terminal';
 
+type DebuggerExt = {
+  onPause: ((location: { file: string; line: number; col: number }) => void) | null;
+  onResume: (() => void) | null;
+  resume(): void;
+};
+
 const defaultCode = `#include <iostream>
 
 int main() {
@@ -24,9 +30,10 @@ type Language = 'C' | 'C++';
 
 export default function CodeEditor() {
   const [code, setCode] = useState<string>(defaultCode);
-  const [isRunning, setIsRunning] = useState<boolean>(false);
+  const [isRunning, setIsRunning] = useState(false);
+  const [isPaused, setIsPaused] = useState(false);
+  const [pausedLocation, setPausedLocation] = useState<{ file: string; line: number } | null>(null);
   const [language, setLanguage] = useState<Language>('C++');
-  // Terminal height in pixels (default 170px)
   const [terminalHeight, setTerminalHeight] = useState<number>(170);
   const terminalRef = useRef<TerminalHandle | null>(null);
   // Ref to track running state for stdin handler (avoids stale closure)
@@ -53,8 +60,11 @@ export default function CodeEditor() {
   const handleStop = () => {
     if (runtimeRef.current) {
       runtimeRef.current.stop();
-      // The finally block in handleRun will clean up the state
     }
+  };
+
+  const handleContinue = () => {
+    (runtimeRef.current?.debugger as unknown as DebuggerExt)?.resume();
   };
 
   /**
@@ -127,6 +137,18 @@ export default function CodeEditor() {
       });
       rt.fs = { 'main.c': code };
       rt.debugger.addBreakpoint('main.c:6');
+
+      const dbg = rt.debugger as unknown as DebuggerExt;
+      dbg.onPause = (location: { file: string; line: number }) => {
+        setIsPaused(true);
+        setPausedLocation(location);
+        terminalRef.current?.writeln(`\r\nPaused at ${location.file}:${location.line}`);
+      };
+
+      dbg.onResume = () => {
+        setIsPaused(false);
+        setPausedLocation(null);
+      };
 
       // Get the underlying xterm.js terminal instance for stdin handling
       const term = terminalRef.current?.getTerminal();
@@ -225,8 +247,6 @@ export default function CodeEditor() {
       // Run the program
       // Worker will always send 'stop' message (on success or error)
       await rt.run();
-
-      console.log(rt.debugger.locations);
     } catch (error) {
       console.error('Failed to run code:', error);
       // Check if error was due to user cancellation (Ctrl+C)
@@ -246,12 +266,12 @@ export default function CodeEditor() {
       if (abortController) {
         abortController.abort();
       }
-      // Clean up runtime reference
       runtimeRef.current = null;
-      // Disable input when code stops running
       isRunningRef.current = false;
       terminalRef.current?.disableInput();
       setIsRunning(false);
+      setIsPaused(false);
+      setPausedLocation(null);
     }
   };
 
@@ -384,12 +404,33 @@ export default function CodeEditor() {
             {code.split('\n').length} lines
           </Typography>
 
-          {/* Run/Stop Button */}
+          {isPaused && (
+            <Button
+              variant="contained"
+              size="small"
+              startIcon={<PlayArrowIcon />}
+              onClick={handleContinue}
+              sx={{
+                minWidth: 100,
+                textTransform: 'none',
+                background: 'linear-gradient(135deg, #22c55e 0%, #16a34a 100%)',
+                border: '1px solid rgba(255, 255, 255, 0.12)',
+                boxShadow: '0 10px 25px rgba(34, 197, 94, 0.3)',
+                '&:hover': {
+                  background: 'linear-gradient(135deg, #16a34a 0%, #15803d 100%)',
+                },
+              }}
+            >
+              Continue
+            </Button>
+          )}
+
           <Button
             variant="contained"
             size="small"
             startIcon={isRunning ? <StopIcon /> : <PlayArrowIcon />}
             onClick={isRunning ? handleStop : handleRun}
+            disabled={isPaused}
             sx={{
               minWidth: 100,
               textTransform: 'none',
@@ -496,9 +537,15 @@ export default function CodeEditor() {
           </Typography>
           <Typography
             variant="caption"
-            sx={{ color: isRunning ? '#fbbf24' : 'rgba(255, 255, 255, 0.4)' }}
+            sx={{
+              color: isPaused ? '#22c55e' : isRunning ? '#fbbf24' : 'rgba(255, 255, 255, 0.4)',
+            }}
           >
-            {isRunning ? 'Running' : 'Ready'}
+            {isPaused
+              ? `Paused at ${pausedLocation?.file}:${pausedLocation?.line}`
+              : isRunning
+                ? 'Running'
+                : 'Ready'}
           </Typography>
         </Box>
 
