@@ -19,6 +19,9 @@ jobs:
         with:
           targets: wasm32-unknown-unknown
 
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+
       - name: Install wasm-pack
         run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
 
@@ -35,7 +38,7 @@ jobs:
         run: npm run build
 
       - name: Lint
-        run: npx eslint .
+        run: npx eslint src/
 
       - name: Install demo dependencies
         run: npm ci
