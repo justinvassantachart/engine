@@ -158,96 +158,110 @@ fn parse_dwarf_inner(wasm_bytes: &[u8]) -> Result<(Vec<LocationInfo>, Vec<String
 /// ============================================================================
 /// WASM INSTRUMENTATION
 /// ============================================================================
-use std::collections::BTreeMap;
 
-/// Instrument a WASM binary by inserting `bkpt` calls at line boundaries.
-///
-/// Only inserts breakpoints at addresses from DWARF line info (line boundaries),
-/// NOT at every WASM instruction. Multiple WASM instructions from the same
-/// source line will share a single breakpoint.
-///
-/// Adds import: `(import "debug" "bkpt" (func (param i32)))`
-/// The i32 param is the breakpoint index (1-based, 0 is sentinel).
-pub fn instrument_binary(wasm_bytes: &[u8], locations: &[LocationInfo]) -> Result<Vec<u8>, String> {
-    use walrus::ir::*;
-    use walrus::*;
+struct Instrumenter {
+    encoder: wasm_encoder::reencode::RoundtripReencoder,
+    bkpt_type_index: Option<u32>,
+    /// Number of function imports in the original module (before we add "debug"."bkpt").
+    num_imported_functions: u32,
+}
 
-    // Only unique addresses get breakpoints (line boundaries from DWARF)
-    let mut addr_to_bkpt: BTreeMap<u64, u32> = BTreeMap::new();
-    for (i, loc) in locations.iter().enumerate() {
-        let bkpt_idx = (i + 1) as u32; // 1-based, 0 is sentinel
-        addr_to_bkpt.entry(loc.address).or_insert(bkpt_idx);
+impl Instrumenter {
+    fn new() -> Self {
+        Self {
+            encoder: wasm_encoder::reencode::RoundtripReencoder,
+            bkpt_type_index: None,
+            num_imported_functions: 0,
+        }
     }
+}
 
-    let mut config = ModuleConfig::default();
-    config.preserve_code_transform(true);
-    let mut module = config
-        .parse(wasm_bytes)
-        .map_err(|e| format!("Failed to parse WASM: {:?}", e))?;
-
-    // Add import: (import "debug" "bkpt" (func (param i32)))
-    let bkpt_type = module.types.add(&[ValType::I32], &[]);
-    let (bkpt_func_id, _) = module.add_import_func("debug", "bkpt", bkpt_type);
-
-    let func_ids: Vec<FunctionId> = module
-        .funcs
-        .iter()
-        .filter_map(|f| match &f.kind {
-            FunctionKind::Local(_) => Some(f.id()),
-            _ => None,
-        })
-        .collect();
-
-    // Instrument at the function level
-    for func_id in func_ids {
-        let func = module.funcs.get_mut(func_id);
-        let FunctionKind::Local(local_func) = &mut func.kind else {
-            continue;
-        };
-
-        let entry_block = local_func.entry_block();
-        let builder = local_func.builder_mut();
-        let mut seq = builder.instr_seq(entry_block);
-
-        // Gets the ix w original offsets
-        let instrs: Vec<(Instr, InstrLocId)> = seq.instrs_mut().drain(..).collect();
-
-        // Only interested in those at line boundaries
-        let mut to_insert: Vec<(usize, u32)> = Vec::new();
-        for (idx, (_instr, loc_id)) in instrs.iter().enumerate() {
-            let offset = loc_id.data() as u64;
-            if let Some(&bkpt_idx) = addr_to_bkpt.get(&offset) {
-                to_insert.push((idx, bkpt_idx));
+fn count_function_imports(imports: &wasmparser::Imports<'_>) -> u32 {
+    use wasmparser::TypeRef;
+    match imports {
+        wasmparser::Imports::Single(_, import) => {
+            matches!(import.ty, TypeRef::Func(_) | TypeRef::FuncExact(_)) as u32
+        }
+        wasmparser::Imports::Compact1 { items, .. } => items
+            .clone()
+            .into_iter()
+            .filter(|item| {
+                item.as_ref().map_or(false, |i| {
+                    matches!(i.ty, TypeRef::Func(_) | TypeRef::FuncExact(_))
+                })
+            })
+            .count() as u32,
+        wasmparser::Imports::Compact2 { ty, names, .. } => {
+            if matches!(ty, TypeRef::Func(_) | TypeRef::FuncExact(_)) {
+                names.count()
+            } else {
+                0
             }
         }
+    }
+}
 
-        // Cute trick to avoid indices getting messed up, instrument backwards
-        to_insert.sort_by(|a, b| b.0.cmp(&a.0));
+impl wasm_encoder::reencode::Reencode for Instrumenter {
+    type Error = core::convert::Infallible;
 
-        // The magic
-        let mut instrs = instrs;
-        for (idx, bkpt_idx) in to_insert {
-            // Insert: i32.const <bkpt_idx>; call $bkpt
-            instrs.insert(
-                idx,
-                (Instr::Call(Call { func: bkpt_func_id }), Default::default()),
-            );
-            instrs.insert(
-                idx,
-                (
-                    Instr::Const(Const {
-                        value: Value::I32(bkpt_idx as i32),
-                    }),
-                    Default::default(),
-                ),
-            );
-        }
-
-        let mut seq = builder.instr_seq(entry_block);
-        for (instr, _) in instrs {
-            seq.instr(instr);
-        }
+    fn function_index(
+        &mut self,
+        func: u32,
+    ) -> Result<u32, wasm_encoder::reencode::Error<Self::Error>> {
+        // Our new import is appended after all original imports, so indices >= num_imported_functions
+        // refer to defined functions and must be shifted by +1.
+        Ok(if func >= self.num_imported_functions {
+            func + 1
+        } else {
+            func
+        })
     }
 
-    Ok(module.emit_wasm())
+    fn parse_type_section(
+        &mut self,
+        types: &mut wasm_encoder::TypeSection,
+        section: wasmparser::TypeSectionReader<'_>,
+    ) -> Result<(), wasm_encoder::reencode::Error<Self::Error>> {
+        self.encoder.parse_type_section(types, section)?;
+        types.ty().function([wasm_encoder::ValType::I32], []);
+        self.bkpt_type_index = Some(types.len() - 1);
+        Ok(())
+    }
+
+    fn parse_import_section(
+        &mut self,
+        imports: &mut wasm_encoder::ImportSection,
+        section: wasmparser::ImportSectionReader<'_>,
+    ) -> Result<(), wasm_encoder::reencode::Error<Self::Error>> {
+        self.num_imported_functions = 0u32;
+        for batch in section {
+            let batch = batch?;
+            self.num_imported_functions += count_function_imports(&batch);
+            wasm_encoder::reencode::utils::parse_imports(&mut self.encoder, imports, batch)?;
+        }
+
+        imports.import(
+            "debug",
+            "bkpt",
+            wasm_encoder::EntityType::Function(self.bkpt_type_index.unwrap()),
+        );
+
+        Ok(())
+    }
+}
+
+pub fn instrument_binary(
+    wasm_bytes: &[u8],
+    _locations: &[LocationInfo],
+) -> Result<Vec<u8>, String> {
+    let mut module = wasm_encoder::Module::new();
+    let mut reencoder = Instrumenter::new();
+    wasm_encoder::reencode::utils::parse_core_module(
+        &mut reencoder,
+        &mut module,
+        wasmparser::Parser::new(0),
+        wasm_bytes,
+    )
+    .map_err(|e| format!("Failed to reencode WASM: {:?}", e))?;
+    Ok(module.finish())
 }

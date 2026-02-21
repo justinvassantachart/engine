@@ -36,4 +36,5 @@ instant = { version = "0.1", features = ["wasm-bindgen"] }
 serde_repr = "0.1.20"
 gimli = "0.33.0"
 object = { version = "0.38", default-features = false, features = ["read", "wasm"] }
-walrus = "0.24.4"
+wasm-encoder = { version = "0.245", features = ["wasmparser"] }
+wasmparser = "0.245"
