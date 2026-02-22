@@ -7,7 +7,7 @@ import StopIcon from '@mui/icons-material/Stop';
 import { Box, Button, FormControl, InputLabel, MenuItem, Select, Typography } from '@mui/material';
 import CodeMirror from '@uiw/react-codemirror';
 import React, { useEffect, useRef, useState } from 'react';
-import { Runtime } from 'runtime';
+import { LocationInfo, Runtime } from 'runtime';
 
 import Terminal, { TerminalHandle } from '@/components/Terminal';
 
@@ -26,7 +26,7 @@ export default function CodeEditor() {
   const [code, setCode] = useState<string>(defaultCode);
   const [isRunning, setIsRunning] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
-  const [pausedLocation, setPausedLocation] = useState<{ file: string; line: number } | null>(null);
+  const [pausedLocation, setPausedLocation] = useState<LocationInfo | null>(null);
   const [language, setLanguage] = useState<Language>('C++');
   const [terminalHeight, setTerminalHeight] = useState<number>(170);
   const terminalRef = useRef<TerminalHandle | null>(null);
