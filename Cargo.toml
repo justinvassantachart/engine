@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "crates/wasm-instrument", "util"]
+members = [".", "tools"]
 
 [package]
 name = "runtime"
@@ -8,10 +8,9 @@ edition = "2024"
 
 [lib]
 path = 'src/worker.rs'
-crate-type = ["cdylib"]
+crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-wasm-instrument = { path = "crates/wasm-instrument" }
 flate2 = "1.1"
 js-sys = "0.3.83"
 serde = "1.0.228"

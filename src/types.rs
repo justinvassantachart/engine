@@ -80,28 +80,6 @@ pub struct LocationInfo {
     pub address: u64,
 }
 
-impl From<wasm_instrument::LocationInfo> for LocationInfo {
-    fn from(loc: wasm_instrument::LocationInfo) -> Self {
-        Self {
-            file: loc.file,
-            line: loc.line,
-            col: loc.col,
-            address: loc.address,
-        }
-    }
-}
-
-impl From<&LocationInfo> for wasm_instrument::LocationInfo {
-    fn from(loc: &LocationInfo) -> Self {
-        Self {
-            file: loc.file,
-            line: loc.line,
-            col: loc.col,
-            address: loc.address,
-        }
-    }
-}
-
 impl<'a> WorkerOut<'a> {
     pub fn send(&self) {
         let scope = DedicatedWorkerGlobalScope::from(JsValue::from(js_sys::global()));

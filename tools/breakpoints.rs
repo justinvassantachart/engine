@@ -3,13 +3,14 @@ use std::env;
 use std::fs;
 use std::process;
 
-use wasm_instrument::{instrument_binary, parse_dwarf_info};
+use runtime::dwarf::parse_dwarf_info;
+use runtime::instrument::instrument_wasm;
 use wasmparser::{Parser, Payload};
 
 fn main() {
     let args: Vec<String> = env::args().collect();
     if args.len() != 2 {
-        eprintln!("Usage: bkpt-map <path-to-wasm>");
+        eprintln!("Usage: breakpoints <path-to-wasm>");
         process::exit(1);
     }
 
@@ -34,7 +35,7 @@ fn main() {
     }
     println!();
 
-    let instrumented = match instrument_binary(&wasm_bytes, &locations) {
+    let instrumented = match instrument_wasm(&wasm_bytes, &locations) {
         Ok(bytes) => bytes,
         Err(e) => {
             eprintln!("Instrumentation failed: {}", e);

@@ -1,0 +1,12 @@
+[package]
+name = "breakpoints"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "breakpoints"
+path = "breakpoints.rs"
+
+[dependencies]
+runtime = { path = ".." }
+wasmparser = "0.245"

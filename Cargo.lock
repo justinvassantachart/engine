@@ -151,14 +151,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "812e12b5285cc515a9c72a5c1d3b6d46a19dac5acfef5265968c166106e31dd3"
 
 [[package]]
-name = "bkpt-map"
-version = "0.1.0"
-dependencies = [
- "wasm-instrument",
- "wasmparser 0.245.1",
-]
-
-[[package]]
 name = "blake3"
 version = "1.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -179,6 +171,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3078c7629b62d3f0439517fa394996acacc5cbc91c5a20d8c658e77abd503a71"
 dependencies = [
  "generic-array",
+]
+
+[[package]]
+name = "breakpoints"
+version = "0.1.0"
+dependencies = [
+ "runtime",
+ "wasmparser 0.245.1",
 ]
 
 [[package]]
@@ -2009,7 +2009,6 @@ dependencies = [
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "wasm-encoder 0.245.1",
- "wasm-instrument",
  "wasmer",
  "wasmer-config",
  "wasmer-wasix",
@@ -3060,16 +3059,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3f9dca005e69bf015e45577e415b9af8c67e8ee3c0e38b5b0add5aa92581ed5c"
 dependencies = [
  "leb128fmt",
- "wasmparser 0.245.1",
-]
-
-[[package]]
-name = "wasm-instrument"
-version = "0.1.0"
-dependencies = [
- "gimli 0.33.0",
- "object 0.38.1",
- "wasm-encoder 0.245.1",
  "wasmparser 0.245.1",
 ]
 

@@ -5,16 +5,18 @@ use wasmer_wasix::virtual_fs::{AsyncWriteExt, FileSystem, create_dir_all, mem_fs
 use web_sys::{DedicatedWorkerGlobalScope, MessageEvent};
 
 use crate::debug::Debugger;
-use crate::dwarf::*;
+use crate::dwarf::{get_wasm_bytes, parse_dwarf_info};
 use crate::execution::Execution;
+use crate::instrument::instrument_wasm;
 use crate::types::*;
 
 mod debug;
-mod dwarf;
+pub mod dwarf;
 mod execution;
+pub mod instrument;
 mod io;
 mod runtime;
-mod types;
+pub mod types;
 
 // ============================================================================
 // Helpers
@@ -141,9 +143,9 @@ async fn start(msg: WorkerStart) {
         }
         .send();
 
-        let (locations, files) = parse_dwarf_info(&wasm_bytes);
+        let (locations, files) = parse_dwarf_info(&wasm_bytes).expect("Parsed DWARF");
         let instrumented_wasm =
-            instrument_binary(&wasm_bytes, &locations).expect("Instrumentation failed");
+            instrument_wasm(&wasm_bytes, &locations).expect("Instrumentation failed");
 
         web_sys::console::log_1(
             &format!(
