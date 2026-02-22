@@ -43,6 +43,7 @@ impl Debugger {
             breakpoint_buffer: self.buffer.clone(),
         }
         .send();
+        self.wait_for_resume();
     }
 
     /// Check if a breakpoint at the given index is enabled.

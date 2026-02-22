@@ -379,7 +379,22 @@ export class Breakpoint {
 }
 
 export class BreakpointHit {
-  public constructor(public readonly location: Location) {}
+  static [Internals] = {
+    create: (debug: Debugger, location: Location) => new BreakpointHit(debug, location),
+  };
+
+  private readonly debugger: Debugger;
+
+  public resume() {
+    this.debugger.resume();
+  }
+
+  private constructor(
+    debug: Debugger,
+    public readonly location: Location
+  ) {
+    this.debugger = debug;
+  }
 }
 
 export type DebuggerEventMap = {
@@ -420,8 +435,6 @@ export class Debugger extends EventEmitter<DebuggerEventMap> {
     return this._breakpoints;
   }
 
-  private _hit: BreakpointHit | null = null;
-
   constructor() {
     super();
     this[Internals] = {
@@ -454,9 +467,6 @@ export class Debugger extends EventEmitter<DebuggerEventMap> {
 
   /** Resume execution after a breakpoint hit. No-op if not paused. */
   public resume(): void {
-    if (!this._hit) return;
-    this._hit = null;
-
     Atomics.add(this[Internals].sentinel, 0, 1);
     Atomics.notify(this[Internals].sentinel, 0);
   }
@@ -480,6 +490,7 @@ export class Debugger extends EventEmitter<DebuggerEventMap> {
       this[Internals].sentinel = new Int32Array(data.breakpoint_buffer, 0, 1);
       this[Internals].flags = new Uint8Array(data.breakpoint_buffer, 4);
       this._breakpoints.forEach((bp) => bp[Internals].resolve());
+      this.resume();
       return;
     }
 
@@ -487,13 +498,12 @@ export class Debugger extends EventEmitter<DebuggerEventMap> {
     if (data.type === 'breakpoint') {
       const loc = this._locations[data.location_index];
       if (!loc) return; // TODO: possible deadlock if no hit registered but worker waiting?
-      this._hit = new BreakpointHit(loc);
-      this.emit('breakpoint', this._hit, this);
+      const hit = BreakpointHit[Internals].create(this, loc);
+      this.emit('breakpoint', hit, this);
     }
   }
 
   private removeWorker(worker: Worker): void {
     worker.removeEventListener('message', this.onMessage);
-    this._hit = null;
   }
 }
