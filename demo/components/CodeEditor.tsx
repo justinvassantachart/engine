@@ -11,12 +11,6 @@ import { Runtime } from 'runtime';
 
 import Terminal, { TerminalHandle } from '@/components/Terminal';
 
-type DebuggerExt = {
-  onPause: ((location: { file: string; line: number; col: number }) => void) | null;
-  onResume: (() => void) | null;
-  resume(): void;
-};
-
 const defaultCode = `#include <iostream>
 
 int main() {
@@ -64,7 +58,9 @@ export default function CodeEditor() {
   };
 
   const handleContinue = () => {
-    (runtimeRef.current?.debugger as unknown as DebuggerExt)?.resume();
+    runtimeRef.current?.debugger.resume();
+    setIsPaused(false);
+    setPausedLocation(null);
   };
 
   /**
@@ -138,17 +134,12 @@ export default function CodeEditor() {
       rt.fs = { 'main.c': code };
       rt.debugger.addBreakpoint('main.c:6');
 
-      const dbg = rt.debugger as unknown as DebuggerExt;
-      dbg.onPause = (location: { file: string; line: number }) => {
+      const dbg = rt.debugger;
+      dbg.on('breakpoint', (hit) => {
         setIsPaused(true);
-        setPausedLocation(location);
-        terminalRef.current?.writeln(`\r\nPaused at ${location.file}:${location.line}`);
-      };
-
-      dbg.onResume = () => {
-        setIsPaused(false);
-        setPausedLocation(null);
-      };
+        setPausedLocation(hit.location);
+        terminalRef.current?.writeln(`\r\nPaused at ${hit.location.file}:${hit.location.line}`);
+      });
 
       // Get the underlying xterm.js terminal instance for stdin handling
       const term = terminalRef.current?.getTerminal();

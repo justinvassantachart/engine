@@ -25,7 +25,6 @@
   },
   "devDependencies": {
     "@trivago/prettier-plugin-sort-imports": "^6.0.2",
-    "@types/node": "^25.0.8",
     "eslint": "^9.39.2",
     "husky": "^9.1.7",
     "lint-staged": "^16.2.7",
@@ -36,7 +35,7 @@
     "vite-plugin-dts": "^4.5.4"
   },
   "dependencies": {
-    "@codemirror/lang-cpp": "^6.0.3",
+    "events": "^3.3.0",
     "tsify": "^5.0.4"
   }
 }

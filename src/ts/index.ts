@@ -1,3 +1,5 @@
+import EventEmitter from 'events';
+
 import { StdoutMode, WorkerOut, WorkerStart } from '../../pkg/runtime';
 import RustWorker from './worker?worker&inline';
 
@@ -376,7 +378,15 @@ export class Breakpoint {
   }
 }
 
-export class Debugger {
+export class BreakpointHit {
+  public constructor(public readonly location: Location) {}
+}
+
+export type DebuggerEventMap = {
+  breakpoint: [BreakpointHit, Debugger];
+};
+
+export class Debugger extends EventEmitter<DebuggerEventMap> {
   /**
    * Access to internal properties of the debugger.
    * These are put under a special symbol so that they cannot be accessed by
@@ -410,19 +420,10 @@ export class Debugger {
     return this._breakpoints;
   }
 
-  private _pausedAt: Location | null = null;
-  /** The location where execution is currently paused, or `null` if running/idle. */
-  public get pausedAt(): Location | null {
-    return this._pausedAt;
-  }
-
-  /** Called when execution pauses at a breakpoint. */
-  public onPause: ((location: Location) => void) | null = null;
-
-  /** Called when execution resumes after being paused. */
-  public onResume: (() => void) | null = null;
+  private _hit: BreakpointHit | null = null;
 
   constructor() {
+    super();
     this[Internals] = {
       addWorker: this.addWorker.bind(this),
       removeWorker: this.removeWorker.bind(this),
@@ -453,13 +454,11 @@ export class Debugger {
 
   /** Resume execution after a breakpoint hit. No-op if not paused. */
   public resume(): void {
-    if (!this._pausedAt) return;
-    this._pausedAt = null;
+    if (!this._hit) return;
+    this._hit = null;
 
     Atomics.add(this[Internals].sentinel, 0, 1);
     Atomics.notify(this[Internals].sentinel, 0);
-
-    this.onResume?.();
   }
 
   private addWorker(worker: Worker): void {
@@ -487,14 +486,14 @@ export class Debugger {
     // Generated WorkerOut type will include this variant after Rust rebuild
     if (data.type === 'breakpoint') {
       const loc = this._locations[data.location_index];
-      if (!loc) return;
-      this._pausedAt = loc;
-      this.onPause?.(loc);
+      if (!loc) return; // TODO: possible deadlock if no hit registered but worker waiting?
+      this._hit = new BreakpointHit(loc);
+      this.emit('breakpoint', this._hit, this);
     }
   }
 
   private removeWorker(worker: Worker): void {
     worker.removeEventListener('message', this.onMessage);
-    this._pausedAt = null;
+    this._hit = null;
   }
 }
