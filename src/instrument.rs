@@ -7,7 +7,6 @@ use wasm_encoder::Instruction;
 // ============================================================================
 
 struct Instrumenter {
-    encoder: wasm_encoder::reencode::RoundtripReencoder,
     bkpt_type_index: u32,
     bkpt_fn_index: u32,
     num_imported_functions: u32,
@@ -25,7 +24,6 @@ impl Instrumenter {
             .map(|(i, loc)| (loc.address, (i + 1) as u32))
             .collect();
         Self {
-            encoder: wasm_encoder::reencode::RoundtripReencoder,
             bkpt_type_index: 0,
             bkpt_fn_index: 0,
             num_imported_functions: 0,
@@ -88,7 +86,7 @@ impl wasm_encoder::reencode::Reencode for Instrumenter {
         types: &mut wasm_encoder::TypeSection,
         section: wasmparser::TypeSectionReader<'_>,
     ) -> Result<(), wasm_encoder::reencode::Error<Self::Error>> {
-        self.encoder.parse_type_section(types, section)?;
+        wasm_encoder::reencode::utils::parse_type_section(self, types, section)?;
         types.ty().function([wasm_encoder::ValType::I32], []);
         self.bkpt_type_index = types.len() - 1;
         Ok(())
@@ -103,15 +101,15 @@ impl wasm_encoder::reencode::Reencode for Instrumenter {
         for batch in section {
             let batch = batch?;
             self.num_imported_functions += count_function_imports(&batch);
-            wasm_encoder::reencode::utils::parse_imports(&mut self.encoder, imports, batch)?;
+            wasm_encoder::reencode::utils::parse_imports(self, imports, batch)?;
         }
 
+        self.bkpt_fn_index = self.num_imported_functions;
         imports.import(
             "debug",
             "bkpt",
             wasm_encoder::EntityType::Function(self.bkpt_type_index),
         );
-        self.bkpt_fn_index = self.num_imported_functions;
 
         Ok(())
     }
@@ -133,23 +131,19 @@ impl wasm_encoder::reencode::Reencode for Instrumenter {
 
         // DWARF addresses that point into the function preamble (body_size + locals)
         // should fire at the first instruction.
-        let preamble_bkpts: Vec<u32> = (body_rel_start..first_instr_rel)
-            .filter_map(|off| self.breakpoints.get(&off).copied())
-            .collect();
+        for code_ofs in (body_rel_start..first_instr_rel) {
+            let Some(bkpt_idx) = self.breakpoints.get(&code_ofs).copied() else {
+                continue;
+            };
 
-        let mut is_first = true;
+            f.instruction(&Instruction::I32Const(bkpt_idx as i32));
+            f.instruction(&Instruction::Call(self.bkpt_fn_index));
+        }
+
         while !reader.eof() {
             let (op, pos) = reader
                 .read_with_offset()
                 .map_err(wasm_encoder::reencode::Error::from)?;
-
-            if is_first {
-                for idx in &preamble_bkpts {
-                    f.instruction(&Instruction::I32Const(*idx as i32));
-                    f.instruction(&Instruction::Call(self.bkpt_fn_index));
-                }
-                is_first = false;
-            }
 
             let code_offset = pos.saturating_sub(self.code_section_start) as u64;
             if let Some(&idx) = self.breakpoints.get(&code_offset) {
@@ -160,6 +154,7 @@ impl wasm_encoder::reencode::Reencode for Instrumenter {
             let insn = self.instruction(op)?;
             f.instruction(&insn);
         }
+
         reader.finish()?;
         code.function(&f);
         Ok(())
