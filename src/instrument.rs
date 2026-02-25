@@ -1,6 +1,7 @@
 use crate::types::{DebugInfo, InstrumenterInfo};
 use std::collections::HashMap;
 use wasm_encoder::Instruction;
+use wasmparser::MemoryType;
 
 // ============================================================================
 // WASM Instrumentation
@@ -13,6 +14,7 @@ struct Instrumenter {
     code_section_start: usize,
     /// Map from code-section byte offset to breakpoint index (1-based; 0 is sentinel).
     breakpoints: HashMap<u64, u32>,
+    pub info: InstrumenterInfo,
 }
 
 impl Instrumenter {
@@ -29,6 +31,15 @@ impl Instrumenter {
             num_imported_functions: 0,
             code_section_start: 0,
             breakpoints,
+            info: InstrumenterInfo {
+                memory: MemoryType {
+                    initial: 0,
+                    maximum: None,
+                    memory64: false,
+                    shared: false,
+                    page_size_log2: None,
+                },
+            },
         }
     }
 }
@@ -60,6 +71,20 @@ fn count_function_imports(imports: &wasmparser::Imports<'_>) -> u32 {
 
 impl wasm_encoder::reencode::Reencode for Instrumenter {
     type Error = core::convert::Infallible;
+
+    fn parse_memory_section(
+        &mut self,
+        _memories: &mut wasm_encoder::MemorySection,
+        section: wasmparser::MemorySectionReader<'_>,
+    ) -> Result<(), wasm_encoder::reencode::Error<Self::Error>> {
+        if let Some(memory) = section.into_iter().next() {
+            self.info.memory = memory?;
+        }
+
+        // Note: The instrumented code has no defined memories,
+        // as we will be passing the program memory in via import to share it
+        Ok(())
+    }
 
     fn function_index(
         &mut self,
@@ -169,19 +194,14 @@ pub fn instrument_wasm(
     wasm_bytes: &[u8],
     debug_info: &DebugInfo,
 ) -> Result<(Vec<u8>, InstrumenterInfo), String> {
-    let mut reencoder = Instrumenter::new(debug_info);
+    let mut instrumenter = Instrumenter::new(debug_info);
     let mut module = wasm_encoder::Module::new();
     wasm_encoder::reencode::utils::parse_core_module(
-        &mut reencoder,
+        &mut instrumenter,
         &mut module,
         wasmparser::Parser::new(0),
         wasm_bytes,
     )
     .map_err(|e| format!("Failed to reencode WASM: {:?}", e))?;
-    Ok((
-        module.finish(),
-        InstrumenterInfo {
-            initial_memory_pages: 0,
-        },
-    ))
+    Ok((module.finish(), instrumenter.info))
 }

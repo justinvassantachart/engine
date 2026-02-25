@@ -3,6 +3,7 @@ use serde_repr::Serialize_repr;
 use std::collections::HashMap;
 use tsify::Tsify;
 use wasm_bindgen::JsValue;
+use wasmparser::MemoryType;
 use web_sys::DedicatedWorkerGlobalScope;
 
 #[derive(Debug, Tsify, Deserialize)]
@@ -114,6 +115,6 @@ impl DebugInfo {
 /// rather than the debug info pass, to avoid necessitating an additional `wasmparser` pass during
 /// [`crate::dwarf::parse_debug_info`]
 pub struct InstrumenterInfo {
-    /// Initial size, in WASM pages, of the memory that should be supplied to the instrumented binary
-    pub initial_memory_pages: u32,
+    /// Parameters for the memory of the *instrumented* binary
+    pub memory: MemoryType,
 }
