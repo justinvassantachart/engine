@@ -18,7 +18,7 @@ unsafe impl Send for Debugger {}
 /// - flags[N] corresponds to `locations[N]` (0-based)
 /// - Value 0 = disabled, >0 = number of breakpoints enabled on that location
 ///
-/// The instrumented WASM uses 1-based indices: `bkpt(N)` checks `flags[N-1]`.
+/// The instrumented WASM uses 0-based indices: `bkpt(N)` checks `flags[N]`.
 pub struct Debugger {
     info: DebugInfo,
     buffer: SharedArrayBuffer,
@@ -43,10 +43,9 @@ impl Debugger {
         self.wait_for_resume();
     }
 
-    /// Check if a breakpoint at the given index is enabled.
-    /// Index is 1-based (from instrumented WASM). Returns false for 0 or out-of-bounds.
+    /// Check if a breakpoint at the given index is enabled
     pub fn bkpt_enabled(&self, index: u32) -> bool {
-        if index == 0 || index as usize > self.info.locations.len() {
+        if index as usize > self.info.locations.len() {
             return false;
         }
 
@@ -55,7 +54,7 @@ impl Debugger {
             SENTINEL_BYTES,
             self.info.locations.len() as u32,
         );
-        flags.get_index(index - 1) != 0
+        flags.get_index(index) != 0
     }
 
     /// Blocks until TypeScript signals resume via `Atomics.notify()` on the sentinel.
@@ -74,7 +73,7 @@ impl Debugger {
         }
 
         WorkerOut::Breakpoint {
-            location_index: index - 1,
+            location_index: index,
         }
         .send();
 

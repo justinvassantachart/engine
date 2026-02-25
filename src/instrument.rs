@@ -21,7 +21,7 @@ impl Instrumenter {
             .locations
             .iter()
             .enumerate()
-            .map(|(i, loc)| (loc.address, (i + 1) as u32))
+            .map(|(i, loc)| (loc.address, i as u32))
             .collect();
         Self {
             bkpt_type_index: 0,

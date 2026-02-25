@@ -171,14 +171,17 @@ impl<'a> Step<'a> {
                 .ensure("Created WASI import object")?;
 
             let env = FunctionEnv::new(&mut store, debugger);
-            let bkpt_func = Function::new_typed_with_env(
-                &mut store,
-                &env,
-                |env: FunctionEnvMut<Debugger>, index: i32| {
-                    env.data().bkpt(index as u32);
-                },
+            imports.define(
+                "debug",
+                "bkpt",
+                Function::new_typed_with_env(
+                    &mut store,
+                    &env,
+                    |env: FunctionEnvMut<Debugger>, index: i32| {
+                        env.data().bkpt(index as u32);
+                    },
+                ),
             );
-            imports.define("debug", "bkpt", bkpt_func);
 
             let instance = wasmer::Instance::new(&mut store, &module, &imports)
                 .ensure("Created instance with debug imports")?;
