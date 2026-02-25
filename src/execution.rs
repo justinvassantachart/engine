@@ -16,10 +16,12 @@ use wasmer_wasix::{
 use web_sys::DedicatedWorkerGlobalScope;
 
 use crate::debug::Debugger;
+use crate::dwarf::parse_debug_info;
+use crate::instrument::instrument_wasm;
 use crate::io::Stdin;
 use crate::io::Stdout;
 use crate::runtime::JsRuntime;
-use crate::types::StdoutMode;
+use crate::types::{StdoutMode, WorkerOut};
 
 use std::fmt::Debug;
 
@@ -35,7 +37,7 @@ pub struct Step<'a> {
     binary: Option<String>,
     sysroot: Option<String>,
     union_fs: Option<Box<dyn FileSystem>>,
-    debugger: Option<Debugger>,
+    debug: bool,
 }
 
 impl Execution {
@@ -53,8 +55,26 @@ impl Execution {
             binary: None,
             sysroot: None,
             union_fs: None,
-            debugger: None,
+            debug: false,
         }
+    }
+
+    pub async fn read_bytes(&self, path: &str) -> Result<Vec<u8>, std::io::Error> {
+        let mut file = self.fs.new_open_options().read(true).open(path)?;
+        let mut wasm_bytes = Vec::new();
+        file.read_to_end(&mut wasm_bytes).await?;
+        Ok(wasm_bytes)
+    }
+
+    pub async fn write_bytes(&self, path: &str, bytes: &[u8]) -> Result<(), std::io::Error> {
+        let mut file = self
+            .fs
+            .new_open_options()
+            .write(true)
+            .truncate(true)
+            .open(path)?;
+        file.write_all(&bytes).await?;
+        Ok(())
     }
 }
 
@@ -95,9 +115,9 @@ impl<'a> Step<'a> {
         self
     }
 
-    /// Enables debug mode for this step. Takes ownership of the debugger.
-    pub fn debug(mut self, debugger: Debugger) -> Self {
-        self.debugger = Some(debugger);
+    /// Enable/disable debug mode for this step
+    pub fn debug(mut self, enable_debugging: bool) -> Self {
+        self.debug = enable_debugging;
         self
     }
 
@@ -107,20 +127,35 @@ impl<'a> Step<'a> {
             return Err(RuntimeError::new("No binary specified"));
         };
 
-        let binary_bytes = if binary_loc.starts_with("/") {
-            let mut file = self
-                .exec
-                .fs
-                .new_open_options()
-                .read(true)
-                .open(binary_loc)
-                .ensure("Binary exists in filesystem")?;
+        /* In debug mode, we need to instrument the binary */
+        let mut debug_info = None;
 
-            let mut buf = Vec::new();
-            file.read_to_end(&mut buf)
+        let binary_bytes = if binary_loc.starts_with("/") {
+            let mut wasm = self
+                .exec
+                .read_bytes(binary_loc)
                 .await
-                .ensure("Read binary file from filesystem")?;
-            buf
+                .ensure("Read binary from filesystem")?;
+
+            if self.debug {
+                WorkerOut::Download {
+                    data: wasm.clone(),
+                    filename: "pre.wasm".into(),
+                }
+                .send();
+
+                let info = parse_debug_info(&wasm).ensure("Parsed debug info")?;
+                wasm = instrument_wasm(&wasm, &info).ensure("Instrumented WASM")?;
+                debug_info = Some(info);
+
+                WorkerOut::Download {
+                    data: wasm.clone(),
+                    filename: "post.wasm".into(),
+                }
+                .send();
+            }
+
+            wasm
         } else {
             fetch_bytes(binary_loc)
                 .await
@@ -162,7 +197,10 @@ impl<'a> Step<'a> {
             .ensure("Preopened root directory")?;
 
         /* Instantiate and run the binary */
-        let instance = if let Some(debugger) = self.debugger {
+        let instance = if let Some(debug_info) = debug_info {
+            let debugger = Debugger::new(debug_info);
+            debugger.send_debug_info();
+
             let wasi_env = builder.build().ensure("Built WASI environment")?;
             let mut wasi_func_env = WasiFunctionEnv::new(&mut store, wasi_env);
 

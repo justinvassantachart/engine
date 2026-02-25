@@ -4,10 +4,7 @@ use wasm_bindgen::prelude::*;
 use wasmer_wasix::virtual_fs::{AsyncWriteExt, FileSystem, create_dir_all, mem_fs};
 use web_sys::{DedicatedWorkerGlobalScope, MessageEvent};
 
-use crate::debug::Debugger;
-use crate::dwarf::{get_wasm_bytes, parse_dwarf_info};
 use crate::execution::Execution;
-use crate::instrument::instrument_wasm;
 use crate::types::{FsNode, WorkerOut, WorkerStart};
 
 mod debug;
@@ -131,60 +128,12 @@ async fn start(msg: WorkerStart) {
         .await
         .expect("Linking succeeded");
 
-    // Debug mode: parse DWARF, instrument binary, create debugger
-    let mut main_step = exec.step("main").binary("/main.wasm");
-    if msg.is_debug {
-        let wasm_bytes = get_wasm_bytes(&exec.fs, "/main.wasm")
-            .await
-            .expect("Read main.wasm");
-
-        WorkerOut::Download {
-            data: wasm_bytes.clone(),
-            filename: "pre-instrumentation.wasm".into(),
-        }
-        .send();
-
-        let debug_info = parse_dwarf_info(&wasm_bytes).expect("Parsed DWARF");
-        let instrumented_wasm =
-            instrument_wasm(&wasm_bytes, &debug_info).expect("Instrumentation failed");
-
-        web_sys::console::log_1(
-            &format!(
-                "Instrumented binary: {} -> {} bytes ({} locations)",
-                wasm_bytes.len(),
-                instrumented_wasm.len(),
-                debug_info.locations.len()
-            )
-            .into(),
-        );
-
-        {
-            let mut file = exec
-                .fs
-                .new_open_options()
-                .write(true)
-                .truncate(true)
-                .open("/main.wasm")
-                .expect("Open main.wasm for writing");
-            file.write_all(&instrumented_wasm)
-                .await
-                .expect("Write instrumented binary");
-        }
-
-        let debugger = Debugger::new(debug_info);
-        debugger.send_debug_info();
-        main_step = main_step.debug(debugger);
-    }
-
-    let wasm_bytes = get_wasm_bytes(&exec.fs, "/main.wasm");
-    let wasm_bytes = wasm_bytes.await.expect("Read main.wasm");
-    WorkerOut::Download {
-        data: wasm_bytes,
-        filename: "main.o".into(),
-    }
-    .send();
-
-    main_step.run().await.expect("Running succeeded");
+    exec.step("main")
+        .binary("/main.wasm")
+        .debug(msg.is_debug)
+        .run()
+        .await
+        .expect("Running succeeded");
 
     // Print out the filesystem toplevel for debugging
     let root = exec

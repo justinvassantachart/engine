@@ -3,37 +3,9 @@ use gimli::{EndianSlice, LittleEndian, Reader};
 use object::{Object, ObjectSection};
 use std::borrow::Cow;
 use std::collections::HashMap;
-use wasmer_wasix::virtual_fs::{AsyncReadExt, FileSystem, mem_fs};
-
-// ============================================================================
-// Helpers
-// ============================================================================
-
-/// Get the WASM bytes from the filesystem.
-pub async fn get_wasm_bytes(
-    fs: &mem_fs::FileSystem,
-    path: &str,
-) -> Result<Vec<u8>, std::io::Error> {
-    let mut file = fs
-        .new_open_options()
-        .read(true)
-        .open(path)
-        .expect(&format!("{} exists", path));
-
-    let mut wasm_bytes = Vec::new();
-    file.read_to_end(&mut wasm_bytes)
-        .await
-        .expect("Read main.wasm");
-
-    Ok(wasm_bytes)
-}
-
-// ============================================================================
-// DWARF Parsing
-// ============================================================================
 
 /// Parse DWARF debug info from WASM bytes
-pub fn parse_dwarf_info(wasm_bytes: &[u8]) -> Result<DebugInfo, String> {
+pub fn parse_debug_info(wasm_bytes: &[u8]) -> Result<DebugInfo, String> {
     let object =
         object::File::parse(wasm_bytes).map_err(|e| format!("Failed to parse WASM: {:?}", e))?;
 

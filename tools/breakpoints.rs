@@ -3,7 +3,7 @@ use std::env;
 use std::fs;
 use std::process;
 
-use runtime::dwarf::parse_dwarf_info;
+use runtime::dwarf::parse_debug_info;
 use runtime::instrument::instrument_wasm;
 use wasmparser::{Parser, Payload};
 
@@ -20,7 +20,7 @@ fn main() {
         process::exit(1);
     });
 
-    let debug_info = match parse_dwarf_info(&wasm_bytes) {
+    let debug_info = match parse_debug_info(&wasm_bytes) {
         Ok(info) => info,
         Err(e) => {
             eprintln!("Failed to parse DWARF info: {}", e);
@@ -33,8 +33,18 @@ fn main() {
 
     println!("=== DWARF locations ({}) ===", locations.len());
     for (i, loc) in locations.iter().enumerate() {
-        let fname = files.get(loc.file as usize).map(|s| s.as_str()).unwrap_or("?");
-        println!("  [{}] {}:{}:{} @ 0x{:x}", i + 1, fname, loc.line, loc.col, loc.address);
+        let fname = files
+            .get(loc.file as usize)
+            .map(|s| s.as_str())
+            .unwrap_or("?");
+        println!(
+            "  [{}] {}:{}:{} @ 0x{:x}",
+            i + 1,
+            fname,
+            loc.line,
+            loc.col,
+            loc.address
+        );
     }
     println!();
 
@@ -50,7 +60,9 @@ fn main() {
     let inst_len = instrumented.len() as i64;
     println!(
         "Binary: {} -> {} bytes ({:+})\n",
-        orig_len, inst_len, inst_len - orig_len
+        orig_len,
+        inst_len,
+        inst_len - orig_len
     );
 
     let original_funcs = disassemble_functions(&wasm_bytes);
@@ -63,7 +75,10 @@ fn main() {
     let max_funcs = original_funcs.len().max(instrumented_funcs.len());
     for i in 0..max_funcs {
         let orig = original_funcs.get(i).map(|v| v.as_slice()).unwrap_or(&[]);
-        let inst = instrumented_funcs.get(i).map(|v| v.as_slice()).unwrap_or(&[]);
+        let inst = instrumented_funcs
+            .get(i)
+            .map(|v| v.as_slice())
+            .unwrap_or(&[]);
         if orig.len() == inst.len() {
             continue;
         }
@@ -86,7 +101,10 @@ fn main() {
     // Also collect ALL dwarf lines per file (including ones that may not have been injected)
     let mut all_lines_by_file: BTreeMap<u32, BTreeSet<u32>> = BTreeMap::new();
     for loc in &locations {
-        all_lines_by_file.entry(loc.file).or_default().insert(loc.line);
+        all_lines_by_file
+            .entry(loc.file)
+            .or_default()
+            .insert(loc.line);
     }
 
     println!(
@@ -137,8 +155,18 @@ fn main() {
             if missed == 0 {
                 println!("Missed DWARF locations (no breakpoint injected):");
             }
-            let fname = files.get(loc.file as usize).map(|s| s.as_str()).unwrap_or("?");
-            println!("  [{}] {}:{}:{} @ 0x{:x}", i + 1, fname, loc.line, loc.col, loc.address);
+            let fname = files
+                .get(loc.file as usize)
+                .map(|s| s.as_str())
+                .unwrap_or("?");
+            println!(
+                "  [{}] {}:{}:{} @ 0x{:x}",
+                i + 1,
+                fname,
+                loc.line,
+                loc.col,
+                loc.address
+            );
             missed += 1;
         }
     }
@@ -193,9 +221,10 @@ fn extract_breakpoints(instrs: &[String], bkpt_fn: Option<u32>) -> Vec<Breakpoin
     let mut result = Vec::new();
     let mut i = 0;
     while i + 1 < instrs.len() {
-        if let (Some(val), Some(call_idx)) =
-            (parse_i32_const(&instrs[i]), parse_call_index(&instrs[i + 1]))
-        {
+        if let (Some(val), Some(call_idx)) = (
+            parse_i32_const(&instrs[i]),
+            parse_call_index(&instrs[i + 1]),
+        ) {
             if call_idx == bkpt_fn {
                 result.push(BreakpointHit { index: val });
                 i += 2;
