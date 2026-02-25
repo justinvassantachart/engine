@@ -6,7 +6,7 @@ use std::sync::Arc;
 use tar::Archive;
 use wasm_bindgen::{JsCast, JsValue};
 use wasm_bindgen_futures::JsFuture;
-use wasmer::{Function, FunctionEnv, FunctionEnvMut, Module, RuntimeError, Store};
+use wasmer::{Module, RuntimeError, Store};
 use wasmer_wasix::virtual_fs::AsyncReadExt;
 use wasmer_wasix::{
     WasiEnv, WasiEnvBuilder, WasiError, WasiFunctionEnv,
@@ -66,6 +66,7 @@ impl Execution {
         Ok(wasm_bytes)
     }
 
+    #[allow(dead_code)]
     pub async fn write_bytes(&self, path: &str, bytes: &[u8]) -> Result<(), std::io::Error> {
         let mut file = self
             .fs
@@ -199,7 +200,6 @@ impl<'a> Step<'a> {
         /* Instantiate and run the binary */
         let instance = if let Some(debug_info) = debug_info {
             let debugger = Debugger::new(debug_info);
-            debugger.send_debug_info();
 
             let wasi_env = builder.build().ensure("Built WASI environment")?;
             let mut wasi_func_env = WasiFunctionEnv::new(&mut store, wasi_env);
@@ -208,18 +208,7 @@ impl<'a> Step<'a> {
                 .import_object(&mut store, &module)
                 .ensure("Created WASI import object")?;
 
-            let env = FunctionEnv::new(&mut store, debugger);
-            imports.define(
-                "debug",
-                "bkpt",
-                Function::new_typed_with_env(
-                    &mut store,
-                    &env,
-                    |env: FunctionEnvMut<Debugger>, index: i32| {
-                        env.data().bkpt(index as u32);
-                    },
-                ),
-            );
+            debugger.attach(&mut store, &mut imports);
 
             let instance = wasmer::Instance::new(&mut store, &module, &imports)
                 .ensure("Created instance with debug imports")?;

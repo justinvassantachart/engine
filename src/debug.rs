@@ -1,5 +1,6 @@
 use crate::types::{DebugInfo, WorkerOut};
 use js_sys::SharedArrayBuffer;
+use wasmer::{AsStoreMut, Function, FunctionEnv, FunctionEnvMut, Imports};
 
 /// SAFETY: In wasm32 there is no shared-memory threading; all execution is single-threaded.
 unsafe impl Send for Debugger {}
@@ -34,7 +35,26 @@ impl Debugger {
         Self { info, buffer }
     }
 
-    pub fn send_debug_info(&self) {
+    /// Attaches the debugger to a given WASM instance.
+    /// Waits for the client to initialize the debugger.
+    pub fn attach(self, store: &mut impl AsStoreMut, imports: &mut Imports) {
+        self.send_debug_info();
+
+        let env = FunctionEnv::new(store, self);
+        imports.define(
+            "debug",
+            "bkpt",
+            Function::new_typed_with_env(
+                store,
+                &env,
+                |env: FunctionEnvMut<Debugger>, index: i32| {
+                    env.data().bkpt(index as u32);
+                },
+            ),
+        );
+    }
+
+    fn send_debug_info(&self) {
         WorkerOut::Debug {
             info: self.info.clone(),
             breakpoint_buffer: self.buffer.clone(),
