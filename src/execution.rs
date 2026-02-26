@@ -146,10 +146,8 @@ impl<'a> Step<'a> {
                 .send();
 
                 let debug_info = parse_debug_info(&wasm).ensure("Parsed debug info")?;
-                let (instr_wasm, instr_info) =
-                    instrument_wasm(&wasm, &debug_info).ensure("Instrumented WASM")?;
-                wasm = instr_wasm;
-                debugger = Some(Debugger::new(debug_info, instr_info));
+                wasm = instrument_wasm(&wasm, &debug_info).ensure("Instrumented WASM")?;
+                debugger = Some(Debugger::new(debug_info));
 
                 WorkerOut::Download {
                     data: wasm.clone(),

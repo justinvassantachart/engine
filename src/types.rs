@@ -3,7 +3,6 @@ use serde_repr::Serialize_repr;
 use std::collections::HashMap;
 use tsify::Tsify;
 use wasm_bindgen::JsValue;
-use wasmparser::MemoryType;
 use web_sys::DedicatedWorkerGlobalScope;
 
 #[derive(Debug, Tsify, Deserialize)]
@@ -86,6 +85,7 @@ impl<'a> WorkerOut<'a> {
 
 #[derive(Debug, Clone, Tsify, Serialize)]
 pub struct LocationInfo {
+    /// Index into [DebugInfo::files]
     pub file: u32,
     pub line: u32,
     pub col: u32,
@@ -96,37 +96,38 @@ pub struct LocationInfo {
 /// Debug information parsed from DWARF
 #[derive(Debug, Clone, Default, Tsify, Serialize)]
 pub struct DebugInfo {
+    pub memory: MemoryInfo,
     /// Breakpoint locations (file index, line, col, WASM address).
     pub locations: Vec<LocationInfo>,
     /// Deduplicated source filenames; index matches `LocationInfo::file`.
     pub files: Vec<String>,
-
     pub functions: Vec<DebugFunction>,
-    // TODO
-    // pub types: Vec<DebugType>,
+    pub types: Vec<DebugType>,
+}
+
+#[derive(Debug, Clone, Default, Tsify, Serialize)]
+pub struct MemoryInfo {
+    /// Initial number of WASM pages of main memory that should be allocated to this module
+    initial_pages: u32,
 }
 
 #[derive(Debug, Clone, Tsify, Serialize)]
 pub struct DebugFunction {
     pub name: String,
     pub variables: Vec<DebugVariable>,
+    /// Size of this function's debug stack frame
     pub frame_size: u32,
 }
 
 #[derive(Debug, Clone, Tsify, Serialize)]
 pub struct DebugVariable {
-    /// Index into types array
+    /// Index into [DebugInfo::types]
     pub ty: u32,
     pub name: String,
-    pub offset: u32,
+    /// Offset of this variable in its containing functions debug stack frame
+    pub frame_offset: u32,
 }
 
-/// Additional context needed to instantiate and run a binary that has been instrumented.
-///
-/// This information is recovered while parsing the source binary during the instrumentation pass,
-/// rather than the debug info pass, to avoid necessitating an additional `wasmparser` pass during
-/// [`crate::dwarf::parse_debug_info`]
-pub struct InstrumenterInfo {
-    /// Parameters for the memory of the *instrumented* binary
-    pub memory: MemoryType,
-}
+// TODO(fabio)
+#[derive(Debug, Clone, Tsify, Serialize)]
+pub struct DebugType {}
