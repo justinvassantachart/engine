@@ -109,6 +109,8 @@ pub struct DebugInfo {
 pub struct MemoryInfo {
     /// Initial number of WASM pages of main memory that should be allocated to this module
     pub initial_pages: u64,
+    /// Maximum number of WASM pages of main memory that should be allocated to this module
+    pub maximum_pages: u64,
 }
 
 #[derive(Debug, Clone, Tsify, Serialize)]

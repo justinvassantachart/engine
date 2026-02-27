@@ -1,5 +1,6 @@
 use crate::types::{DebugInfo, WorkerOut};
-use js_sys::SharedArrayBuffer;
+use js_sys::{Object, Reflect, SharedArrayBuffer, WebAssembly};
+use wasm_bindgen::prelude::*;
 use wasmer::{AsStoreMut, Function, FunctionEnv, FunctionEnvMut, Imports};
 
 /// SAFETY: In wasm32 there is no shared-memory threading; all execution is single-threaded.
@@ -23,16 +24,35 @@ unsafe impl Send for Debugger {}
 pub struct Debugger {
     info: DebugInfo,
     buffer: SharedArrayBuffer,
+    /// The main program memory which will be passed into the binary in [Debugger::attach]
+    memory: js_sys::WebAssembly::Memory,
 }
 
 const SENTINEL_BYTES: u32 = 4;
+
+fn create_shared_memory(initial: u64, maximum: u64) -> Result<WebAssembly::Memory, JsValue> {
+    let memory_desc = Object::new();
+
+    Reflect::set(&memory_desc, &"initial".into(), &initial.into())?;
+    Reflect::set(&memory_desc, &"maximum".into(), &maximum.into())?;
+    Reflect::set(&memory_desc, &"shared".into(), &true.into())?;
+
+    let memory = WebAssembly::Memory::new(&memory_desc)?;
+
+    Ok(memory)
+}
 
 impl Debugger {
     pub fn new(info: DebugInfo) -> Self {
         let buffer_size = SENTINEL_BYTES + info.locations.len() as u32;
         let buffer = SharedArrayBuffer::new(buffer_size);
 
-        Self { info, buffer }
+        Self {
+            memory: create_shared_memory(info.memory.initial_pages, info.memory.maximum_pages)
+                .expect("Created program memory"),
+            info,
+            buffer,
+        }
     }
 
     /// Attaches the debugger to a given WASM instance.

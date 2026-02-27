@@ -6,7 +6,8 @@ use wasm_encoder::Instruction;
 // WASM Instrumentation
 // ============================================================================
 
-struct Instrumenter {
+struct Instrumenter<'a> {
+    info: &'a DebugInfo,
     bkpt_type_index: u32,
     bkpt_fn_index: u32,
     num_imported_functions: u32,
@@ -15,8 +16,8 @@ struct Instrumenter {
     breakpoints: HashMap<u64, u32>,
 }
 
-impl Instrumenter {
-    fn new(info: &DebugInfo) -> Self {
+impl<'a> Instrumenter<'a> {
+    fn new(info: &'a DebugInfo) -> Self {
         let breakpoints: HashMap<u64, u32> = info
             .locations
             .iter()
@@ -24,6 +25,7 @@ impl Instrumenter {
             .map(|(i, loc)| (loc.address, i as u32))
             .collect();
         Self {
+            info,
             bkpt_type_index: 0,
             bkpt_fn_index: 0,
             num_imported_functions: 0,
@@ -58,18 +60,18 @@ fn count_function_imports(imports: &wasmparser::Imports<'_>) -> u32 {
     }
 }
 
-impl wasm_encoder::reencode::Reencode for Instrumenter {
+impl<'a> wasm_encoder::reencode::Reencode for Instrumenter<'a> {
     type Error = core::convert::Infallible;
 
-    // fn parse_memory_section(
-    //     &mut self,
-    //     _memories: &mut wasm_encoder::MemorySection,
-    //     _section: wasmparser::MemorySectionReader<'_>,
-    // ) -> Result<(), wasm_encoder::reencode::Error<Self::Error>> {
-    //     // Note: The instrumented code has no defined memories,
-    //     // as we will be passing the program memory in via import to share it
-    //     Ok(())
-    // }
+    fn parse_memory_section(
+        &mut self,
+        _memories: &mut wasm_encoder::MemorySection,
+        _section: wasmparser::MemorySectionReader<'_>,
+    ) -> Result<(), wasm_encoder::reencode::Error<Self::Error>> {
+        // Note: The instrumented code has no defined memories,
+        // as we will be passing the program memory in via import to share it
+        Ok(())
+    }
 
     fn function_index(
         &mut self,
@@ -119,6 +121,18 @@ impl wasm_encoder::reencode::Reencode for Instrumenter {
             "debug",
             "bkpt",
             wasm_encoder::EntityType::Function(self.bkpt_type_index),
+        );
+
+        imports.import(
+            "debug",
+            "memory",
+            wasm_encoder::EntityType::Memory(wasm_encoder::MemoryType {
+                minimum: self.info.memory.initial_pages,
+                maximum: Some(self.info.memory.maximum_pages),
+                memory64: false,
+                shared: true,
+                page_size_log2: None,
+            }),
         );
 
         Ok(())

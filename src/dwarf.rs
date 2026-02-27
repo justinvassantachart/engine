@@ -18,6 +18,7 @@ pub fn parse_debug_info(wasm_bytes: &[u8]) -> anyhow::Result<DebugInfo> {
             Payload::MemorySection(reader) => {
                 for mem in reader {
                     info.memory.initial_pages = mem?.initial;
+                    info.memory.maximum_pages = info.memory.initial_pages * 16;
                     break;
                 }
             }
