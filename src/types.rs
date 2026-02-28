@@ -94,7 +94,7 @@ pub struct LocationInfo {
     pub line: u32,
     pub col: u32,
     /// Byte offset into the WASM code section for instrumentation
-    pub address: u64,
+    pub address: usize,
 }
 
 /// Debug information parsed from DWARF
@@ -159,6 +159,7 @@ pub struct VarLocationRange {
 #[derive(Debug, Clone, Tsify, Serialize)]
 pub struct DebugFunction {
     pub name: String,
+    /// Code section offset of the start of the function
     pub address: usize,
     pub variables: Vec<DebugVariable>,
     /// Size of this function's debug stack frame (bytes).

@@ -571,7 +571,7 @@ fn parse_unit_lines<R: Reader>(
             file: file_idx,
             line,
             col,
-            address: row.address(),
+            address: row.address() as usize,
         });
     }
 

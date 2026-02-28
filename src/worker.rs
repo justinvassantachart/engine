@@ -14,6 +14,7 @@ pub mod instrument;
 mod io;
 mod runtime;
 pub mod types;
+mod util;
 
 // ============================================================================
 // Helpers

@@ -19,12 +19,12 @@ struct Instrumenter<'a> {
     code_section_start: usize,
 
     /// Map from code-section byte offset to breakpoint index (1-based; 0 is sentinel).
-    breakpoints: HashMap<u64, u32>,
+    breakpoints: HashMap<usize, u32>,
 }
 
 impl<'a> Instrumenter<'a> {
     fn new(info: &'a DebugInfo) -> Self {
-        let breakpoints: HashMap<u64, u32> = info
+        let breakpoints: HashMap<usize, u32> = info
             .locations
             .iter()
             .enumerate()
@@ -41,6 +41,12 @@ impl<'a> Instrumenter<'a> {
             code_section_start: 0,
             breakpoints,
         }
+    }
+
+    /// Converts an offset into the WASM binary into an offset relative to the code section.
+    /// DWARF represents PC values relative to start of the code section.
+    fn code_ofs(&self, address: usize) -> usize {
+        address.saturating_sub(self.code_section_start)
     }
 }
 
@@ -191,7 +197,7 @@ impl<'a> reencode::Reencode for Instrumenter<'a> {
             .functions
             .iter()
             .enumerate()
-            .find(|f| f.1.address == func.range().start);
+            .find(|f| f.1.address == self.code_ofs(func.range().start));
 
         let Some((debug_func_idx, debug_func)) = debug_func else {
             // If this is not a function with a corresponding DWARF entry,
@@ -199,14 +205,7 @@ impl<'a> reencode::Reencode for Instrumenter<'a> {
             return reencode::utils::parse_function_body(self, code, func);
         };
 
-        code.function(
-            &FnInstrumenter {
-                instr: self,
-                debug_func,
-                debug_func_idx,
-            }
-            .instrument(&func)?,
-        );
+        code.function(&FnInstrumenter::new(self, debug_func, debug_func_idx).instrument(&func)?);
 
         Ok(())
     }
@@ -219,6 +218,18 @@ struct FnInstrumenter<'a, 'b> {
 }
 
 impl<'a, 'b> FnInstrumenter<'a, 'b> {
+    fn new(
+        instr: &'a mut Instrumenter<'b>,
+        debug_func: &'b DebugFunction,
+        debug_func_idx: usize,
+    ) -> Self {
+        Self {
+            instr,
+            debug_func,
+            debug_func_idx,
+        }
+    }
+
     /// Emits the function header, which creates a stack frame on the debug stack.
     fn emit_header(&mut self, f: &mut wasm_encoder::Function) {
         f.instructions()
@@ -243,14 +254,12 @@ impl<'a, 'b> FnInstrumenter<'a, 'b> {
     }
 
     /// Emits the function footer, which removes the debug stack frame.
-    /// Includes the trailing `return` instruction
     fn emit_footer(&mut self, f: &mut wasm_encoder::Function) {
         f.instructions()
             .global_get(self.instr.sp_gl_index)
             .i32_const((self.debug_func.frame_size + 4) as i32)
             .i32_add()
-            .global_set(self.instr.sp_gl_index)
-            .return_();
+            .global_set(self.instr.sp_gl_index);
     }
 
     fn instrument(
@@ -262,14 +271,8 @@ impl<'a, 'b> FnInstrumenter<'a, 'b> {
         self.emit_header(&mut f);
 
         let mut reader = func.get_operators_reader().map_err(reencode::Error::from)?;
-
-        let body_rel_start = func
-            .range()
-            .start
-            .saturating_sub(self.instr.code_section_start) as u64;
-        let first_instr_rel = reader
-            .original_position()
-            .saturating_sub(self.instr.code_section_start) as u64;
+        let body_rel_start = self.instr.code_ofs(func.range().start);
+        let first_instr_rel = self.instr.code_ofs(reader.original_position());
 
         // DWARF addresses that point into the function preamble (body_size + locals)
         // should fire at the first instruction.
@@ -282,10 +285,10 @@ impl<'a, 'b> FnInstrumenter<'a, 'b> {
         }
 
         while !reader.eof() {
-            let (op, pos) = reader.read_with_offset().map_err(reencode::Error::from)?;
+            let (op, mut pos) = reader.read_with_offset().map_err(reencode::Error::from)?;
+            pos = self.instr.code_ofs(pos);
 
-            let code_offset = pos.saturating_sub(self.instr.code_section_start) as u64;
-            if let Some(&bkpt_idx) = self.instr.breakpoints.get(&code_offset) {
+            if let Some(&bkpt_idx) = self.instr.breakpoints.get(&pos) {
                 self.emit_bkpt(&mut f, bkpt_idx);
             }
 
@@ -295,10 +298,12 @@ impl<'a, 'b> FnInstrumenter<'a, 'b> {
             match op {
                 wasmparser::Operator::Return => {
                     self.emit_footer(&mut f);
+                    f.instruction(&Instruction::Return);
                 }
                 wasmparser::Operator::ReturnCall { function_index } => {
                     f.instruction(&Instruction::Call(function_index));
                     self.emit_footer(&mut f);
+                    f.instruction(&Instruction::Return);
                 }
                 wasmparser::Operator::ReturnCallIndirect {
                     type_index,
@@ -309,20 +314,26 @@ impl<'a, 'b> FnInstrumenter<'a, 'b> {
                         table_index,
                     });
                     self.emit_footer(&mut f);
+                    f.instruction(&Instruction::Return);
                 }
                 wasmparser::Operator::ReturnCallRef { type_index } => {
                     f.instruction(&Instruction::CallRef(type_index));
                     self.emit_footer(&mut f);
+                    f.instruction(&Instruction::Return);
+                }
+                wasmparser::Operator::End => {
+                    if reader.eof() {
+                        // If this is the final `end` of the function, emit the footer as well
+                        self.emit_footer(&mut f);
+                    }
+
+                    f.instruction(&reencode::Reencode::instruction(self.instr, op)?);
                 }
                 _ => {
                     f.instruction(&reencode::Reencode::instruction(self.instr, op)?);
                 }
             }
         }
-
-        // WASM functions implicitly return after the last instruction, so we must
-        // emit the footer code here as well
-        self.emit_footer(&mut f);
 
         reader.finish()?;
         Ok(f)
