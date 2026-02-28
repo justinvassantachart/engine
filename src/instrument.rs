@@ -11,6 +11,7 @@ struct Instrumenter<'a> {
     bkpt_type_index: u32,
     bkpt_fn_index: u32,
     num_imported_functions: u32,
+    num_imported_globals: u32,
     code_section_start: usize,
     /// Map from code-section byte offset to breakpoint index (1-based; 0 is sentinel).
     breakpoints: HashMap<u64, u32>,
@@ -29,35 +30,44 @@ impl<'a> Instrumenter<'a> {
             bkpt_type_index: 0,
             bkpt_fn_index: 0,
             num_imported_functions: 0,
+            num_imported_globals: 0,
             code_section_start: 0,
             breakpoints,
         }
     }
 }
 
-fn count_function_imports(imports: &wasmparser::Imports<'_>) -> u32 {
-    use wasmparser::TypeRef;
+fn count_imports(
+    imports: &wasmparser::Imports<'_>,
+    pred: impl Fn(&wasmparser::TypeRef) -> bool,
+) -> u32 {
     match imports {
-        wasmparser::Imports::Single(_, import) => {
-            matches!(import.ty, TypeRef::Func(_) | TypeRef::FuncExact(_)) as u32
-        }
+        wasmparser::Imports::Single(_, import) => pred(&import.ty) as u32,
         wasmparser::Imports::Compact1 { items, .. } => items
             .clone()
             .into_iter()
-            .filter(|item| {
-                item.as_ref().map_or(false, |i| {
-                    matches!(i.ty, TypeRef::Func(_) | TypeRef::FuncExact(_))
-                })
-            })
+            .filter(|item| item.as_ref().map_or(false, |i| pred(&i.ty)))
             .count() as u32,
         wasmparser::Imports::Compact2 { ty, names, .. } => {
-            if matches!(ty, TypeRef::Func(_) | TypeRef::FuncExact(_)) {
+            if pred(ty) {
                 names.count()
             } else {
                 0
             }
         }
     }
+}
+
+fn count_function_imports(imports: &wasmparser::Imports<'_>) -> u32 {
+    use wasmparser::TypeRef;
+    count_imports(imports, |ty| {
+        matches!(ty, TypeRef::Func(_) | TypeRef::FuncExact(_))
+    })
+}
+
+fn count_global_imports(imports: &wasmparser::Imports<'_>) -> u32 {
+    use wasmparser::TypeRef;
+    count_imports(imports, |ty| matches!(ty, TypeRef::Global(_)))
 }
 
 impl<'a> wasm_encoder::reencode::Reencode for Instrumenter<'a> {
@@ -81,6 +91,17 @@ impl<'a> wasm_encoder::reencode::Reencode for Instrumenter<'a> {
             func + 1
         } else {
             func
+        })
+    }
+
+    fn global_index(
+        &mut self,
+        global: u32,
+    ) -> Result<u32, wasm_encoder::reencode::Error<Self::Error>> {
+        Ok(if global >= self.num_imported_globals {
+            global + 1
+        } else {
+            global
         })
     }
 
@@ -109,10 +130,10 @@ impl<'a> wasm_encoder::reencode::Reencode for Instrumenter<'a> {
         imports: &mut wasm_encoder::ImportSection,
         section: wasmparser::ImportSectionReader<'_>,
     ) -> Result<(), wasm_encoder::reencode::Error<Self::Error>> {
-        self.num_imported_functions = 0u32;
         for batch in section {
             let batch = batch?;
             self.num_imported_functions += count_function_imports(&batch);
+            self.num_imported_globals += count_global_imports(&batch);
             wasm_encoder::reencode::utils::parse_imports(self, imports, batch)?;
         }
 
@@ -144,11 +165,6 @@ impl<'a> wasm_encoder::reencode::Reencode for Instrumenter<'a> {
         add_mem_import(imports, "memory", &self.info.memory.main);
         add_mem_import(imports, "stack", &self.info.memory.debug);
 
-        // TODO: Bug. This might end up shifting other imports in the module,
-        // necesitating overriding `import_index`
-        //
-        // This is technically true of the memories as well, although we make
-        // the assumption that an inputted binary will only have one (defined) memory.
         imports.import(
             "debug",
             "sp",
