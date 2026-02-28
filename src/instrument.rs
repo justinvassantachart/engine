@@ -144,6 +144,11 @@ impl<'a> wasm_encoder::reencode::Reencode for Instrumenter<'a> {
         add_mem_import(imports, "memory", &self.info.memory.main);
         add_mem_import(imports, "stack", &self.info.memory.debug);
 
+        // TODO: Bug. This might end up shifting other imports in the module,
+        // necesitating overriding `import_index`
+        //
+        // This is technically true of the memories as well, although we make
+        // the assumption that an inputted binary will only have one (defined) memory.
         imports.import(
             "debug",
             "sp",
