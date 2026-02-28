@@ -1,4 +1,4 @@
-use crate::types::{DebugInfo, LocationInfo};
+use crate::types::{DebugFunction, DebugInfo, LocationInfo};
 use gimli::{EndianSlice, LittleEndian, Reader};
 use std::borrow::Cow;
 use std::collections::HashMap;
@@ -47,6 +47,40 @@ pub fn parse_debug_info(wasm_bytes: &[u8]) -> anyhow::Result<DebugInfo> {
     while let Some(header) = units.next()? {
         let unit = dwarf.unit(header)?;
 
+        // Functions
+        let mut entries = unit.entries();
+        while let Some(entry) = entries.next_dfs()? {
+            if entry.tag() != gimli::DW_TAG_subprogram {
+                continue;
+            }
+
+            let name = if let Some(attr) = entry.attr(gimli::DW_AT_name) {
+                let s = dwarf.attr_string(&unit, attr.value())?;
+                Some(s.to_string_lossy().into_owned())
+            } else {
+                None
+            };
+
+            let address = if let Some(attr) = entry.attr(gimli::DW_AT_low_pc) {
+                match attr.value() {
+                    gimli::AttributeValue::Addr(a) => Some(a as usize),
+                    _ => None,
+                }
+            } else {
+                None
+            };
+
+            if let (Some(name), Some(address)) = (name, address) {
+                info.functions.push(DebugFunction {
+                    name,
+                    address,
+                    variables: vec![],
+                    frame_size: 0,
+                });
+            }
+        }
+
+        // Line info
         let Some(program) = unit.line_program.clone() else {
             continue;
         };
