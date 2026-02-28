@@ -1,6 +1,6 @@
-use crate::types::DebugInfo;
+use crate::types::{DebugFunction, DebugInfo};
 use std::collections::HashMap;
-use wasm_encoder::Instruction;
+use wasm_encoder::{Instruction, MemArg, reencode};
 
 // ============================================================================
 // WASM Instrumentation
@@ -10,9 +10,14 @@ struct Instrumenter<'a> {
     info: &'a DebugInfo,
     bkpt_type_index: u32,
     bkpt_fn_index: u32,
+    stack_mem_index: u32,
+    sp_gl_index: u32,
+
     num_imported_functions: u32,
     num_imported_globals: u32,
+
     code_section_start: usize,
+
     /// Map from code-section byte offset to breakpoint index (1-based; 0 is sentinel).
     breakpoints: HashMap<u64, u32>,
 }
@@ -29,6 +34,8 @@ impl<'a> Instrumenter<'a> {
             info,
             bkpt_type_index: 0,
             bkpt_fn_index: 0,
+            stack_mem_index: 1,
+            sp_gl_index: 0,
             num_imported_functions: 0,
             num_imported_globals: 0,
             code_section_start: 0,
@@ -70,23 +77,20 @@ fn count_global_imports(imports: &wasmparser::Imports<'_>) -> u32 {
     count_imports(imports, |ty| matches!(ty, TypeRef::Global(_)))
 }
 
-impl<'a> wasm_encoder::reencode::Reencode for Instrumenter<'a> {
+impl<'a> reencode::Reencode for Instrumenter<'a> {
     type Error = core::convert::Infallible;
 
     fn parse_memory_section(
         &mut self,
         _memories: &mut wasm_encoder::MemorySection,
         _section: wasmparser::MemorySectionReader<'_>,
-    ) -> Result<(), wasm_encoder::reencode::Error<Self::Error>> {
+    ) -> Result<(), reencode::Error> {
         // Note: The instrumented code has no defined memories,
         // as we will be passing the program memory in via import to share it
         Ok(())
     }
 
-    fn function_index(
-        &mut self,
-        func: u32,
-    ) -> Result<u32, wasm_encoder::reencode::Error<Self::Error>> {
+    fn function_index(&mut self, func: u32) -> Result<u32, reencode::Error> {
         Ok(if func >= self.num_imported_functions {
             func + 1
         } else {
@@ -94,10 +98,7 @@ impl<'a> wasm_encoder::reencode::Reencode for Instrumenter<'a> {
         })
     }
 
-    fn global_index(
-        &mut self,
-        global: u32,
-    ) -> Result<u32, wasm_encoder::reencode::Error<Self::Error>> {
+    fn global_index(&mut self, global: u32) -> Result<u32, reencode::Error> {
         Ok(if global >= self.num_imported_globals {
             global + 1
         } else {
@@ -109,17 +110,17 @@ impl<'a> wasm_encoder::reencode::Reencode for Instrumenter<'a> {
         &mut self,
         code: &mut wasm_encoder::CodeSection,
         section: wasmparser::CodeSectionReader<'_>,
-    ) -> Result<(), wasm_encoder::reencode::Error<Self::Error>> {
+    ) -> Result<(), reencode::Error> {
         self.code_section_start = section.range().start;
-        wasm_encoder::reencode::utils::parse_code_section(self, code, section)
+        reencode::utils::parse_code_section(self, code, section)
     }
 
     fn parse_type_section(
         &mut self,
         types: &mut wasm_encoder::TypeSection,
         section: wasmparser::TypeSectionReader<'_>,
-    ) -> Result<(), wasm_encoder::reencode::Error<Self::Error>> {
-        wasm_encoder::reencode::utils::parse_type_section(self, types, section)?;
+    ) -> Result<(), reencode::Error> {
+        reencode::utils::parse_type_section(self, types, section)?;
         types.ty().function([wasm_encoder::ValType::I32], []);
         self.bkpt_type_index = types.len() - 1;
         Ok(())
@@ -129,12 +130,12 @@ impl<'a> wasm_encoder::reencode::Reencode for Instrumenter<'a> {
         &mut self,
         imports: &mut wasm_encoder::ImportSection,
         section: wasmparser::ImportSectionReader<'_>,
-    ) -> Result<(), wasm_encoder::reencode::Error<Self::Error>> {
+    ) -> Result<(), reencode::Error> {
         for batch in section {
             let batch = batch?;
             self.num_imported_functions += count_function_imports(&batch);
             self.num_imported_globals += count_global_imports(&batch);
-            wasm_encoder::reencode::utils::parse_imports(self, imports, batch)?;
+            reencode::utils::parse_imports(self, imports, batch)?;
         }
 
         self.bkpt_fn_index = self.num_imported_functions;
@@ -165,6 +166,7 @@ impl<'a> wasm_encoder::reencode::Reencode for Instrumenter<'a> {
         add_mem_import(imports, "memory", &self.info.memory.main);
         add_mem_import(imports, "stack", &self.info.memory.debug);
 
+        self.sp_gl_index = self.num_imported_globals;
         imports.import(
             "debug",
             "sp",
@@ -182,46 +184,148 @@ impl<'a> wasm_encoder::reencode::Reencode for Instrumenter<'a> {
         &mut self,
         code: &mut wasm_encoder::CodeSection,
         func: wasmparser::FunctionBody<'_>,
-    ) -> Result<(), wasm_encoder::reencode::Error<Self::Error>> {
-        let mut f = wasm_encoder::reencode::utils::new_function_with_parsed_locals(self, &func)?;
-        let mut reader = func
-            .get_operators_reader()
-            .map_err(wasm_encoder::reencode::Error::from)?;
+    ) -> Result<(), reencode::Error> {
+        /* Get the debug function entry for this function based on its address */
+        let debug_func = self
+            .info
+            .functions
+            .iter()
+            .enumerate()
+            .find(|f| f.1.address == func.range().start);
 
-        let body_rel_start = func.range().start.saturating_sub(self.code_section_start) as u64;
+        let Some((debug_func_idx, debug_func)) = debug_func else {
+            // If this is not a function with a corresponding DWARF entry,
+            // then we will not do any instrumentation on it and will just emit it as-is.
+            return reencode::utils::parse_function_body(self, code, func);
+        };
+
+        code.function(
+            &FnInstrumenter {
+                instr: self,
+                debug_func,
+                debug_func_idx,
+            }
+            .instrument(&func)?,
+        );
+
+        Ok(())
+    }
+}
+
+struct FnInstrumenter<'a, 'b> {
+    instr: &'a mut Instrumenter<'b>,
+    debug_func: &'b DebugFunction,
+    debug_func_idx: usize,
+}
+
+impl<'a, 'b> FnInstrumenter<'a, 'b> {
+    /// Emits the function header, which creates a stack frame on the debug stack.
+    fn emit_header(&mut self, f: &mut wasm_encoder::Function) {
+        f.instructions()
+            .global_get(self.instr.sp_gl_index)
+            .i32_const((self.debug_func.frame_size + 4) as i32)
+            .i32_sub()
+            .global_set(self.instr.sp_gl_index)
+            .global_get(self.instr.sp_gl_index)
+            .i32_const(self.debug_func_idx as i32)
+            .i32_store(MemArg {
+                offset: 0,
+                align: 2,
+                memory_index: self.instr.stack_mem_index,
+            });
+    }
+
+    /// Emits logic to pause on breakpoints.
+    /// Does *not* emit instructions to record values into the debug stack.
+    fn emit_bkpt(&mut self, f: &mut wasm_encoder::Function, bkpt_idx: u32) {
+        f.instruction(&Instruction::I32Const(bkpt_idx as i32));
+        f.instruction(&Instruction::Call(self.instr.bkpt_fn_index));
+    }
+
+    /// Emits the function footer, which removes the debug stack frame.
+    /// Includes the trailing `return` instruction
+    fn emit_footer(&mut self, f: &mut wasm_encoder::Function) {
+        f.instructions()
+            .global_get(self.instr.sp_gl_index)
+            .i32_const((self.debug_func.frame_size + 4) as i32)
+            .i32_add()
+            .global_set(self.instr.sp_gl_index)
+            .return_();
+    }
+
+    fn instrument(
+        &mut self,
+        func: &wasmparser::FunctionBody<'_>,
+    ) -> Result<wasm_encoder::Function, reencode::Error> {
+        let mut f = reencode::utils::new_function_with_parsed_locals(self.instr, &func)?;
+
+        self.emit_header(&mut f);
+
+        let mut reader = func.get_operators_reader().map_err(reencode::Error::from)?;
+
+        let body_rel_start = func
+            .range()
+            .start
+            .saturating_sub(self.instr.code_section_start) as u64;
         let first_instr_rel = reader
             .original_position()
-            .saturating_sub(self.code_section_start) as u64;
+            .saturating_sub(self.instr.code_section_start) as u64;
 
         // DWARF addresses that point into the function preamble (body_size + locals)
         // should fire at the first instruction.
         for code_ofs in body_rel_start..first_instr_rel {
-            let Some(bkpt_idx) = self.breakpoints.get(&code_ofs).copied() else {
+            let Some(bkpt_idx) = self.instr.breakpoints.get(&code_ofs).copied() else {
                 continue;
             };
 
-            f.instruction(&Instruction::I32Const(bkpt_idx as i32));
-            f.instruction(&Instruction::Call(self.bkpt_fn_index));
+            self.emit_bkpt(&mut f, bkpt_idx);
         }
 
         while !reader.eof() {
-            let (op, pos) = reader
-                .read_with_offset()
-                .map_err(wasm_encoder::reencode::Error::from)?;
+            let (op, pos) = reader.read_with_offset().map_err(reencode::Error::from)?;
 
-            let code_offset = pos.saturating_sub(self.code_section_start) as u64;
-            if let Some(&idx) = self.breakpoints.get(&code_offset) {
-                f.instruction(&Instruction::I32Const(idx as i32));
-                f.instruction(&Instruction::Call(self.bkpt_fn_index));
+            let code_offset = pos.saturating_sub(self.instr.code_section_start) as u64;
+            if let Some(&bkpt_idx) = self.instr.breakpoints.get(&code_offset) {
+                self.emit_bkpt(&mut f, bkpt_idx);
             }
 
-            let insn = self.instruction(op)?;
-            f.instruction(&insn);
+            // Emit function footer code on return.
+            // Note that tail-call instructions must be unwrapped to ensure that we call the
+            // footer code at some point.
+            match op {
+                wasmparser::Operator::Return => {
+                    self.emit_footer(&mut f);
+                }
+                wasmparser::Operator::ReturnCall { function_index } => {
+                    f.instruction(&Instruction::Call(function_index));
+                    self.emit_footer(&mut f);
+                }
+                wasmparser::Operator::ReturnCallIndirect {
+                    type_index,
+                    table_index,
+                } => {
+                    f.instruction(&Instruction::CallIndirect {
+                        type_index,
+                        table_index,
+                    });
+                    self.emit_footer(&mut f);
+                }
+                wasmparser::Operator::ReturnCallRef { type_index } => {
+                    f.instruction(&Instruction::CallRef(type_index));
+                    self.emit_footer(&mut f);
+                }
+                _ => {
+                    f.instruction(&reencode::Reencode::instruction(self.instr, op)?);
+                }
+            }
         }
 
+        // WASM functions implicitly return after the last instruction, so we must
+        // emit the footer code here as well
+        self.emit_footer(&mut f);
+
         reader.finish()?;
-        code.function(&f);
-        Ok(())
+        Ok(f)
     }
 }
 
@@ -232,7 +336,7 @@ impl<'a> wasm_encoder::reencode::Reencode for Instrumenter<'a> {
 pub fn instrument_wasm(wasm_bytes: &[u8], debug_info: &DebugInfo) -> Result<Vec<u8>, String> {
     let mut instrumenter = Instrumenter::new(debug_info);
     let mut module = wasm_encoder::Module::new();
-    wasm_encoder::reencode::utils::parse_core_module(
+    reencode::utils::parse_core_module(
         &mut instrumenter,
         &mut module,
         wasmparser::Parser::new(0),
