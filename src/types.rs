@@ -149,9 +149,9 @@ pub enum DwarfOp {
 #[derive(Debug, Clone)]
 pub struct VarLocationRange {
     /// Code-section-relative start PC (inclusive).
-    pub start: u64,
+    pub start: usize,
     /// Code-section-relative end PC (exclusive).
-    pub end: u64,
+    pub end: usize,
     /// DWARF operations that produce the variable's value.
     pub ops: Vec<DwarfOp>,
 }
