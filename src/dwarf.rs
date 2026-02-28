@@ -17,8 +17,12 @@ pub fn parse_debug_info(wasm_bytes: &[u8]) -> anyhow::Result<DebugInfo> {
             }
             Payload::MemorySection(reader) => {
                 for mem in reader {
-                    info.memory.initial_pages = mem?.initial;
-                    info.memory.maximum_pages = info.memory.initial_pages * 16;
+                    let mem = mem?;
+                    info.memory.main = wasmer::MemoryType::new(
+                        mem.initial as u32,
+                        mem.maximum.or(Some(16 * mem.initial)).map(|v| v as u32),
+                        true,
+                    );
                     break;
                 }
             }

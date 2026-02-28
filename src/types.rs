@@ -48,6 +48,10 @@ pub enum WorkerOut<'a> {
         /// Index 0 is a sentinel (always 0). Length = breakpoints.len() + 1.
         #[serde(with = "serde_wasm_bindgen::preserve")]
         breakpoint_buffer: js_sys::SharedArrayBuffer,
+
+        /// The main memory of the executing program
+        #[serde(with = "serde_wasm_bindgen::preserve")]
+        memory: js_sys::WebAssembly::Memory,
     },
 
     /// Request the main thread to trigger a file download (workers have no document/window).
@@ -105,12 +109,19 @@ pub struct DebugInfo {
     pub types: Vec<DebugType>,
 }
 
-#[derive(Debug, Clone, Default, Tsify, Serialize)]
+#[derive(Debug, Clone, Tsify, Serialize)]
 pub struct MemoryInfo {
-    /// Initial number of WASM pages of main memory that should be allocated to this module
-    pub initial_pages: u64,
-    /// Maximum number of WASM pages of main memory that should be allocated to this module
-    pub maximum_pages: u64,
+    pub main: wasmer::MemoryType,
+    pub debug: wasmer::MemoryType,
+}
+
+impl Default for MemoryInfo {
+    fn default() -> Self {
+        Self {
+            main: wasmer::MemoryType::new(1, None, false),
+            debug: wasmer::MemoryType::new(1, None, false),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Tsify, Serialize)]

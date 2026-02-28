@@ -123,17 +123,26 @@ impl<'a> wasm_encoder::reencode::Reencode for Instrumenter<'a> {
             wasm_encoder::EntityType::Function(self.bkpt_type_index),
         );
 
-        imports.import(
-            "debug",
-            "memory",
-            wasm_encoder::EntityType::Memory(wasm_encoder::MemoryType {
-                minimum: self.info.memory.initial_pages,
-                maximum: Some(self.info.memory.maximum_pages),
-                memory64: false,
-                shared: true,
-                page_size_log2: None,
-            }),
-        );
+        fn add_mem_import(
+            imports: &mut wasm_encoder::ImportSection,
+            name: &str,
+            memory: &wasmer::MemoryType,
+        ) {
+            imports.import(
+                "debug",
+                name,
+                wasm_encoder::EntityType::Memory(wasm_encoder::MemoryType {
+                    minimum: memory.minimum.0 as u64,
+                    maximum: memory.maximum.and_then(|v| Some(v.0 as u64)),
+                    memory64: false,
+                    shared: memory.shared,
+                    page_size_log2: None,
+                }),
+            );
+        }
+
+        add_mem_import(imports, "memory", &self.info.memory.main);
+        add_mem_import(imports, "stack", &self.info.memory.debug);
 
         Ok(())
     }

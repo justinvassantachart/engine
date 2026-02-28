@@ -1,7 +1,7 @@
 use crate::types::{DebugInfo, WorkerOut};
 use js_sys::{Object, Reflect, SharedArrayBuffer, WebAssembly};
 use wasm_bindgen::prelude::*;
-use wasmer::{AsStoreMut, Function, FunctionEnv, FunctionEnvMut, Imports};
+use wasmer::{AsStoreMut, Function, FunctionEnv, FunctionEnvMut, Imports, Memory, js::AsJs};
 
 /// SAFETY: In wasm32 there is no shared-memory threading; all execution is single-threaded.
 unsafe impl Send for Debugger {}
@@ -24,18 +24,24 @@ unsafe impl Send for Debugger {}
 pub struct Debugger {
     info: DebugInfo,
     buffer: SharedArrayBuffer,
-    /// The main program memory which will be passed into the binary in [Debugger::attach]
-    memory: js_sys::WebAssembly::Memory,
+    /// The main program memory
+    main_memory: js_sys::WebAssembly::Memory,
+    /// The memory which holds the debug stack during execution
+    debug_memory: js_sys::WebAssembly::Memory,
 }
 
 const SENTINEL_BYTES: u32 = 4;
 
-fn create_shared_memory(initial: u64, maximum: u64) -> Result<WebAssembly::Memory, JsValue> {
+fn create_memory(memory: wasmer::MemoryType) -> Result<WebAssembly::Memory, JsValue> {
     let memory_desc = Object::new();
 
-    Reflect::set(&memory_desc, &"initial".into(), &initial.into())?;
-    Reflect::set(&memory_desc, &"maximum".into(), &maximum.into())?;
-    Reflect::set(&memory_desc, &"shared".into(), &true.into())?;
+    Reflect::set(&memory_desc, &"initial".into(), &memory.minimum.0.into())?;
+
+    if let Some(maximum) = memory.maximum {
+        Reflect::set(&memory_desc, &"maximum".into(), &maximum.0.into())?;
+    }
+
+    Reflect::set(&memory_desc, &"shared".into(), &memory.shared.into())?;
 
     let memory = WebAssembly::Memory::new(&memory_desc)?;
 
@@ -48,8 +54,8 @@ impl Debugger {
         let buffer = SharedArrayBuffer::new(buffer_size);
 
         Self {
-            memory: create_shared_memory(info.memory.initial_pages, info.memory.maximum_pages)
-                .expect("Created program memory"),
+            main_memory: create_memory(info.memory.main).expect("Created program memory"),
+            debug_memory: create_memory(info.memory.debug).expect("Created debug memory"),
             info,
             buffer,
         }
@@ -59,6 +65,18 @@ impl Debugger {
     /// Waits for the client to initialize the debugger.
     pub fn attach(self, store: &mut impl AsStoreMut, imports: &mut Imports) {
         self.send_debug_info();
+
+        imports.define(
+            "debug",
+            "memory",
+            Memory::from_jsvalue(store, &self.info.memory.main, &self.main_memory).unwrap(),
+        );
+
+        imports.define(
+            "debug",
+            "stack",
+            Memory::from_jsvalue(store, &self.info.memory.debug, &self.debug_memory).unwrap(),
+        );
 
         let env = FunctionEnv::new(store, self);
         imports.define(
@@ -78,6 +96,7 @@ impl Debugger {
         WorkerOut::Debug {
             info: self.info.clone(),
             breakpoint_buffer: self.buffer.clone(),
+            memory: self.main_memory.clone(),
         }
         .send();
         self.wait_for_resume();
