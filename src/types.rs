@@ -118,8 +118,9 @@ pub struct MemoryInfo {
 impl Default for MemoryInfo {
     fn default() -> Self {
         Self {
-            main: wasmer::MemoryType::new(1, None, false),
-            debug: wasmer::MemoryType::new(1, None, false),
+            main: wasmer::MemoryType::new(1, Some(1), true),
+            // Default debug stack size is 64 pages ~ 4MiB
+            debug: wasmer::MemoryType::new(64, Some(64), true),
         }
     }
 }
