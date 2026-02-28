@@ -128,6 +128,7 @@ impl Default for MemoryInfo {
 #[derive(Debug, Clone, Tsify, Serialize)]
 pub struct DebugFunction {
     pub name: String,
+    pub address: usize,
     pub variables: Vec<DebugVariable>,
     /// Size of this function's debug stack frame
     pub frame_size: u32,
