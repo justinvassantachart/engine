@@ -117,7 +117,7 @@ fn collect_variables<R: Reader>(
         gimli::DW_TAG_variable | gimli::DW_TAG_formal_parameter => {
             let name = get_die_name(dwarf, unit, node.entry());
             let location =
-                parse_var_location(dwarf, unit, node.entry(), scope_start, scope_end)?;
+                parse_var_location(dwarf, unit, node.entry(), scope_start as usize, scope_end as usize)?;
 
             if let Some(name) = name {
                 if !location.is_empty() {
@@ -193,8 +193,8 @@ fn parse_var_location<R: Reader>(
     dwarf: &gimli::Dwarf<R>,
     unit: &gimli::Unit<R>,
     entry: &gimli::DebuggingInformationEntry<R>,
-    default_start: u64,
-    default_end: u64,
+    default_start: usize,
+    default_end: usize,
 ) -> Result<Vec<VarLocationRange>, gimli::Error> {
     let Some(attr) = entry.attr(gimli::DW_AT_location) else {
         return Ok(vec![]);
@@ -221,8 +221,8 @@ fn parse_var_location<R: Reader>(
                     continue;
                 }
                 ranges.push(VarLocationRange {
-                    start: entry.range.begin,
-                    end: entry.range.end,
+                    start: entry.range.begin as usize,
+                    end: entry.range.end as usize,
                     ops,
                 });
             }
