@@ -189,7 +189,7 @@ pub struct DebugFrameEntry {
     /// The byte offset of this entry in its containing stack frame
     offset: u32,
     /// The WebAssembly type of the value stored by the entry
-    ty: wasmer::Type,
+    ty: wasmparser::ValType,
     /// The WebAssembly location (local, global, or stack) represented by this entry's value
     location: WasmOp,
     /// A list of breakpoint indices for which this entry is considered valid.
@@ -201,8 +201,9 @@ pub struct DebugFrameEntry {
     /// but they are guaranteed to never have overlapping values in [DebugFrameEntry::lifetime].
     /// This permits two frame entries with the same location to contain different types
     /// at different points during the function's execution – for example, `WasmOp::Stack(0)`
-    /// might have type [wasmer::Type::I32] at the beginning of a function, but change to
-    /// [wasmer::Type::F64] later on in the function.
+    /// might have type [wasmparser::ValType::I32] at the beginning of a function, but change to
+    /// [wasmparser::ValType::F64] later on in the function as values are shifted on and off
+    /// the operand stack.
     lifetime: Vec<u32>,
 }
 
