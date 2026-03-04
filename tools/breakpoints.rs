@@ -20,7 +20,7 @@ fn main() {
         process::exit(1);
     });
 
-    let debug_info = match parse_debug_info(&wasm_bytes) {
+    let mut debug_info = match parse_debug_info(&wasm_bytes) {
         Ok(info) => info,
         Err(e) => {
             eprintln!("Failed to parse DWARF info: {}", e);
@@ -48,7 +48,7 @@ fn main() {
     }
     println!();
 
-    let instrumented = match instrument_wasm(&wasm_bytes, &debug_info) {
+    let instrumented = match instrument_wasm(&wasm_bytes, &mut debug_info) {
         Ok(bytes) => bytes,
         Err(e) => {
             eprintln!("Instrumentation failed: {}", e);

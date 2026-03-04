@@ -187,11 +187,11 @@ pub struct DebugFrame {
 #[derive(Debug, Clone)]
 pub struct DebugFrameEntry {
     /// The byte offset of this entry in its containing stack frame
-    offset: u32,
+    pub offset: u32,
     /// The WebAssembly type of the value stored by the entry
-    ty: wasmparser::ValType,
+    pub ty: wasmparser::ValType,
     /// The WebAssembly location (local, global, or stack) represented by this entry's value
-    location: WasmOp,
+    pub location: WasmOp,
     /// A list of breakpoint indices for which this entry is considered valid.
     ///
     /// If a breakpoint index `N` is contained in this list, then accessing this entry's
@@ -204,7 +204,7 @@ pub struct DebugFrameEntry {
     /// might have type [wasmparser::ValType::I32] at the beginning of a function, but change to
     /// [wasmparser::ValType::F64] later on in the function as values are shifted on and off
     /// the operand stack.
-    lifetime: Vec<u32>,
+    pub lifetime: Vec<u32>,
 }
 
 #[derive(Debug, Clone, Tsify, Serialize)]

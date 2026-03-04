@@ -1,4 +1,4 @@
-use crate::types::{DebugFunction, DebugInfo};
+use crate::types::{DebugFrameEntry, DebugFunction, DebugInfo};
 use std::collections::HashMap;
 use wasm_encoder::{Instruction, MemArg, reencode};
 
@@ -7,7 +7,7 @@ use wasm_encoder::{Instruction, MemArg, reencode};
 // ============================================================================
 
 struct Instrumenter<'a> {
-    info: &'a DebugInfo,
+    info: &'a mut DebugInfo,
     bkpt_type_index: u32,
     bkpt_fn_index: u32,
     stack_mem_index: u32,
@@ -23,7 +23,7 @@ struct Instrumenter<'a> {
 }
 
 impl<'a> Instrumenter<'a> {
-    fn new(info: &'a DebugInfo) -> Self {
+    fn new(info: &'a mut DebugInfo) -> Self {
         let breakpoints: HashMap<usize, u32> = info
             .locations
             .iter()
@@ -192,20 +192,21 @@ impl<'a> reencode::Reencode for Instrumenter<'a> {
         func: wasmparser::FunctionBody<'_>,
     ) -> Result<(), reencode::Error> {
         /* Get the debug function entry for this function based on its address */
-        let debug_func = self
+        let body_start = func.range().start;
+        let code_ofs = self.code_ofs(body_start);
+        let debug_func_idx = self
             .info
             .functions
             .iter()
-            .enumerate()
-            .find(|f| f.1.address == self.code_ofs(func.range().start));
+            .position(|f| f.address == code_ofs);
 
-        let Some((debug_func_idx, debug_func)) = debug_func else {
+        let Some(debug_func_idx) = debug_func_idx else {
             // If this is not a function with a corresponding DWARF entry,
             // then we will not do any instrumentation on it and will just emit it as-is.
             return reencode::utils::parse_function_body(self, code, func);
         };
 
-        code.function(&FnInstrumenter::new(self, debug_func, debug_func_idx).instrument(&func)?);
+        code.function(&FnInstrumenter::new(self, debug_func_idx).instrument(&func)?);
 
         Ok(())
     }
@@ -213,28 +214,27 @@ impl<'a> reencode::Reencode for Instrumenter<'a> {
 
 struct FnInstrumenter<'a, 'b> {
     instr: &'a mut Instrumenter<'b>,
-    debug_func: &'b DebugFunction,
     debug_func_idx: usize,
 }
 
 impl<'a, 'b> FnInstrumenter<'a, 'b> {
-    fn new(
-        instr: &'a mut Instrumenter<'b>,
-        debug_func: &'b DebugFunction,
-        debug_func_idx: usize,
-    ) -> Self {
+    fn new(instr: &'a mut Instrumenter<'b>, debug_func_idx: usize) -> Self {
         Self {
             instr,
-            debug_func,
             debug_func_idx,
         }
     }
 
+    fn debug_func(&mut self) -> &mut DebugFunction {
+        &mut self.instr.info.functions[self.debug_func_idx]
+    }
+
     /// Emits the function header, which creates a stack frame on the debug stack.
     fn emit_header(&mut self, f: &mut wasm_encoder::Function) {
+        let frame_size = self.debug_func().frame.size;
         f.instructions()
             .global_get(self.instr.sp_gl_index)
-            .i32_const((self.debug_func.frame.size) as i32)
+            .i32_const(frame_size as i32)
             .i32_sub()
             .global_set(self.instr.sp_gl_index)
             .global_get(self.instr.sp_gl_index)
@@ -255,9 +255,10 @@ impl<'a, 'b> FnInstrumenter<'a, 'b> {
 
     /// Emits the function footer, which removes the debug stack frame.
     fn emit_footer(&mut self, f: &mut wasm_encoder::Function) {
+        let frame_size = self.debug_func().frame.size;
         f.instructions()
             .global_get(self.instr.sp_gl_index)
-            .i32_const((self.debug_func.frame.size) as i32)
+            .i32_const(frame_size as i32)
             .i32_add()
             .global_set(self.instr.sp_gl_index);
     }
@@ -344,7 +345,7 @@ impl<'a, 'b> FnInstrumenter<'a, 'b> {
 ///
 /// Adds import: `(import "debug" "bkpt" (func (param i32)))`
 /// The i32 param is the breakpoint index (1-based, 0 is sentinel).
-pub fn instrument_wasm(wasm_bytes: &[u8], debug_info: &DebugInfo) -> Result<Vec<u8>, String> {
+pub fn instrument_wasm(wasm_bytes: &[u8], debug_info: &mut DebugInfo) -> Result<Vec<u8>, String> {
     let mut instrumenter = Instrumenter::new(debug_info);
     let mut module = wasm_encoder::Module::new();
     reencode::utils::parse_core_module(

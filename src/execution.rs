@@ -145,8 +145,8 @@ impl<'a> Step<'a> {
                 }
                 .send();
 
-                let debug_info = parse_debug_info(&wasm).ensure("Parsed debug info")?;
-                wasm = instrument_wasm(&wasm, &debug_info).ensure("Instrumented WASM")?;
+                let mut debug_info = parse_debug_info(&wasm).ensure("Parsed debug info")?;
+                wasm = instrument_wasm(&wasm, &mut debug_info).ensure("Instrumented WASM")?;
                 debugger = Some(Debugger::new(debug_info));
 
                 WorkerOut::Download {
