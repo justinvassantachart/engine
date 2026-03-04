@@ -1,4 +1,4 @@
-use crate::types::{DebugFrameEntry, DebugFunction, DebugInfo};
+use crate::types::{DebugFunction, DebugInfo};
 use std::collections::HashMap;
 use wasm_encoder::{Instruction, MemArg, reencode};
 
@@ -8,6 +8,7 @@ use wasm_encoder::{Instruction, MemArg, reencode};
 
 struct Instrumenter<'a> {
     info: &'a mut DebugInfo,
+    validator: wasmparser::Validator,
     bkpt_type_index: u32,
     bkpt_fn_index: u32,
     stack_mem_index: u32,
@@ -32,6 +33,7 @@ impl<'a> Instrumenter<'a> {
             .collect();
         Self {
             info,
+            validator: wasmparser::Validator::new(),
             bkpt_type_index: 0,
             bkpt_fn_index: 0,
             stack_mem_index: 1,
@@ -112,12 +114,26 @@ impl<'a> reencode::Reencode for Instrumenter<'a> {
         })
     }
 
+    fn parse_function_section(
+        &mut self,
+        functions: &mut wasm_encoder::FunctionSection,
+        section: wasmparser::FunctionSectionReader<'_>,
+    ) -> Result<(), reencode::Error> {
+        self.validator
+            .function_section(&section)
+            .map_err(reencode::Error::from)?;
+        reencode::utils::parse_function_section(self, functions, section)
+    }
+
     fn parse_code_section(
         &mut self,
         code: &mut wasm_encoder::CodeSection,
         section: wasmparser::CodeSectionReader<'_>,
     ) -> Result<(), reencode::Error> {
         self.code_section_start = section.range().start;
+        self.validator
+            .code_section_start(&section.range())
+            .map_err(reencode::Error::from)?;
         reencode::utils::parse_code_section(self, code, section)
     }
 
@@ -126,6 +142,12 @@ impl<'a> reencode::Reencode for Instrumenter<'a> {
         types: &mut wasm_encoder::TypeSection,
         section: wasmparser::TypeSectionReader<'_>,
     ) -> Result<(), reencode::Error> {
+        self.validator
+            .version(1, wasmparser::Encoding::Module, &(0..8))
+            .map_err(reencode::Error::from)?;
+        self.validator
+            .type_section(&section)
+            .map_err(reencode::Error::from)?;
         reencode::utils::parse_type_section(self, types, section)?;
         types.ty().function([wasm_encoder::ValType::I32], []);
         self.bkpt_type_index = types.len() - 1;
@@ -137,6 +159,10 @@ impl<'a> reencode::Reencode for Instrumenter<'a> {
         imports: &mut wasm_encoder::ImportSection,
         section: wasmparser::ImportSectionReader<'_>,
     ) -> Result<(), reencode::Error> {
+        self.validator
+            .import_section(&section)
+            .map_err(reencode::Error::from)?;
+
         for batch in section {
             let batch = batch?;
             self.num_imported_functions += count_function_imports(&batch);
@@ -206,33 +232,50 @@ impl<'a> reencode::Reencode for Instrumenter<'a> {
             return reencode::utils::parse_function_body(self, code, func);
         };
 
-        code.function(&FnInstrumenter::new(self, debug_func_idx).instrument(&func)?);
+        let fn_instr = FnInstrumenter::new(self, debug_func_idx, &func)?;
+        code.function(&fn_instr.instrument()?);
 
         Ok(())
     }
 }
 
-struct FnInstrumenter<'a, 'b> {
+struct FnInstrumenter<'a, 'b, 'c> {
     instr: &'a mut Instrumenter<'b>,
     debug_func_idx: usize,
+    func_body: &'c wasmparser::FunctionBody<'c>,
+    validator: wasmparser::FuncValidator<wasmparser::ValidatorResources>,
+    func: wasm_encoder::Function,
 }
 
-impl<'a, 'b> FnInstrumenter<'a, 'b> {
-    fn new(instr: &'a mut Instrumenter<'b>, debug_func_idx: usize) -> Self {
-        Self {
+impl<'a, 'b, 'c> FnInstrumenter<'a, 'b, 'c> {
+    fn new(
+        instr: &'a mut Instrumenter<'b>,
+        debug_func_idx: usize,
+        func_body: &'c wasmparser::FunctionBody<'c>,
+    ) -> Result<Self, reencode::Error> {
+        let validator = instr
+            .validator
+            .code_section_entry(func_body)
+            .map_err(reencode::Error::from)?
+            .into_validator(Default::default());
+        let f = reencode::utils::new_function_with_parsed_locals(instr, func_body)?;
+        Ok(Self {
             instr,
             debug_func_idx,
-        }
+            func_body,
+            validator,
+            func: f,
+        })
     }
 
     fn debug_func(&mut self) -> &mut DebugFunction {
         &mut self.instr.info.functions[self.debug_func_idx]
     }
 
-    /// Emits the function header, which creates a stack frame on the debug stack.
-    fn emit_header(&mut self, f: &mut wasm_encoder::Function) {
+    fn emit_header(&mut self) {
         let frame_size = self.debug_func().frame.size;
-        f.instructions()
+        self.func
+            .instructions()
             .global_get(self.instr.sp_gl_index)
             .i32_const(frame_size as i32)
             .i32_sub()
@@ -246,43 +289,38 @@ impl<'a, 'b> FnInstrumenter<'a, 'b> {
             });
     }
 
-    /// Emits logic to pause on breakpoints.
-    /// Does *not* emit instructions to record values into the debug stack.
-    fn emit_bkpt(&mut self, f: &mut wasm_encoder::Function, bkpt_idx: u32) {
-        f.instruction(&Instruction::I32Const(bkpt_idx as i32));
-        f.instruction(&Instruction::Call(self.instr.bkpt_fn_index));
+    fn emit_bkpt(&mut self, bkpt_idx: u32) {
+        self.func
+            .instruction(&Instruction::I32Const(bkpt_idx as i32));
+        self.func
+            .instruction(&Instruction::Call(self.instr.bkpt_fn_index));
     }
 
-    /// Emits the function footer, which removes the debug stack frame.
-    fn emit_footer(&mut self, f: &mut wasm_encoder::Function) {
+    fn emit_footer(&mut self) {
         let frame_size = self.debug_func().frame.size;
-        f.instructions()
+        self.func
+            .instructions()
             .global_get(self.instr.sp_gl_index)
             .i32_const(frame_size as i32)
             .i32_add()
             .global_set(self.instr.sp_gl_index);
     }
 
-    fn instrument(
-        &mut self,
-        func: &wasmparser::FunctionBody<'_>,
-    ) -> Result<wasm_encoder::Function, reencode::Error> {
-        let mut f = reencode::utils::new_function_with_parsed_locals(self.instr, &func)?;
+    fn instrument(mut self) -> Result<wasm_encoder::Function, reencode::Error> {
+        self.emit_header();
 
-        self.emit_header(&mut f);
-
-        let mut reader = func.get_operators_reader().map_err(reencode::Error::from)?;
-        let body_rel_start = self.instr.code_ofs(func.range().start);
+        let mut reader = self
+            .func_body
+            .get_operators_reader()
+            .map_err(reencode::Error::from)?;
+        let body_rel_start = self.instr.code_ofs(self.func_body.range().start);
         let first_instr_rel = self.instr.code_ofs(reader.original_position());
 
-        // DWARF addresses that point into the function preamble (body_size + locals)
-        // should fire at the first instruction.
         for code_ofs in body_rel_start..first_instr_rel {
             let Some(bkpt_idx) = self.instr.breakpoints.get(&code_ofs).copied() else {
                 continue;
             };
-
-            self.emit_bkpt(&mut f, bkpt_idx);
+            self.emit_bkpt(bkpt_idx);
         }
 
         while !reader.eof() {
@@ -290,54 +328,51 @@ impl<'a, 'b> FnInstrumenter<'a, 'b> {
             pos = self.instr.code_ofs(pos);
 
             if let Some(&bkpt_idx) = self.instr.breakpoints.get(&pos) {
-                self.emit_bkpt(&mut f, bkpt_idx);
+                self.emit_bkpt(bkpt_idx);
             }
 
-            // Emit function footer code on return.
-            // Note that tail-call instructions must be unwrapped to ensure that we call the
-            // footer code at some point.
             match op {
                 wasmparser::Operator::Return => {
-                    self.emit_footer(&mut f);
-                    f.instruction(&Instruction::Return);
+                    self.emit_footer();
+                    self.func.instruction(&Instruction::Return);
                 }
                 wasmparser::Operator::ReturnCall { function_index } => {
-                    f.instruction(&Instruction::Call(function_index));
-                    self.emit_footer(&mut f);
-                    f.instruction(&Instruction::Return);
+                    self.func.instruction(&Instruction::Call(function_index));
+                    self.emit_footer();
+                    self.func.instruction(&Instruction::Return);
                 }
                 wasmparser::Operator::ReturnCallIndirect {
                     type_index,
                     table_index,
                 } => {
-                    f.instruction(&Instruction::CallIndirect {
+                    self.func.instruction(&Instruction::CallIndirect {
                         type_index,
                         table_index,
                     });
-                    self.emit_footer(&mut f);
-                    f.instruction(&Instruction::Return);
+                    self.emit_footer();
+                    self.func.instruction(&Instruction::Return);
                 }
                 wasmparser::Operator::ReturnCallRef { type_index } => {
-                    f.instruction(&Instruction::CallRef(type_index));
-                    self.emit_footer(&mut f);
-                    f.instruction(&Instruction::Return);
+                    self.func.instruction(&Instruction::CallRef(type_index));
+                    self.emit_footer();
+                    self.func.instruction(&Instruction::Return);
                 }
                 wasmparser::Operator::End => {
                     if reader.eof() {
-                        // If this is the final `end` of the function, emit the footer as well
-                        self.emit_footer(&mut f);
+                        self.emit_footer();
                     }
-
-                    f.instruction(&reencode::Reencode::instruction(self.instr, op)?);
+                    self.func
+                        .instruction(&reencode::Reencode::instruction(self.instr, op)?);
                 }
                 _ => {
-                    f.instruction(&reencode::Reencode::instruction(self.instr, op)?);
+                    self.func
+                        .instruction(&reencode::Reencode::instruction(self.instr, op)?);
                 }
             }
         }
 
         reader.finish()?;
-        Ok(f)
+        Ok(self.func)
     }
 }
 
