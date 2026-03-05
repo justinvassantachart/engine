@@ -232,7 +232,7 @@ impl<'a> reencode::Reencode for Instrumenter<'a> {
             return reencode::utils::parse_function_body(self, code, func);
         };
 
-        let fn_instr = FnInstrumenter::new(self, debug_func_idx, &func)?;
+        let fn_instr = FnInstrumenter::new(self, debug_func_idx, func)?;
         code.function(&fn_instr.instrument()?);
 
         Ok(())
@@ -242,29 +242,55 @@ impl<'a> reencode::Reencode for Instrumenter<'a> {
 struct FnInstrumenter<'a, 'b, 'c> {
     instr: &'a mut Instrumenter<'b>,
     debug_func_idx: usize,
-    func_body: &'c wasmparser::FunctionBody<'c>,
+    func_body: wasmparser::FunctionBody<'c>,
+
+    /// A [wasmparser] validator used to track the types of locals and operands
+    /// throughout the instrumentation of this function
     validator: wasmparser::FuncValidator<wasmparser::ValidatorResources>,
-    func: wasm_encoder::Function,
+
+    /// A vector of instructions forming the body of the instrumented function
+    instructions: Vec<Instruction<'c>>,
+
+    /// During instrumentation, the size of the function's debug frame is not
+    /// yet known. This vector stores indexes into [FnInstrumenter::instructions]
+    /// representing `i32.const` instructions which should eventually contain
+    /// `i32.const F`, where `F` is the eventual size of this function's stack frame.
+    /// Before emitting the instrumented function body, such instructions will be
+    /// replaced with the correct stack size.
+    stack_intructions: Vec<usize>,
+
+    /// A vector of the types of scratch locals which will be used to store
+    /// operand stack values when peeling off the operand stack to recover
+    /// a value.
+    ///
+    /// In the instrumented function, these will follow the function's
+    /// own locals. If `N` is the number of original locals
+    /// (parameters + additional locals), then each of these will have local
+    /// indices `N, N+1, ...`.
+    scratch_locals: Vec<wasm_encoder::ValType>,
 }
 
 impl<'a, 'b, 'c> FnInstrumenter<'a, 'b, 'c> {
     fn new(
         instr: &'a mut Instrumenter<'b>,
         debug_func_idx: usize,
-        func_body: &'c wasmparser::FunctionBody<'c>,
+        func_body: wasmparser::FunctionBody<'c>,
     ) -> Result<Self, reencode::Error> {
         let validator = instr
             .validator
-            .code_section_entry(func_body)
+            .code_section_entry(&func_body)
             .map_err(reencode::Error::from)?
             .into_validator(Default::default());
-        let f = reencode::utils::new_function_with_parsed_locals(instr, func_body)?;
+
         Ok(Self {
             instr,
             debug_func_idx,
             func_body,
             validator,
-            func: f,
+
+            instructions: Vec::default(),
+            stack_intructions: Vec::default(),
+            scratch_locals: Vec::default(),
         })
     }
 
@@ -274,36 +300,36 @@ impl<'a, 'b, 'c> FnInstrumenter<'a, 'b, 'c> {
 
     fn emit_header(&mut self) {
         let frame_size = self.debug_func().frame.size;
-        self.func
-            .instructions()
-            .global_get(self.instr.sp_gl_index)
-            .i32_const(frame_size as i32)
-            .i32_sub()
-            .global_set(self.instr.sp_gl_index)
-            .global_get(self.instr.sp_gl_index)
-            .i32_const(self.debug_func_idx as i32)
-            .i32_store(MemArg {
+        self.instructions.extend([
+            Instruction::GlobalGet(self.instr.sp_gl_index),
+            Instruction::I32Const(frame_size as i32),
+            Instruction::I32Sub,
+            Instruction::GlobalSet(self.instr.sp_gl_index),
+            Instruction::GlobalGet(self.instr.sp_gl_index),
+            Instruction::I32Const(self.debug_func_idx as i32),
+            Instruction::I32Store(MemArg {
                 offset: 0,
                 align: 2,
                 memory_index: self.instr.stack_mem_index,
-            });
+            }),
+        ]);
     }
 
     fn emit_bkpt(&mut self, bkpt_idx: u32) {
-        self.func
-            .instruction(&Instruction::I32Const(bkpt_idx as i32));
-        self.func
-            .instruction(&Instruction::Call(self.instr.bkpt_fn_index));
+        self.instructions
+            .push(Instruction::I32Const(bkpt_idx as i32));
+        self.instructions
+            .push(Instruction::Call(self.instr.bkpt_fn_index));
     }
 
     fn emit_footer(&mut self) {
         let frame_size = self.debug_func().frame.size;
-        self.func
-            .instructions()
-            .global_get(self.instr.sp_gl_index)
-            .i32_const(frame_size as i32)
-            .i32_add()
-            .global_set(self.instr.sp_gl_index);
+        self.instructions.extend([
+            Instruction::GlobalGet(self.instr.sp_gl_index),
+            Instruction::I32Const(frame_size as i32),
+            Instruction::I32Add,
+            Instruction::GlobalSet(self.instr.sp_gl_index),
+        ]);
     }
 
     fn instrument(mut self) -> Result<wasm_encoder::Function, reencode::Error> {
@@ -313,6 +339,7 @@ impl<'a, 'b, 'c> FnInstrumenter<'a, 'b, 'c> {
             .func_body
             .get_operators_reader()
             .map_err(reencode::Error::from)?;
+
         let body_rel_start = self.instr.code_ofs(self.func_body.range().start);
         let first_instr_rel = self.instr.code_ofs(reader.original_position());
 
@@ -334,45 +361,51 @@ impl<'a, 'b, 'c> FnInstrumenter<'a, 'b, 'c> {
             match op {
                 wasmparser::Operator::Return => {
                     self.emit_footer();
-                    self.func.instruction(&Instruction::Return);
+                    self.instructions.push(Instruction::Return);
                 }
                 wasmparser::Operator::ReturnCall { function_index } => {
-                    self.func.instruction(&Instruction::Call(function_index));
+                    self.instructions.push(Instruction::Call(function_index));
                     self.emit_footer();
-                    self.func.instruction(&Instruction::Return);
+                    self.instructions.push(Instruction::Return);
                 }
                 wasmparser::Operator::ReturnCallIndirect {
                     type_index,
                     table_index,
                 } => {
-                    self.func.instruction(&Instruction::CallIndirect {
+                    self.instructions.push(Instruction::CallIndirect {
                         type_index,
                         table_index,
                     });
                     self.emit_footer();
-                    self.func.instruction(&Instruction::Return);
+                    self.instructions.push(Instruction::Return);
                 }
                 wasmparser::Operator::ReturnCallRef { type_index } => {
-                    self.func.instruction(&Instruction::CallRef(type_index));
+                    self.instructions.push(Instruction::CallRef(type_index));
                     self.emit_footer();
-                    self.func.instruction(&Instruction::Return);
+                    self.instructions.push(Instruction::Return);
                 }
                 wasmparser::Operator::End => {
                     if reader.eof() {
                         self.emit_footer();
                     }
-                    self.func
-                        .instruction(&reencode::Reencode::instruction(self.instr, op)?);
+                    self.instructions
+                        .push(reencode::Reencode::instruction(self.instr, op)?);
                 }
                 _ => {
-                    self.func
-                        .instruction(&reencode::Reencode::instruction(self.instr, op)?);
+                    self.instructions
+                        .push(reencode::Reencode::instruction(self.instr, op)?);
                 }
             }
         }
 
         reader.finish()?;
-        Ok(self.func)
+
+        let mut func =
+            reencode::utils::new_function_with_parsed_locals(self.instr, &self.func_body)?;
+        for inst in &self.instructions {
+            func.instruction(inst);
+        }
+        Ok(func)
     }
 }
 
