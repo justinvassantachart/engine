@@ -44,7 +44,7 @@ pub fn parse_debug_info(wasm_bytes: &[u8]) -> anyhow::Result<DebugInfo> {
     let dwarf =
         dwarf_sections.borrow(|section| EndianSlice::new(Cow::as_ref(section), LittleEndian));
 
-    let mut file_map: HashMap<String, u32> = HashMap::new();
+    let mut file_map: HashMap<String, usize> = HashMap::new();
 
     let mut units = dwarf.units();
     while let Some(header) = units.next()? {
@@ -68,7 +68,7 @@ pub fn parse_debug_info(wasm_bytes: &[u8]) -> anyhow::Result<DebugInfo> {
 // .debug_info: type collection (flat pass)
 // ============================================================================
 
-type TypeMap<Offset> = HashMap<gimli::UnitOffset<Offset>, u32>;
+type TypeMap<Offset> = HashMap<gimli::UnitOffset<Offset>, usize>;
 
 /// Flat scan of all DIEs in a unit to collect type information.
 /// Concrete types (base, pointer, struct, enum, array) → pushed to `info.types`.
@@ -92,7 +92,7 @@ fn parse_unit_types<R: Reader>(
                 let byte_size = get_byte_size(entry).unwrap_or(0);
                 let encoding = get_type_encoding(entry);
 
-                let idx = info.types.len() as u32;
+                let idx = info.types.len();
                 info.types.push(DebugType {
                     name,
                     byte_size,
@@ -104,7 +104,7 @@ fn parse_unit_types<R: Reader>(
             }
             gimli::DW_TAG_pointer_type => {
                 let byte_size = get_byte_size(entry).unwrap_or(4);
-                let idx = info.types.len() as u32;
+                let idx = info.types.len();
                 info.types.push(DebugType {
                     name: "ptr".into(),
                     byte_size,
@@ -117,7 +117,7 @@ fn parse_unit_types<R: Reader>(
             gimli::DW_TAG_structure_type | gimli::DW_TAG_union_type | gimli::DW_TAG_class_type => {
                 let name = get_die_name(dwarf, unit, entry).unwrap_or_else(|| "<anon>".into());
                 let byte_size = get_byte_size(entry).unwrap_or(0);
-                let idx = info.types.len() as u32;
+                let idx = info.types.len();
                 info.types.push(DebugType {
                     name,
                     byte_size,
@@ -129,7 +129,7 @@ fn parse_unit_types<R: Reader>(
             }
             gimli::DW_TAG_reference_type | gimli::DW_TAG_rvalue_reference_type => {
                 let byte_size = get_byte_size(entry).unwrap_or(4);
-                let idx = info.types.len() as u32;
+                let idx = info.types.len();
                 info.types.push(DebugType {
                     name: "ref".into(),
                     byte_size,
@@ -142,7 +142,7 @@ fn parse_unit_types<R: Reader>(
             gimli::DW_TAG_enumeration_type => {
                 let name = get_die_name(dwarf, unit, entry).unwrap_or_else(|| "<enum>".into());
                 let byte_size = get_byte_size(entry).unwrap_or(4);
-                let idx = info.types.len() as u32;
+                let idx = info.types.len();
                 info.types.push(DebugType {
                     name,
                     byte_size,
@@ -154,7 +154,7 @@ fn parse_unit_types<R: Reader>(
             }
             gimli::DW_TAG_array_type => {
                 if let Some(byte_size) = get_byte_size(entry) {
-                    let idx = info.types.len() as u32;
+                    let idx = info.types.len();
                     info.types.push(DebugType {
                         name: "array".into(),
                         byte_size,
@@ -196,8 +196,8 @@ fn resolve_type_alias<Offset: Copy + Eq + std::hash::Hash>(
     offset: &gimli::UnitOffset<Offset>,
     type_map: &TypeMap<Offset>,
     alias_map: &HashMap<gimli::UnitOffset<Offset>, gimli::UnitOffset<Offset>>,
-    depth: u32,
-) -> Option<u32> {
+    depth: usize,
+) -> Option<usize> {
     if depth > 16 {
         return None;
     }
@@ -325,7 +325,7 @@ fn collect_variables<R: Reader>(
             )?;
             let ty = get_type_ref(node.entry())
                 .and_then(|offset| type_map.get(&offset).copied())
-                .unwrap_or(0);
+                .unwrap_or(0_usize);
 
             if let Some(name) = name {
                 if !location.is_empty() {
@@ -383,11 +383,11 @@ fn get_pc_range<R: Reader>(entry: &gimli::DebuggingInformationEntry<R>) -> Optio
     Some((low_pc, high_pc))
 }
 
-fn get_byte_size<R: Reader>(entry: &gimli::DebuggingInformationEntry<R>) -> Option<u32> {
+fn get_byte_size<R: Reader>(entry: &gimli::DebuggingInformationEntry<R>) -> Option<usize> {
     entry
         .attr(gimli::DW_AT_byte_size)?
         .udata_value()
-        .map(|v| v as u32)
+        .map(|v| v as usize)
 }
 
 fn get_type_encoding<R: Reader>(entry: &gimli::DebuggingInformationEntry<R>) -> TypeEncoding {
@@ -495,7 +495,7 @@ fn convert_expression<R: Reader>(
                     ops.push(DwarfOp::FrameOffset { offset });
                 }
                 gimli::Operation::WasmLocal { index } => {
-                    ops.push(DwarfOp::Wasm(WasmOp::Local(index)));
+                    ops.push(DwarfOp::Wasm(WasmOp::Local(index as usize)));
                 }
                 gimli::Operation::StackValue => {
                     ops.push(DwarfOp::StackValue);
@@ -517,7 +517,7 @@ fn parse_unit_lines<R: Reader>(
     dwarf: &gimli::Dwarf<R>,
     unit: &gimli::Unit<R>,
     info: &mut DebugInfo,
-    file_map: &mut HashMap<String, u32>,
+    file_map: &mut HashMap<String, usize>,
 ) -> Result<(), gimli::Error> {
     let Some(program) = unit.line_program.clone() else {
         return Ok(());
@@ -538,16 +538,16 @@ fn parse_unit_lines<R: Reader>(
         let file_idx = if let Some(&idx) = file_map.get(&filename) {
             idx
         } else {
-            let idx = info.files.len() as u32;
+            let idx = info.files.len();
             info.files.push(filename.clone());
             file_map.insert(filename, idx);
             idx
         };
 
-        let line = row.line().map(|l| l.get()).unwrap_or(0) as u32;
+        let line = row.line().map(|l| l.get()).unwrap_or(0) as usize;
         let col = match row.column() {
             gimli::ColumnType::LeftEdge => 0,
-            gimli::ColumnType::Column(c) => c.get() as u32,
+            gimli::ColumnType::Column(c) => c.get() as usize,
         };
 
         info.locations.push(LocationInfo {

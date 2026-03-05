@@ -67,7 +67,7 @@ pub enum WorkerOut<'a> {
     #[serde(rename = "breakpoint")]
     Breakpoint {
         /// 0-based index into the locations array
-        location_index: u32,
+        location_index: usize,
     },
 
     #[serde(rename = "stop")]
@@ -90,9 +90,9 @@ impl<'a> WorkerOut<'a> {
 #[derive(Debug, Clone, Tsify, Serialize)]
 pub struct LocationInfo {
     /// Index into [DebugInfo::files]
-    pub file: u32,
-    pub line: u32,
-    pub col: u32,
+    pub file: usize,
+    pub line: usize,
+    pub col: usize,
     /// Byte offset into the WASM code section for instrumentation
     pub address: usize,
 }
@@ -143,11 +143,11 @@ pub enum DwarfOp {
 #[derive(Debug, Clone, Tsify, Serialize)]
 pub enum WasmOp {
     /// The index of a local in the currently executing function.
-    Local(u32),
+    Local(usize),
     /// The index of a global.
-    Global(u32),
+    Global(usize),
     /// The index of an item on the operand stack. 0 is the bottom of the operand stack.
-    Stack(u32),
+    Stack(usize),
 }
 
 /// A location expression valid over a specific PC range.
@@ -177,7 +177,7 @@ pub struct DebugFunction {
 #[derive(Debug, Clone)]
 pub struct DebugFrame {
     /// The total size in bytes of the stack frame, including it's 32-bit tag
-    pub size: u32,
+    pub size: usize,
     /// DWARF expression for the function's frame base (`DW_AT_frame_base`)
     pub base: Vec<VarLocationRange>,
     /// The entries in this stack frame
@@ -187,7 +187,7 @@ pub struct DebugFrame {
 #[derive(Debug, Clone)]
 pub struct DebugFrameEntry {
     /// The byte offset of this entry in its containing stack frame
-    pub offset: u32,
+    pub offset: usize,
     /// The WebAssembly type of the value stored by the entry
     pub ty: wasmparser::ValType,
     /// The WebAssembly location (local, global, or stack) represented by this entry's value
@@ -204,13 +204,13 @@ pub struct DebugFrameEntry {
     /// might have type [wasmparser::ValType::I32] at the beginning of a function, but change to
     /// [wasmparser::ValType::F64] later on in the function as values are shifted on and off
     /// the operand stack.
-    pub lifetime: Vec<u32>,
+    pub lifetime: Vec<usize>,
 }
 
 #[derive(Debug, Clone, Tsify, Serialize)]
 pub struct DebugVariable {
     /// Index into [DebugInfo::types]
-    pub ty: u32,
+    pub ty: usize,
     pub name: String,
     /// Where and when the variable's value can be read.
     /// Empty if the variable is always optimized out.
@@ -231,9 +231,9 @@ pub enum TypeEncoding {
 #[derive(Debug, Clone, Tsify, Serialize)]
 pub struct DebugType {
     pub name: String,
-    pub byte_size: u32,
+    pub byte_size: usize,
     // useful for showing the type in the debugger
     pub encoding: TypeEncoding,
-    pub offset: u32,
+    pub offset: usize,
     pub fields: Vec<DebugType>,
 }

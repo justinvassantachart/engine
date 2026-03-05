@@ -66,8 +66,8 @@ fn create_stack_pointer(info: &DebugInfo) -> Result<WebAssembly::Global, JsValue
 
 impl Debugger {
     pub fn new(info: DebugInfo) -> Self {
-        let buffer_size = SENTINEL_BYTES + info.locations.len() as u32;
-        let buffer = SharedArrayBuffer::new(buffer_size);
+        let buffer_size = (SENTINEL_BYTES as usize) + info.locations.len();
+        let buffer = SharedArrayBuffer::new(buffer_size as u32);
 
         Self {
             main_memory: create_memory(info.memory.main).expect("Created program memory"),
@@ -114,7 +114,7 @@ impl Debugger {
                 store,
                 &env,
                 |env: FunctionEnvMut<Debugger>, index: i32| {
-                    env.data().bkpt(index as u32);
+                    env.data().bkpt(index as usize);
                 },
             ),
         );
@@ -131,8 +131,8 @@ impl Debugger {
     }
 
     /// Check if a breakpoint at the given index is enabled
-    pub fn bkpt_enabled(&self, index: u32) -> bool {
-        if index as usize > self.info.locations.len() {
+    pub fn bkpt_enabled(&self, index: usize) -> bool {
+        if index > self.info.locations.len() {
             return false;
         }
 
@@ -141,7 +141,7 @@ impl Debugger {
             SENTINEL_BYTES,
             self.info.locations.len() as u32,
         );
-        flags.get_index(index) != 0
+        flags.get_index(index as u32) != 0
     }
 
     /// Blocks until TypeScript signals resume via `Atomics.notify()` on the sentinel.
@@ -154,7 +154,7 @@ impl Debugger {
     /// Check if breakpoint is enabled, and if so, wait for resume.
     ///
     /// This is the main entry point called from instrumented WASM code.
-    pub fn bkpt(&self, index: u32) -> bool {
+    pub fn bkpt(&self, index: usize) -> bool {
         if !self.bkpt_enabled(index) {
             return false;
         }

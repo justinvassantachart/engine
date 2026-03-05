@@ -23,16 +23,16 @@ struct Instrumenter<'a> {
     code_section_start: usize,
 
     /// Map from code-section byte offset to breakpoint index (1-based; 0 is sentinel).
-    breakpoints: HashMap<usize, u32>,
+    breakpoints: HashMap<usize, usize>,
 }
 
 impl<'a> Instrumenter<'a> {
     fn new(info: &'a mut DebugInfo) -> Self {
-        let breakpoints: HashMap<usize, u32> = info
+        let breakpoints: HashMap<usize, usize> = info
             .locations
             .iter()
             .enumerate()
-            .map(|(i, loc)| (loc.address, i as u32))
+            .map(|(i, loc)| (loc.address, i))
             .collect();
         Self {
             info,
@@ -322,7 +322,7 @@ impl<'a, 'b, 'c> FnInstrumenter<'a, 'b, 'c> {
         self.stack_intructions.push(instr_count + 1);
     }
 
-    fn emit_bkpt(&mut self, bkpt_idx: u32) {
+    fn emit_bkpt(&mut self, bkpt_idx: usize) {
         // High-level goal:
         // Loop through all variables of the function.
         // For every variable with an active location at this point in the

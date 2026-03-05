@@ -34,7 +34,7 @@ fn main() {
     println!("=== DWARF locations ({}) ===", locations.len());
     for (i, loc) in locations.iter().enumerate() {
         let fname = files
-            .get(loc.file as usize)
+            .get(loc.file)
             .map(|s| s.as_str())
             .unwrap_or("?");
         println!(
@@ -90,7 +90,7 @@ fn main() {
 
     // Group breakpoints by file, then collect lines with breakpoints
     // file_index -> sorted set of lines
-    let mut by_file: BTreeMap<u32, BTreeSet<u32>> = BTreeMap::new();
+    let mut by_file: BTreeMap<usize, BTreeSet<usize>> = BTreeMap::new();
     for idx in &bkpt_indices {
         let loc_idx = (*idx - 1) as usize;
         if let Some(loc) = locations.get(loc_idx) {
@@ -99,7 +99,7 @@ fn main() {
     }
 
     // Also collect ALL dwarf lines per file (including ones that may not have been injected)
-    let mut all_lines_by_file: BTreeMap<u32, BTreeSet<u32>> = BTreeMap::new();
+    let mut all_lines_by_file: BTreeMap<usize, BTreeSet<usize>> = BTreeMap::new();
     for loc in &locations {
         all_lines_by_file
             .entry(loc.file)
@@ -114,7 +114,7 @@ fn main() {
     );
 
     // Build a map of (file, line) -> count of breakpoints on that line
-    let mut line_counts: BTreeMap<(u32, u32), u32> = BTreeMap::new();
+    let mut line_counts: BTreeMap<(usize, usize), usize> = BTreeMap::new();
     for idx in &bkpt_indices {
         let loc_idx = (*idx - 1) as usize;
         if let Some(loc) = locations.get(loc_idx) {
@@ -124,7 +124,7 @@ fn main() {
 
     for (file_idx, breakpoint_lines) in &by_file {
         let fname = files
-            .get(*file_idx as usize)
+            .get(*file_idx)
             .map(|s| s.as_str())
             .unwrap_or("?");
 
@@ -156,7 +156,7 @@ fn main() {
                 println!("Missed DWARF locations (no breakpoint injected):");
             }
             let fname = files
-                .get(loc.file as usize)
+                .get(loc.file)
                 .map(|s| s.as_str())
                 .unwrap_or("?");
             println!(
