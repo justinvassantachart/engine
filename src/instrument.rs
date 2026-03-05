@@ -323,6 +323,17 @@ impl<'a, 'b, 'c> FnInstrumenter<'a, 'b, 'c> {
     }
 
     fn emit_bkpt(&mut self, bkpt_idx: u32) {
+        // High-level goal:
+        // Loop through all variables of the function.
+        // For every variable with an active location at this point in the
+        // program, insert instrumentation code to store the WASM internals
+        // needed to derive the variable's value at runtime onto the debug
+        // stack frame of this function.
+        //
+        // All instrumentation code must have no observable side effects.
+        // In particular, all values of locals must be preserved and the
+        // state of the operand stack must be preserved.
+
         self.instructions
             .push(Instruction::I32Const(bkpt_idx as i32));
         self.instructions
@@ -368,7 +379,7 @@ impl<'a, 'b, 'c> FnInstrumenter<'a, 'b, 'c> {
             }
 
             // Pass this operator to the wasmparser validator. It will internally
-            // update the binary to keep track of operand stack types, depth, etc.
+            // update its state to keep track of operand stack types, depth, etc.
             // according to the instruction given.
             //
             // It is important that this is run *after* doing instrumentation code for
