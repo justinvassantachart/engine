@@ -1,6 +1,9 @@
 use crate::types::{DebugFunction, DebugInfo};
 use std::collections::HashMap;
-use wasm_encoder::{Instruction, MemArg, reencode};
+use wasm_encoder::{
+    Instruction, MemArg,
+    reencode::{self, Reencode},
+};
 
 // ============================================================================
 // WASM Instrumentation
@@ -276,11 +279,13 @@ impl<'a, 'b, 'c> FnInstrumenter<'a, 'b, 'c> {
         debug_func_idx: usize,
         func_body: wasmparser::FunctionBody<'c>,
     ) -> Result<Self, reencode::Error> {
-        let validator = instr
+        let mut validator = instr
             .validator
             .code_section_entry(&func_body)
             .map_err(reencode::Error::from)?
             .into_validator(Default::default());
+
+        validator.read_locals(&mut func_body.get_binary_reader())?;
 
         Ok(Self {
             instr,
@@ -299,6 +304,7 @@ impl<'a, 'b, 'c> FnInstrumenter<'a, 'b, 'c> {
     }
 
     fn emit_header(&mut self) {
+        let instr_count = self.instructions.len();
         let frame_size = self.debug_func().frame.size;
         self.instructions.extend([
             Instruction::GlobalGet(self.instr.sp_gl_index),
@@ -313,6 +319,7 @@ impl<'a, 'b, 'c> FnInstrumenter<'a, 'b, 'c> {
                 memory_index: self.instr.stack_mem_index,
             }),
         ]);
+        self.stack_intructions.push(instr_count + 1);
     }
 
     fn emit_bkpt(&mut self, bkpt_idx: u32) {
@@ -323,6 +330,7 @@ impl<'a, 'b, 'c> FnInstrumenter<'a, 'b, 'c> {
     }
 
     fn emit_footer(&mut self) {
+        let instr_count = self.instructions.len();
         let frame_size = self.debug_func().frame.size;
         self.instructions.extend([
             Instruction::GlobalGet(self.instr.sp_gl_index),
@@ -330,6 +338,7 @@ impl<'a, 'b, 'c> FnInstrumenter<'a, 'b, 'c> {
             Instruction::I32Add,
             Instruction::GlobalSet(self.instr.sp_gl_index),
         ]);
+        self.stack_intructions.push(instr_count + 1);
     }
 
     fn instrument(mut self) -> Result<wasm_encoder::Function, reencode::Error> {
@@ -351,12 +360,22 @@ impl<'a, 'b, 'c> FnInstrumenter<'a, 'b, 'c> {
         }
 
         while !reader.eof() {
-            let (op, mut pos) = reader.read_with_offset().map_err(reencode::Error::from)?;
-            pos = self.instr.code_ofs(pos);
+            let (op, binary_ofs) = reader.read_with_offset().map_err(reencode::Error::from)?;
+            let code_ofs = self.instr.code_ofs(binary_ofs);
 
-            if let Some(&bkpt_idx) = self.instr.breakpoints.get(&pos) {
+            if let Some(&bkpt_idx) = self.instr.breakpoints.get(&code_ofs) {
                 self.emit_bkpt(bkpt_idx);
             }
+
+            // Pass this operator to the wasmparser validator. It will internally
+            // update the binary to keep track of operand stack types, depth, etc.
+            // according to the instruction given.
+            //
+            // It is important that this is run *after* doing instrumentation code for
+            // this instruction's breakpoint, if any, because breakpoints should stop the
+            // code immediately before the instruction has run. In other words, the
+            // instrumentation code should not have observed the effects of that instruction yet.
+            self.validator.op(binary_ofs, &op)?;
 
             match op {
                 wasmparser::Operator::Return => {
@@ -364,7 +383,10 @@ impl<'a, 'b, 'c> FnInstrumenter<'a, 'b, 'c> {
                     self.instructions.push(Instruction::Return);
                 }
                 wasmparser::Operator::ReturnCall { function_index } => {
-                    self.instructions.push(Instruction::Call(function_index));
+                    self.instructions.push(
+                        self.instr
+                            .instruction(wasmparser::Operator::Call { function_index })?,
+                    );
                     self.emit_footer();
                     self.instructions.push(Instruction::Return);
                 }
@@ -372,15 +394,20 @@ impl<'a, 'b, 'c> FnInstrumenter<'a, 'b, 'c> {
                     type_index,
                     table_index,
                 } => {
-                    self.instructions.push(Instruction::CallIndirect {
-                        type_index,
-                        table_index,
-                    });
+                    self.instructions.push(self.instr.instruction(
+                        wasmparser::Operator::CallIndirect {
+                            type_index,
+                            table_index,
+                        },
+                    )?);
                     self.emit_footer();
                     self.instructions.push(Instruction::Return);
                 }
                 wasmparser::Operator::ReturnCallRef { type_index } => {
-                    self.instructions.push(Instruction::CallRef(type_index));
+                    self.instructions.push(
+                        self.instr
+                            .instruction(wasmparser::Operator::CallRef { type_index })?,
+                    );
                     self.emit_footer();
                     self.instructions.push(Instruction::Return);
                 }
@@ -388,23 +415,44 @@ impl<'a, 'b, 'c> FnInstrumenter<'a, 'b, 'c> {
                     if reader.eof() {
                         self.emit_footer();
                     }
-                    self.instructions
-                        .push(reencode::Reencode::instruction(self.instr, op)?);
+                    self.instructions.push(self.instr.instruction(op)?);
                 }
                 _ => {
-                    self.instructions
-                        .push(reencode::Reencode::instruction(self.instr, op)?);
+                    self.instructions.push(self.instr.instruction(op)?);
                 }
             }
         }
 
         reader.finish()?;
 
-        let mut func =
-            reencode::utils::new_function_with_parsed_locals(self.instr, &self.func_body)?;
+        /* Adjust stack instructions to include stack size */
+        let frame_size = self.debug_func().frame.size;
+        for instr_index in self.stack_intructions {
+            let inst = &mut self.instructions[instr_index];
+            assert!(matches!(*inst, Instruction::I32Const(_)));
+            *inst = Instruction::I32Const(frame_size as i32);
+        }
+
+        /* Compute locals of emitted function (old locals + scratch locals) */
+        let mut locals: Vec<(u32, wasm_encoder::ValType)> = Vec::new();
+        for pair in self
+            .func_body
+            .get_locals_reader()
+            .map_err(reencode::Error::from)?
+        {
+            let (cnt, ty) = pair.map_err(reencode::Error::from)?;
+            locals.push((cnt, reencode::Reencode::val_type(self.instr, ty)?));
+        }
+        for ty in &self.scratch_locals {
+            locals.push((1, *ty));
+        }
+
+        /* Emit the new function with new instructions and return */
+        let mut func = wasm_encoder::Function::new(locals);
         for inst in &self.instructions {
             func.instruction(inst);
         }
+
         Ok(func)
     }
 }
