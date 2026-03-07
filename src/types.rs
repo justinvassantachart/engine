@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use serde_repr::Serialize_repr;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use tsify::Tsify;
 use wasm_bindgen::JsValue;
 use web_sys::DedicatedWorkerGlobalScope;
@@ -147,7 +147,7 @@ pub enum WasmOp {
     /// The index of a global.
     Global(usize),
     /// The index of an item on the operand stack. 0 is the bottom of the operand stack.
-    Stack(usize),
+    Operand(usize),
 }
 
 #[derive(Default, Debug, Clone)]
@@ -189,36 +189,6 @@ pub struct DebugFunction {
     pub frame: DebugFrame,
 }
 
-impl DebugFunction {
-    /// Returns the WebAssembly locations needed to evaluate this function's variables at `addr`
-    pub fn wasm_locations_at(&self, addr: usize) -> HashSet<WasmOp> {
-        let mut out = HashSet::new();
-        let fb = self.frame.base.location_at(addr);
-        for var in &self.variables {
-            if let Some(range) = var.location.location_at(addr) {
-                collect_wasm_ops(&range.ops, fb, &mut out);
-            }
-        }
-        out
-    }
-}
-
-fn collect_wasm_ops(ops: &[DwarfOp], fb: Option<&VarLocationRange>, out: &mut HashSet<WasmOp>) {
-    for op in ops {
-        match op {
-            DwarfOp::Wasm(w) => {
-                out.insert(w.clone());
-            }
-            DwarfOp::FrameOffset { .. } => {
-                if let Some(frame_base) = fb {
-                    collect_wasm_ops(&frame_base.ops, fb, out);
-                }
-            }
-            _ => {}
-        }
-    }
-}
-
 #[derive(Debug, Clone)]
 pub struct DebugFrame {
     /// The total size in bytes of the stack frame, including it's 32-bit tag
@@ -227,6 +197,49 @@ pub struct DebugFrame {
     pub base: VarLocation,
     /// The entries in this stack frame
     pub layout: Vec<DebugFrameEntry>,
+}
+
+impl DebugFrame {
+    /// Clears the layout of the stack frame and resets it to its minimum size.
+    pub fn reset(&mut self) {
+        self.size = 4; // Space for debug function index tag
+        self.layout.clear();
+    }
+
+    /// Returns a [DebugFrameEntry] with the given `loc` and `ty`. Allocates one if none exists.
+    /// Returns [None] if an entry could not be allocated for this `loc` and `ty`.
+    pub fn allocate(
+        &mut self,
+        loc: WasmOp,
+        ty: wasmparser::ValType,
+    ) -> Option<&mut DebugFrameEntry> {
+        use wasmparser::ValType;
+        if matches!(ty, ValType::Ref(_)) {
+            return None;
+        }
+        if let Some(pos) = self
+            .layout
+            .iter()
+            .position(|e| e.location == loc && e.ty == ty)
+        {
+            return Some(&mut self.layout[pos]);
+        }
+        let offset = self.size;
+        let size = match ty {
+            ValType::I32 | ValType::F32 => 4,
+            ValType::I64 | ValType::F64 => 8,
+            ValType::V128 => 16,
+            ValType::Ref(_) => unreachable!(),
+        };
+        self.size += size;
+        self.layout.push(DebugFrameEntry {
+            offset,
+            ty,
+            location: loc,
+            lifetime: vec![],
+        });
+        Some(self.layout.last_mut().unwrap())
+    }
 }
 
 #[derive(Debug, Clone)]

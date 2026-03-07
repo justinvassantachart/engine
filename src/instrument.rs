@@ -1,10 +1,9 @@
-use crate::types::{DebugFunction, DebugInfo};
-use std::collections::HashMap;
+use crate::types::{DebugFunction, DebugInfo, DwarfOp, WasmOp};
+use std::collections::{BTreeSet, HashMap};
 use wasm_encoder::{
     Instruction, MemArg,
     reencode::{self, Reencode},
 };
-use wasmparser::ModuleArity;
 
 // ============================================================================
 // WASM Instrumentation
@@ -262,6 +261,51 @@ impl<'a> reencode::Reencode for Instrumenter<'a> {
     }
 }
 
+#[derive(Default)]
+struct WasmLocations {
+    operands: BTreeSet<usize>,
+    locals: BTreeSet<usize>,
+    globals: BTreeSet<usize>,
+}
+
+impl DebugFunction {
+    /// Returns the WebAssembly locations needed to evaluate this function's variables at `addr`
+    fn wasm_locations_at(&self, addr: usize) -> WasmLocations {
+        let mut out = WasmLocations::default();
+        let fb = self.frame.base.location_at(addr);
+        for var in &self.variables {
+            if let Some(range) = var.location.location_at(addr) {
+                collect_wasm_locs(&range.ops, fb, &mut out);
+            }
+        }
+        out
+    }
+}
+
+fn collect_wasm_locs(
+    ops: &[DwarfOp],
+    fb: Option<&crate::types::VarLocationRange>,
+    out: &mut WasmLocations,
+) {
+    for op in ops {
+        match op {
+            DwarfOp::Wasm(loc) => {
+                match *loc {
+                    WasmOp::Global(idx) => out.globals.insert(idx),
+                    WasmOp::Local(idx) => out.locals.insert(idx),
+                    WasmOp::Operand(idx) => out.operands.insert(idx),
+                };
+            }
+            DwarfOp::FrameOffset { .. } => {
+                if let Some(frame_base) = fb {
+                    collect_wasm_locs(&frame_base.ops, fb, out);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
 struct FnInstrumenter<'a, 'b, 'c> {
     instr: &'a mut Instrumenter<'b>,
     debug_func_idx: usize,
@@ -353,12 +397,29 @@ impl<'a, 'b, 'c> FnInstrumenter<'a, 'b, 'c> {
         // All instrumentation code must have no observable side effects.
         // In particular, all values of locals must be preserved and the
         // state of the operand stack must be preserved.
-        let bkpt = &self.instr.info.locations[bkpt_idx];
+        let addr = self.instr.info.locations[bkpt_idx].address;
+        let locs = self.debug_func().wasm_locations_at(addr);
+
+        self.emit_operands(&locs);
+        self.emit_locals(&locs);
+        self.emit_globals(&locs);
 
         self.instructions
             .push(Instruction::I32Const(bkpt_idx as i32));
         self.instructions
             .push(Instruction::Call(self.instr.bkpt_fn_index));
+    }
+
+    fn emit_operands(&mut self, locs: &WasmLocations) {}
+    fn emit_locals(&mut self, locs: &WasmLocations) {}
+
+    fn emit_globals(&mut self, locs: &WasmLocations) {
+        for global_idx in &locs.globals {
+            self.instructions
+                .push(Instruction::GlobalGet(self.instr.sp_gl_index));
+            self.instructions
+                .push(Instruction::GlobalGet(*global_idx as u32));
+        }
     }
 
     fn emit_footer(&mut self) {
@@ -374,6 +435,9 @@ impl<'a, 'b, 'c> FnInstrumenter<'a, 'b, 'c> {
     }
 
     fn instrument(mut self) -> Result<wasm_encoder::Function, reencode::Error> {
+        // Clear the stack frame for this function
+        // This is a safety check to ensure we always start instrumentation at a known state.
+        self.debug_func().frame.reset();
         self.emit_header();
 
         let mut reader = self
