@@ -4,6 +4,7 @@ use wasm_encoder::{
     Instruction, MemArg,
     reencode::{self, Reencode},
 };
+use wasmparser::ModuleArity;
 
 // ============================================================================
 // WASM Instrumentation
@@ -91,16 +92,6 @@ fn count_global_imports(imports: &wasmparser::Imports<'_>) -> u32 {
 impl<'a> reencode::Reencode for Instrumenter<'a> {
     type Error = core::convert::Infallible;
 
-    fn parse_memory_section(
-        &mut self,
-        _memories: &mut wasm_encoder::MemorySection,
-        _section: wasmparser::MemorySectionReader<'_>,
-    ) -> Result<(), reencode::Error> {
-        // Note: The instrumented code has no defined memories,
-        // as we will be passing the program memory in via import to share it
-        Ok(())
-    }
-
     fn function_index(&mut self, func: u32) -> Result<u32, reencode::Error> {
         Ok(if func >= self.num_imported_functions {
             func + 1
@@ -115,6 +106,31 @@ impl<'a> reencode::Reencode for Instrumenter<'a> {
         } else {
             global
         })
+    }
+
+    fn parse_global_section(
+        &mut self,
+        globals: &mut wasm_encoder::GlobalSection,
+        section: wasmparser::GlobalSectionReader<'_>,
+    ) -> Result<(), reencode::Error<Self::Error>> {
+        self.validator
+            .global_section(&section)
+            .map_err(reencode::Error::from)?;
+        reencode::utils::parse_global_section(self, globals, section)
+    }
+
+    fn parse_memory_section(
+        &mut self,
+        _memories: &mut wasm_encoder::MemorySection,
+        section: wasmparser::MemorySectionReader<'_>,
+    ) -> Result<(), reencode::Error> {
+        self.validator
+            .memory_section(&section)
+            .map_err(reencode::Error::from)?;
+
+        // Note: The instrumented code has no defined memories,
+        // as we will be passing the program memory in via import to share it
+        Ok(())
     }
 
     fn parse_function_section(
@@ -232,6 +248,10 @@ impl<'a> reencode::Reencode for Instrumenter<'a> {
         let Some(debug_func_idx) = debug_func_idx else {
             // If this is not a function with a corresponding DWARF entry,
             // then we will not do any instrumentation on it and will just emit it as-is.
+            //
+            // Note that `wasmparser` still needs us to process this function,
+            // even if we do any validation with it
+            self.validator.code_section_entry(&func)?;
             return reencode::utils::parse_function_body(self, code, func);
         };
 
@@ -469,10 +489,7 @@ impl<'a, 'b, 'c> FnInstrumenter<'a, 'b, 'c> {
     }
 }
 
-/// Instrument a WASM binary by inserting `bkpt` calls at DWARF line boundaries.
-///
-/// Adds import: `(import "debug" "bkpt" (func (param i32)))`
-/// The i32 param is the breakpoint index (1-based, 0 is sentinel).
+/// Instrument a WASM binary to support debugging
 pub fn instrument_wasm(wasm_bytes: &[u8], debug_info: &mut DebugInfo) -> Result<Vec<u8>, String> {
     let mut instrumenter = Instrumenter::new(debug_info);
     let mut module = wasm_encoder::Module::new();
