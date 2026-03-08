@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use serde_repr::Serialize_repr;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use tsify::Tsify;
 use wasm_bindgen::JsValue;
 use web_sys::DedicatedWorkerGlobalScope;
@@ -206,13 +206,9 @@ impl DebugFrame {
         self.layout.clear();
     }
 
-    /// Returns a [DebugFrameEntry] with the given `loc` and `ty`. Allocates one if none exists.
-    /// Returns [None] if an entry could not be allocated for this `loc` and `ty`.
-    pub fn allocate(
-        &mut self,
-        loc: WasmOp,
-        ty: wasmparser::ValType,
-    ) -> Option<&mut DebugFrameEntry> {
+    /// Ensures an entry exists for `loc` and `ty`, adds `bkpt` to its lifetime, and returns its offset.
+    /// Returns [None] if an entry could not be created (e.g. for ref types).
+    pub fn place(&mut self, loc: WasmOp, ty: wasmparser::ValType, bkpt: usize) -> Option<usize> {
         use wasmparser::ValType;
         if matches!(ty, ValType::Ref(_)) {
             return None;
@@ -222,8 +218,10 @@ impl DebugFrame {
             .iter()
             .position(|e| e.location == loc && e.ty == ty)
         {
-            return Some(&mut self.layout[pos]);
+            self.layout[pos].lifetime.insert(bkpt);
+            return Some(self.layout[pos].offset);
         }
+
         let offset = self.size;
         let size = match ty {
             ValType::I32 | ValType::F32 => 4,
@@ -232,13 +230,15 @@ impl DebugFrame {
             ValType::Ref(_) => unreachable!(),
         };
         self.size += size;
-        self.layout.push(DebugFrameEntry {
+        let mut entry = DebugFrameEntry {
             offset,
             ty,
             location: loc,
-            lifetime: vec![],
-        });
-        Some(self.layout.last_mut().unwrap())
+            lifetime: HashSet::default(),
+        };
+        entry.lifetime.insert(bkpt);
+        self.layout.push(entry);
+        Some(offset)
     }
 }
 
@@ -262,7 +262,7 @@ pub struct DebugFrameEntry {
     /// might have type [wasmparser::ValType::I32] at the beginning of a function, but change to
     /// [wasmparser::ValType::F64] later on in the function as values are shifted on and off
     /// the operand stack.
-    pub lifetime: Vec<usize>,
+    pub lifetime: HashSet<usize>,
 }
 
 #[derive(Debug, Clone, Tsify, Serialize)]

@@ -4,10 +4,17 @@ use wasm_encoder::{
     Instruction, MemArg,
     reencode::{self, Reencode},
 };
+use wasmparser::ValType;
 
 type Error = anyhow::Error;
 type InstrError = reencode::Error<Error>;
 type InstrResult<T = ()> = Result<T, InstrError>;
+
+macro_rules! error {
+    ($($arg:tt)*) => {
+        Err(InstrError::UserError(Error::msg(format!($($arg)*))))
+    };
+}
 
 // ============================================================================
 // WASM Instrumentation
@@ -404,9 +411,9 @@ impl<'a, 'b, 'c> FnInstrumenter<'a, 'b, 'c> {
         let addr = self.instr.info.locations[bkpt_idx].address;
         let locs = self.debug_func().wasm_locations_at(addr);
 
-        self.emit_operands(&locs)?;
-        self.emit_locals(&locs)?;
-        self.emit_globals(&locs)?;
+        self.emit_operands(&locs, bkpt_idx)?;
+        self.emit_locals(&locs, bkpt_idx)?;
+        self.emit_globals(&locs, bkpt_idx)?;
 
         self.instructions
             .push(Instruction::I32Const(bkpt_idx as i32));
@@ -415,21 +422,110 @@ impl<'a, 'b, 'c> FnInstrumenter<'a, 'b, 'c> {
         Ok(())
     }
 
-    fn emit_operands(&mut self, _locs: &WasmLocations) -> InstrResult {
-        Ok(())
-    }
-    fn emit_locals(&mut self, _locs: &WasmLocations) -> InstrResult {
+    fn emit_operands(&mut self, locs: &WasmLocations, bkpt: usize) -> InstrResult {
+        let Some(&first) = locs.operands.first() else {
+            return Ok(());
+        };
+        let Some(&last) = locs.operands.last() else {
+            return Ok(());
+        };
+
+        let height = self.validator.operand_stack_height() as usize;
+
+        // If the highest operand index we need exceeds the number of operands we have
+        // available, then it will be impossible to recover an operand value
+        if last >= height {
+            return error!(
+                "Couldn't instrument operand {:?} with stack height {:?}",
+                last, height
+            );
+        }
+
+        let nlocals = self.validator.len_locals();
+
+        for operand_idx in (first..height).rev() {
+            let Some(Some(ty)) = self.validator.get_operand_type(height - operand_idx - 1) else {
+                return error!(
+                    "Couldn't instrument operand {:?}, unknown operand type",
+                    operand_idx
+                );
+            };
+
+            if !locs.operands.contains(&operand_idx) {}
+        }
+
         Ok(())
     }
 
-    fn emit_globals(&mut self, locs: &WasmLocations) -> InstrResult {
-        for global_idx in &locs.globals {
+    fn emit_locals(&mut self, locs: &WasmLocations, bkpt: usize) -> InstrResult {
+        for &local_idx in &locs.locals {
+            let Some(ty) = self.validator.get_local_type(local_idx as u32) else {
+                return error!("Couldn't get type of local {:?}", local_idx);
+            };
+
+            let Some(offset) = self
+                .debug_func()
+                .frame
+                .place(WasmOp::Local(local_idx), ty, bkpt)
+            else {
+                continue;
+            };
+
             self.instructions
                 .push(Instruction::GlobalGet(self.instr.sp_gl_index));
             self.instructions
-                .push(Instruction::GlobalGet(*global_idx as u32));
+                .push(Instruction::LocalGet(local_idx as u32));
+
+            self.emit_store(ty, offset);
         }
+
         Ok(())
+    }
+
+    fn emit_globals(&mut self, locs: &WasmLocations, bkpt: usize) -> InstrResult {
+        let Some(types) = self.instr.validator.types(0) else {
+            return error!("Could not get module types");
+        };
+
+        let globals: Vec<(usize, wasmparser::ValType)> = locs
+            .globals
+            .iter()
+            .map(|&idx| (idx, types.global_at(idx as u32).content_type))
+            .collect();
+
+        for (global_idx, ty) in globals {
+            let Some(offset) = self
+                .debug_func()
+                .frame
+                .place(WasmOp::Global(global_idx), ty, bkpt)
+            else {
+                continue;
+            };
+
+            self.instructions
+                .push(Instruction::GlobalGet(self.instr.sp_gl_index));
+            self.instructions
+                .push(Instruction::GlobalGet(global_idx as u32));
+            self.emit_store(ty, offset);
+        }
+
+        Ok(())
+    }
+
+    fn emit_store(&mut self, ty: ValType, offset: usize) {
+        let mem = MemArg {
+            offset: offset as u64,
+            align: 2,
+            memory_index: self.instr.stack_mem_index,
+        };
+        self.instructions.push(match ty {
+            ValType::I32 => Instruction::I32Store(mem),
+            ValType::F32 => Instruction::F32Store(mem),
+            ValType::I64 => Instruction::I64Store(mem),
+            ValType::F64 => Instruction::F64Store(mem),
+            ValType::V128 => Instruction::V128Store(mem),
+            ValType::Ref(_) => unreachable!(),
+        });
     }
 
     fn emit_footer(&mut self) {
