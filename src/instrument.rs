@@ -422,6 +422,18 @@ impl<'a, 'b, 'c> FnInstrumenter<'a, 'b, 'c> {
         Ok(())
     }
 
+    /// Emits instrumentation code to recover the operands in [WasmLocations::operands].
+    ///
+    /// The basic strategy is:
+    ///     - Pop all values off of the operand stack, storing each in a scratch local variable
+    ///     - If the popped value is one of the values we care about, then store it into the debug stack.
+    ///     - Push all values stoerd in scratch locals back onto the operand stack.
+    ///
+    /// Note that this approach will be underperformant for large stack sizes.
+    /// In the future, an optimization we can perform would be to recover an operand
+    /// preemptively as soon as it is pushed by recognizing in advance that its value will
+    /// be needed at a later point in the program. This would avoid the need to unroll the
+    /// stack in this manner.
     fn emit_operands(&mut self, locs: &WasmLocations, bkpt: usize) -> InstrResult {
         let Some(&first) = locs.operands.first() else {
             return Ok(());
@@ -432,7 +444,7 @@ impl<'a, 'b, 'c> FnInstrumenter<'a, 'b, 'c> {
 
         let height = self.validator.operand_stack_height() as usize;
 
-        // If the highest operand index we need exceeds the number of operands we have
+        // If the indices of the operands that we need exceed the number of operands we have
         // available, then it will be impossible to recover an operand value
         if first >= height || last >= height {
             return error!(
@@ -451,7 +463,10 @@ impl<'a, 'b, 'c> FnInstrumenter<'a, 'b, 'c> {
         let mut scratch_indices = HashSet::new();
         let mut scratch_map = HashMap::new();
 
+        // Loop through operands, starting from the top of the operand stack
+        // and ending with the bottom-most operand that we care about
         for operand_idx in (first..height).rev() {
+            // Get the type of this operand using
             let Some(Some(ty)) = self.validator.get_operand_type(height - operand_idx - 1) else {
                 return error!(
                     "Couldn't instrument operand {:?}, unknown operand type",
@@ -481,7 +496,15 @@ impl<'a, 'b, 'c> FnInstrumenter<'a, 'b, 'c> {
             self.instructions.push(Instruction::LocalSet(scratch_idx));
 
             // Store the operand value to the debug stack
-            if !locs.operands.contains(&operand_idx) {
+            if locs.operands.contains(&operand_idx) {
+                let Some(offset) =
+                    self.debug_func()
+                        .frame
+                        .place(WasmOp::Operand(operand_idx), ty, bkpt)
+                else {
+                    continue;
+                };
+
                 self.instructions
                     .push(Instruction::GlobalGet(self.instr.sp_gl_index));
                 self.instructions.push(Instruction::LocalGet(scratch_idx));
@@ -489,7 +512,9 @@ impl<'a, 'b, 'c> FnInstrumenter<'a, 'b, 'c> {
             }
         }
 
-        for operand_idx in (first..height) {
+        // Loop through operands, starting with the bottom-most operand that we care about
+        // and ending with the original top value in the stack
+        for operand_idx in first..height {
             let Some(&scratch_idx) = scratch_map.get(&operand_idx) else {
                 return error!(
                     "Could not recover operand {:?}: no corresponding scratch local",

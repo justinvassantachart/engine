@@ -206,8 +206,9 @@ impl DebugFrame {
         self.layout.clear();
     }
 
-    /// Ensures an entry exists for `loc` and `ty`, adds `bkpt` to its lifetime, and returns its offset.
-    /// Returns [None] if an entry could not be created (e.g. for ref types).
+    /// Ensures an entry exists for `loc` and `ty` and returns its offset.
+    /// `bkpt` will be added to the lifetime of the found or created entry.
+    /// Returns [None] if an entry could not be created (e.g. we cannot store wasm ref types).
     pub fn place(&mut self, loc: WasmOp, ty: wasmparser::ValType, bkpt: usize) -> Option<usize> {
         use wasmparser::ValType;
         if matches!(ty, ValType::Ref(_)) {
