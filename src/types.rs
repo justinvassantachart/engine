@@ -322,7 +322,7 @@ pub struct StackFrame {
     /// Index into [DebugInfo::functions]
     function: usize,
     /// List of live variables within this frame
-    variables: StackVariable,
+    variables: Vec<StackVariable>,
 }
 
 #[derive(Debug, Clone, Tsify, Serialize)]

@@ -97,8 +97,6 @@ fn parse_unit_types<R: Reader>(
                     name,
                     size: byte_size,
                     encoding,
-                    offset: 0,
-                    fields: vec![],
                 });
                 type_map.insert(offset, idx);
             }
@@ -108,9 +106,8 @@ fn parse_unit_types<R: Reader>(
                 info.types.push(DebugType {
                     name: "ptr".into(),
                     size: byte_size,
-                    encoding: TypeEncoding::Address,
-                    offset: 0,
-                    fields: vec![],
+                    // TODO: fixme
+                    encoding: TypeEncoding::Address { at: 0 },
                 });
                 type_map.insert(offset, idx);
             }
@@ -122,8 +119,6 @@ fn parse_unit_types<R: Reader>(
                     name,
                     size: byte_size,
                     encoding: TypeEncoding::Unknown,
-                    offset: 0,
-                    fields: vec![],
                 });
                 type_map.insert(offset, idx);
             }
@@ -133,9 +128,8 @@ fn parse_unit_types<R: Reader>(
                 info.types.push(DebugType {
                     name: "ref".into(),
                     size: byte_size,
-                    encoding: TypeEncoding::Address,
-                    offset: 0,
-                    fields: vec![],
+                    // TODO: fixme
+                    encoding: TypeEncoding::Address { at: 0 },
                 });
                 type_map.insert(offset, idx);
             }
@@ -147,8 +141,6 @@ fn parse_unit_types<R: Reader>(
                     name,
                     size: byte_size,
                     encoding: TypeEncoding::Unsigned,
-                    offset: 0,
-                    fields: vec![],
                 });
                 type_map.insert(offset, idx);
             }
@@ -159,8 +151,6 @@ fn parse_unit_types<R: Reader>(
                         name: "array".into(),
                         size: byte_size,
                         encoding: TypeEncoding::Unknown,
-                        offset: 0,
-                        fields: vec![],
                     });
                     type_map.insert(offset, idx);
                 }
@@ -400,7 +390,8 @@ fn get_type_encoding<R: Reader>(entry: &gimli::DebuggingInformationEntry<R>) -> 
             gimli::DW_ATE_unsigned | gimli::DW_ATE_unsigned_char => TypeEncoding::Unsigned,
             gimli::DW_ATE_float => TypeEncoding::Float,
             gimli::DW_ATE_boolean => TypeEncoding::Bool,
-            gimli::DW_ATE_address => TypeEncoding::Address,
+            // TODO: fixme
+            gimli::DW_ATE_address => TypeEncoding::Address { at: 0 },
             _ => TypeEncoding::Unknown,
         },
         _ => TypeEncoding::Unknown,
