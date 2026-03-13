@@ -278,13 +278,35 @@ pub struct DebugVariable {
     pub location: VarLocation,
 }
 
-#[derive(Debug, Clone, Copy, Tsify, Serialize)]
+#[derive(Debug, Clone, Tsify, Serialize)]
+pub struct ObjectField {
+    /// Byte offset into this type where the field is stored
+    offset: usize,
+    /// The name of this field
+    name: String,
+    /// The type of this object. Indexes into [DebugInfo::types]
+    ty: usize,
+}
+
+#[derive(Debug, Clone, Tsify, Serialize)]
+#[serde(tag = "type")]
 pub enum TypeEncoding {
+    #[serde(rename = "signed")]
     Signed,
+    #[serde(rename = "unsigned")]
     Unsigned,
+    #[serde(rename = "float")]
     Float,
+    #[serde(rename = "bool")]
     Bool,
-    Address,
+    #[serde(rename = "address")]
+    Address {
+        /// What type this pointer points at. Indexes into [DebugInfo::types]
+        at: usize,
+    },
+    #[serde(rename = "object")]
+    Object { fields: Vec<ObjectField> },
+    #[serde(rename = "unknown")]
     Unknown,
 }
 
@@ -292,10 +314,7 @@ pub enum TypeEncoding {
 pub struct DebugType {
     pub name: String,
     pub size: usize,
-    // useful for showing the type in the debugger
     pub encoding: TypeEncoding,
-    pub offset: usize,
-    pub fields: Vec<DebugType>,
 }
 
 #[derive(Debug, Clone, Tsify, Serialize)]
