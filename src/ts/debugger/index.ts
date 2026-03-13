@@ -1,6 +1,4 @@
-import EventEmitter from 'eventemitter3';
-
-// import EventEmitter from 'events';
+import EventEmitter from 'events';
 
 import type {
   DebugInfo as RustDebugInfo,
