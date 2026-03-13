@@ -7,7 +7,7 @@ import StopIcon from '@mui/icons-material/Stop';
 import { Box, Button, FormControl, InputLabel, MenuItem, Select, Typography } from '@mui/material';
 import CodeMirror from '@uiw/react-codemirror';
 import React, { useEffect, useRef, useState } from 'react';
-import { LocationInfo, Runtime } from 'runtime';
+import { LocationInfo, runDebuggerStitchingHarness, Runtime } from 'runtime';
 
 import Terminal, { TerminalHandle } from '@/components/Terminal';
 
@@ -135,6 +135,9 @@ export default function CodeEditor() {
       rt.debugger.addBreakpoint('main.c:6');
 
       const dbg = rt.debugger;
+      if (process.env.NODE_ENV !== 'production') {
+        runDebuggerStitchingHarness(dbg);
+      }
       dbg.on('breakpoint', (hit) => {
         setIsPaused(true);
         setPausedLocation(hit.location);

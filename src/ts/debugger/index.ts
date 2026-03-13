@@ -1,6 +1,13 @@
-import EventEmitter from 'events';
+import EventEmitter from 'eventemitter3';
 
-import type { LocationInfo as RustLocation, WorkerOut } from '../../../pkg/runtime';
+// import EventEmitter from 'events';
+
+import type {
+  DebugInfo as RustDebugInfo,
+  LocationInfo as RustLocation,
+  StackFrame as RustStackFrame,
+  WorkerOut,
+} from '../../../pkg/runtime';
 import { Internals } from '../internals';
 import { Breakpoint, BreakpointSpecifier } from './breakpoint';
 import { BreakpointHit } from './hit';
@@ -40,6 +47,18 @@ export class Debugger extends EventEmitter<DebuggerEventMap> {
   private _locations: Array<LocationInfo> = [];
   public get locations(): ReadonlyArray<LocationInfo> {
     return this._locations;
+  }
+
+  private _info?: RustDebugInfo;
+  /** Latest debug info sent by the worker (if any). */
+  public get info(): RustDebugInfo | undefined {
+    return this._info;
+  }
+
+  private _memory?: WebAssembly.Memory;
+  /** Program memory sent by the worker (if any). */
+  public get memory(): WebAssembly.Memory | undefined {
+    return this._memory;
   }
 
   private _breakpoints: Set<Breakpoint> = new Set();
@@ -101,6 +120,8 @@ export class Debugger extends EventEmitter<DebuggerEventMap> {
         address: loc.address,
       }));
 
+      this._info = data.info;
+      this._memory = data.memory as unknown as WebAssembly.Memory;
       this[Internals].sentinel = new Int32Array(data.breakpoint_buffer, 0, 1);
       this[Internals].flags = new Uint8Array(data.breakpoint_buffer, 4);
       this._breakpoints.forEach((bp) => bp[Internals].resolve());
@@ -108,11 +129,10 @@ export class Debugger extends EventEmitter<DebuggerEventMap> {
       return;
     }
 
-    // Generated WorkerOut type will include this variant after Rust rebuild
     if (data.type === 'breakpoint') {
       const loc = this._locations[data.location_index];
       if (!loc) return; // TODO: possible deadlock if no hit registered but worker waiting?
-      const hit = BreakpointHit[Internals].create(this, loc);
+      const hit = BreakpointHit[Internals].create(this, loc, data.frames as RustStackFrame[]);
       this.emit('breakpoint', hit, this);
     }
   }

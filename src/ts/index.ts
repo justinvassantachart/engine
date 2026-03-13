@@ -241,3 +241,4 @@ class StdinStream {
 }
 
 export * from './debugger';
+export * from './debugger/harness';
