@@ -68,6 +68,8 @@ pub enum WorkerOut<'a> {
     Breakpoint {
         /// 0-based index into [DebugInfo::locations] array
         location_index: usize,
+        /// List of active stack frames. The last one is most recent
+        frames: Vec<StackFrame>,
     },
 
     #[serde(rename = "stop")]
@@ -131,12 +133,11 @@ pub enum DwarfOp {
     /// Push a value stored in a WASM location.
     Wasm(WasmOp),
 
-    /// `DW_OP_fbreg +offset`: push frame_base + offset.
-    /// The instrumenter inlines the function's `frame_base` ops, then adds the offset.
+    /// `DW_OP_fbreg +offset`: push frame_base + offset
+    /// The instrumenter inlines the function's `frame_base` ops, then adds the offset
     FrameOffset { offset: i64 },
 
-    /// `DW_OP_stack_value`: marks the expression result as a value, not an address.
-    /// Without this, the instrumenter dereferences the result via `i32.load`.
+    /// `DW_OP_stack_value`: marks the expression result as a value, not an address
     StackValue,
 }
 
@@ -290,9 +291,76 @@ pub enum TypeEncoding {
 #[derive(Debug, Clone, Tsify, Serialize)]
 pub struct DebugType {
     pub name: String,
-    pub byte_size: usize,
+    pub size: usize,
     // useful for showing the type in the debugger
     pub encoding: TypeEncoding,
     pub offset: usize,
     pub fields: Vec<DebugType>,
+}
+
+#[derive(Debug, Clone, Tsify, Serialize)]
+pub struct StackFrame {
+    /// Index into [DebugInfo::functions]
+    function: usize,
+    /// List of live variables within this frame
+    variables: StackVariable,
+}
+
+#[derive(Debug, Clone, Tsify, Serialize)]
+pub struct StackVariable {
+    /// Index into [DebugFunction::variables] for this variable's function
+    index: usize,
+    /// List of pieces making up this variable's value
+    pieces: Vec<Piece>,
+}
+
+/// Represents a piece of a value that was reconstructed at runtime
+/// from a location expression.
+///
+/// These are sent directly to the client side JavaScript to be
+/// re-interpreted into the correct client interface.
+#[derive(Debug, Clone, Tsify, Serialize)]
+pub struct Piece {
+    /// If given, the size of the piece in bits.  If `None`, there
+    /// must be only one piece whose size is all of the object.
+    pub bit_size: Option<u64>,
+    /// If given, the bit offset of the piece within the location.
+    /// If the location is `Location::Value`,
+    /// then this offset is from the least significant bit end of
+    /// the register or value.
+    /// If the location is a `Location::Address` then the offset uses
+    /// the bit numbering and direction conventions of the language
+    /// and target system.
+    ///
+    /// If `None`, the piece starts at the location. If the
+    /// location is a register whose size is larger than the piece,
+    /// then placement within the register is defined by the ABI.
+    ///
+    /// Note that this determines which part of the **location** to extract
+    /// to determine the value of this piece. The placement of this piece
+    /// within the final value is determined by the sequence of pieces that
+    /// came before it and their `bit_size`s.
+    pub bit_offset: Option<u64>,
+    /// Where this piece is to be found.
+    pub location: PieceLocation,
+}
+
+#[derive(Debug, Clone, Tsify, Serialize)]
+#[serde(tag = "type")]
+pub enum PieceLocation {
+    /// The piece is empty. Ordinarily this means the piece has been optimized away.
+    #[serde(rename = "empty")]
+    Empty,
+    /// The piece is found in the program memory.
+    #[serde(rename = "address")]
+    Address {
+        /// The address.
+        address: u64,
+    },
+    /// The piece has no location but its value is known.
+    #[serde(rename = "value")]
+    Value {
+        /// The value.
+        value: u64,
+    },
 }

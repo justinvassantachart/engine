@@ -95,7 +95,7 @@ fn parse_unit_types<R: Reader>(
                 let idx = info.types.len();
                 info.types.push(DebugType {
                     name,
-                    byte_size,
+                    size: byte_size,
                     encoding,
                     offset: 0,
                     fields: vec![],
@@ -107,7 +107,7 @@ fn parse_unit_types<R: Reader>(
                 let idx = info.types.len();
                 info.types.push(DebugType {
                     name: "ptr".into(),
-                    byte_size,
+                    size: byte_size,
                     encoding: TypeEncoding::Address,
                     offset: 0,
                     fields: vec![],
@@ -120,7 +120,7 @@ fn parse_unit_types<R: Reader>(
                 let idx = info.types.len();
                 info.types.push(DebugType {
                     name,
-                    byte_size,
+                    size: byte_size,
                     encoding: TypeEncoding::Unknown,
                     offset: 0,
                     fields: vec![],
@@ -132,7 +132,7 @@ fn parse_unit_types<R: Reader>(
                 let idx = info.types.len();
                 info.types.push(DebugType {
                     name: "ref".into(),
-                    byte_size,
+                    size: byte_size,
                     encoding: TypeEncoding::Address,
                     offset: 0,
                     fields: vec![],
@@ -145,7 +145,7 @@ fn parse_unit_types<R: Reader>(
                 let idx = info.types.len();
                 info.types.push(DebugType {
                     name,
-                    byte_size,
+                    size: byte_size,
                     encoding: TypeEncoding::Unsigned,
                     offset: 0,
                     fields: vec![],
@@ -157,7 +157,7 @@ fn parse_unit_types<R: Reader>(
                     let idx = info.types.len();
                     info.types.push(DebugType {
                         name: "array".into(),
-                        byte_size,
+                        size: byte_size,
                         encoding: TypeEncoding::Unknown,
                         offset: 0,
                         fields: vec![],

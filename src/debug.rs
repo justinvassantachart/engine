@@ -161,6 +161,7 @@ impl Debugger {
 
         WorkerOut::Breakpoint {
             location_index: index,
+            frames: Vec::default(),
         }
         .send();
 
