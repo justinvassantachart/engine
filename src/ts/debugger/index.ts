@@ -118,10 +118,12 @@ export class Debugger extends EventEmitter<DebuggerEventMap> {
     }
 
     if (data.type === 'breakpoint') {
+      // Worker wrote breakpoint index and SP to breakpoints buffer (see debug.rs bkpt())
       const index = this[Internals].sentinel[2];
       const loc = this._locations[index];
       if (!loc) return; // TODO: possible deadlock if no hit registered but worker waiting?
-      const hit = BreakpointHit[Internals].create(this, loc, []);
+      const frames = this[Internals].host?.get_frames() ?? [];
+      const hit = BreakpointHit[Internals].create(this, loc, frames);
       this.emit('breakpoint', hit, this);
     }
   }

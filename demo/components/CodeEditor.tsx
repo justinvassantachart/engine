@@ -7,18 +7,24 @@ import StopIcon from '@mui/icons-material/Stop';
 import { Box, Button, FormControl, InputLabel, MenuItem, Select, Typography } from '@mui/material';
 import CodeMirror from '@uiw/react-codemirror';
 import React, { useEffect, useRef, useState } from 'react';
-import { LocationInfo, runDebuggerStitchingHarness, Runtime } from 'runtime';
+import { LocationInfo, Runtime } from 'runtime';
 
 import Terminal, { TerminalHandle } from '@/components/Terminal';
 
 const defaultCode = `#include <iostream>
 
+int ret1() {
+  int x = 1;
+  return x;
+}
 int main() {
-  int x;
-  std::cin >> x;
-  std::cout << x << std::endl;
+  int x = 1;
+  int y = ret1();
+  int sum = y + 1;
+  std::cout << (sum) << std::endl;
   return 0;
-}`;
+}
+`;
 
 type Language = 'C' | 'C++';
 
@@ -132,13 +138,15 @@ export default function CodeEditor() {
         // Ignore abort errors
       });
       rt.fs = { 'main.c': code };
-      rt.debugger.addBreakpoint('main.c:6');
+      rt.debugger.addBreakpoint('main.c:5');
 
       const dbg = rt.debugger;
-      if (process.env.NODE_ENV !== 'production') {
-        runDebuggerStitchingHarness(dbg);
-      }
       dbg.on('breakpoint', (hit) => {
+        // Debug: unwound call stack (functionIndex = index into DebugInfo.functions)
+        console.log(
+          'Frames:',
+          hit.frames.map((f) => ({ functionIndex: f.functionIndex }))
+        );
         setIsPaused(true);
         setPausedLocation(hit.location);
         terminalRef.current?.writeln(`\r\nPaused at ${hit.location.file}:${hit.location.line}`);

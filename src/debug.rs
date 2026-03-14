@@ -138,6 +138,22 @@ impl Debugger {
             return false;
         }
 
+        // Write breakpoint index and stack pointer into the breakpoints buffer so the
+        // main-thread host can read them when handling the Breakpoint message. The host
+        // runs get_frames() and has no access to the SP WebAssembly.Global (which lives
+        // in the worker's WASM instance), so we must communicate it via shared memory.
+        //
+        // Breakpoints buffer meta region (first 4 u32s): [Sentinel, Mode, Location, SP]
+        let meta =
+            js_sys::Uint32Array::new_with_byte_offset_and_length(&self.info.breakpoints, 0, 4);
+        let sp_value = js_sys::Reflect::get(self.stack_pointer.as_ref(), &"value".into())
+            .ok()
+            .and_then(|v| v.as_f64())
+            .map(|f| f as u32)
+            .unwrap_or(0);
+        meta.set_index(2, index as u32); // Index into DebugInfo.locations
+        meta.set_index(3, sp_value);     // Byte offset into stack buffer where current frame starts
+
         WorkerOut::Breakpoint.send();
         self.wait_for_resume();
         true
