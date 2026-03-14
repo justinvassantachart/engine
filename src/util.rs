@@ -37,8 +37,8 @@ pub mod val_type_serde {
     where
         D: Deserializer<'de>,
     {
-        let s = <&str>::deserialize(d)?;
-        Ok(match s {
+        let s = String::deserialize(d)?;
+        Ok(match s.as_str() {
             "i32" => ValType::I32,
             "i64" => ValType::I64,
             "f32" => ValType::F32,

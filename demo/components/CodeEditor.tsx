@@ -138,15 +138,23 @@ export default function CodeEditor() {
         // Ignore abort errors
       });
       rt.fs = { 'main.c': code };
-      rt.debugger.addBreakpoint('main.c:5');
+      rt.debugger.addBreakpoint('11');
 
       const dbg = rt.debugger;
       dbg.on('breakpoint', (hit) => {
-        // Debug: unwound call stack (functionIndex = index into DebugInfo.functions)
-        console.log(
-          'Frames:',
-          hit.frames.map((f) => ({ functionIndex: f.functionIndex }))
-        );
+        // Debug: unwound call stack + resolved variables
+        for (const frame of hit.frames) {
+          console.group(`Frame ${frame.frameIndex} (fn ${frame.functionIndex})`);
+          const vars = frame.variables();
+          if (vars.length === 0) {
+            console.log('  (no variables)');
+          } else {
+            for (const v of vars) {
+              console.log(`  ${v.ty} ${v.name} = ${v.value}`);
+            }
+          }
+          console.groupEnd();
+        }
         setIsPaused(true);
         setPausedLocation(hit.location);
         terminalRef.current?.writeln(`\r\nPaused at ${hit.location.file}:${hit.location.line}`);
