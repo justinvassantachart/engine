@@ -59,11 +59,6 @@ impl DebugHost {
         Ok(DebugHost { info })
     }
 
-    /// Walks the debug stack from the current frame upward through callers.
-    ///
-    /// Returns frames in order: innermost (current) first, then callers.
-    /// Requires the worker to have saved SP into the breakpoints buffer when the
-    /// breakpoint was hit (see `debug.rs` `bkpt()`).
     #[wasm_bindgen]
     pub fn get_frames(&mut self) -> Vec<StackFrame> {
         // Breakpoints buffer layout (first 16 bytes = 4 u32s):
@@ -101,13 +96,15 @@ impl DebugHost {
                 js_sys::Uint32Array::new_with_byte_offset_and_length(&stack_buf, offset, 1);
             let func_idx = u32_view.get_index(0);
             let Some(debug_fn) = self.info.functions.get(func_idx as usize) else {
-                break; // Caller may not be instrumented (e.g. startup code); stop unwinding
+                break;
             };
+
             let size = debug_fn.size as u32;
             frames.push(StackFrame {
                 name: format!("function_{}", func_idx),
                 function: func_idx,
             });
+
             offset += size;
             if size == 0 {
                 break;

@@ -150,7 +150,9 @@ pub enum WasmLocation {
 
 #[derive(Debug, Clone, Tsify, Serialize, Deserialize)]
 pub struct DebugFunction {
-    /// Offset of this function in the DWARF
+    /// Index of the DWARF unit containing this function
+    pub unit: usize,
+    /// Offset of this function within its DWARF unit
     pub offset: usize,
     /// Code section offset of the start of the function
     pub address: usize,
