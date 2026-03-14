@@ -1,6 +1,8 @@
 import EventEmitter from 'events';
 
 import type { LocationInfo as RustLocation, WorkerOut } from '../../../pkg/runtime';
+import init, { DebugHost } from '../../../pkg/runtime';
+import wasmBinary from '../../../pkg/runtime_bg.wasm';
 import { Internals } from '../internals';
 import { Breakpoint, BreakpointSpecifier } from './breakpoint';
 import { BreakpointHit } from './hit';
@@ -22,6 +24,9 @@ export class Debugger extends EventEmitter<DebuggerEventMap> {
   [Internals]: {
     addWorker(worker: Worker): void;
     removeWorker(worker: Worker): void;
+
+    /** Rust Host instance, created when DebugInfo arrives (after the wasm module has loaded). */
+    host: DebugHost | null;
 
     /**
      * Int32Array view over bytes 0..11 of the SharedArrayBuffer.
@@ -52,6 +57,7 @@ export class Debugger extends EventEmitter<DebuggerEventMap> {
     this[Internals] = {
       addWorker: this.addWorker.bind(this),
       removeWorker: this.removeWorker.bind(this),
+      host: null,
       sentinel: new Int32Array(),
       flags: new Uint8Array(),
     };
@@ -87,7 +93,7 @@ export class Debugger extends EventEmitter<DebuggerEventMap> {
     worker.addEventListener('message', this.onMessage);
   }
 
-  private onMessage(event: MessageEvent<WorkerOut>) {
+  private async onMessage(event: MessageEvent<WorkerOut>) {
     const data = event.data;
 
     if (data.type === 'debug') {
@@ -102,6 +108,8 @@ export class Debugger extends EventEmitter<DebuggerEventMap> {
       }));
 
       const info = data.info;
+      await init(wasmBinary);
+      this[Internals].host = new DebugHost(info);
       this[Internals].sentinel = new Int32Array(info.breakpoints, 0, 4);
       this[Internals].flags = new Uint8Array(info.breakpoints, 16);
       this._breakpoints.forEach((bp) => bp[Internals].resolve());
