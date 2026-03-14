@@ -42,17 +42,7 @@ pub enum WorkerOut<'a> {
         mode: StdoutMode,
     },
     #[serde(rename = "debug")]
-    Debug {
-        info: DebugInfo,
-        /// Bitfield where index N corresponds to breakpoint N.
-        /// Index 0 is a sentinel (always 0). Length = breakpoints.len() + 1.
-        #[serde(with = "serde_wasm_bindgen::preserve")]
-        breakpoint_buffer: js_sys::SharedArrayBuffer,
-
-        /// The main memory of the executing program
-        #[serde(with = "serde_wasm_bindgen::preserve")]
-        memory: js_sys::WebAssembly::Memory,
-    },
+    Debug { info: DebugInfo },
 
     /// Request the main thread to trigger a file download (workers have no document/window).
     #[serde(rename = "download")]
@@ -94,30 +84,37 @@ pub struct LocationInfo {
 }
 
 /// Debug information parsed from DWARF
-#[derive(Debug, Clone, Default, Tsify, Serialize)]
+#[derive(Debug, Clone, Tsify, Serialize)]
 pub struct DebugInfo {
-    pub memory: MemoryInfo,
     /// Breakpoint locations (file index, line, col, WASM address).
     pub locations: Vec<LocationInfo>,
     /// Deduplicated source filenames; index matches `LocationInfo::file`.
     pub files: Vec<String>,
     pub functions: Vec<DebugFunction>,
-}
 
-#[derive(Debug, Clone, Tsify, Serialize)]
-pub struct MemoryInfo {
-    pub main: wasmer::MemoryType,
-    pub debug: wasmer::MemoryType,
-}
+    /// SharedArrayBuffer that controls breakpoint operation in the debugger.
+    ///
+    /// - `[u32]` Mode:
+    ///   - `0` — Pause on breakpoints
+    ///   - `1` — Step into (pause on next location in program order)
+    ///   - `2` — Step over (pause when stack depth ≥ current)
+    ///   - `3` — Step out (pause when stack depth > current)
+    /// - `[u32]` Current breakpoint location
+    /// - `[u32]` The saved debug stack pointer (0 if not in breakpoint)
+    /// - `[u32] ...` How many times each breakpoint location has been selected by a breakpoint
+    #[serde(with = "serde_wasm_bindgen::preserve")]
+    pub breakpoints: js_sys::SharedArrayBuffer,
 
-impl Default for MemoryInfo {
-    fn default() -> Self {
-        Self {
-            main: wasmer::MemoryType::new(1, Some(1), true),
-            // Default debug stack size is 64 pages ~ 4MiB
-            debug: wasmer::MemoryType::new(64, Some(64), true),
-        }
-    }
+    /// The main memory of the executing program
+    #[serde(with = "serde_wasm_bindgen::preserve")]
+    pub memory: js_sys::WebAssembly::Memory,
+
+    /// The debug stack of the executing program
+    #[serde(with = "serde_wasm_bindgen::preserve")]
+    pub stack: js_sys::WebAssembly::Memory,
+
+    /// The raw DWARF binary of this object for use with a debugger
+    pub dwarf: Vec<u8>,
 }
 
 #[derive(Debug, Clone, Hash, Eq, PartialEq)]

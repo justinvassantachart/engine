@@ -1,16 +1,15 @@
-use crate::types::{
-    DebugFrame, DebugFunction, DebugInfo, DebugType, DebugVariable, DwarfOp, LocationInfo,
-    TypeEncoding, VarLocation, VarLocationRange, WasmOp,
-};
+use crate::types::{DebugFunction, DebugInfo, LocationInfo};
+use gimli::read::ReaderOffset;
 use gimli::{EndianSlice, LittleEndian, Reader};
 use std::borrow::Cow;
 use std::collections::HashMap;
 use wasmparser::{Parser, Payload};
 
-/// Parse DWARF debug info from WASM bytes
+/// Parse DWARF debug info from WASM bytes.
 pub fn parse_debug_info(wasm_bytes: &[u8]) -> anyhow::Result<DebugInfo> {
-    let mut info = DebugInfo::default();
     let mut sections: HashMap<&str, &[u8]> = HashMap::new();
+    let mut memory_initial = 0u32;
+    let mut memory_maximum = None::<u32>;
 
     for payload in Parser::new(0).parse_all(wasm_bytes) {
         let payload = payload?;
@@ -21,11 +20,8 @@ pub fn parse_debug_info(wasm_bytes: &[u8]) -> anyhow::Result<DebugInfo> {
             Payload::MemorySection(reader) => {
                 for mem in reader {
                     let mem = mem?;
-                    info.memory.main = wasmer::MemoryType::new(
-                        mem.initial as u32,
-                        mem.maximum.or(Some(16 * mem.initial)).map(|v| v as u32),
-                        true,
-                    );
+                    memory_initial = mem.initial as u32;
+                    memory_maximum = mem.maximum.map(|m| m as u32).or(Some(16 * memory_initial));
                     break;
                 }
             }
@@ -44,229 +40,100 @@ pub fn parse_debug_info(wasm_bytes: &[u8]) -> anyhow::Result<DebugInfo> {
     let dwarf =
         dwarf_sections.borrow(|section| EndianSlice::new(Cow::as_ref(section), LittleEndian));
 
+    let mut locations = Vec::new();
+    let mut files = Vec::new();
+    let mut functions = Vec::new();
     let mut file_map: HashMap<String, usize> = HashMap::new();
 
     let mut units = dwarf.units();
     while let Some(header) = units.next()? {
         let unit = dwarf.unit(header)?;
-
-        // Pass 1: flat scan to collect all type DIEs (base_type, pointer, struct, etc.)
-        // and record alias chains (typedef, const, volatile, restrict).
-        let mut type_map = HashMap::new();
-        parse_unit_types(&dwarf, &unit, &mut info, &mut type_map)?;
-
-        // Pass 2: tree walk for functions/variables, resolving DW_AT_type via type_map.
-        parse_unit_functions(&dwarf, &unit, &mut info, &type_map)?;
-
-        parse_unit_lines(&dwarf, &unit, &mut info, &mut file_map)?;
+        parse_unit_functions(&dwarf, &unit, &mut functions)?;
+        parse_unit_lines(&dwarf, &unit, &mut locations, &mut files, &mut file_map)?;
     }
 
-    Ok(info)
+    let breakpoints = create_breakpoints_buffer(locations.len());
+    let memory = create_wasm_memory(memory_initial, memory_maximum);
+    let stack = create_wasm_memory(1, Some(1));
+    let dwarf = collect_dwarf_bytes(&sections);
+
+    Ok(DebugInfo {
+        locations,
+        files,
+        functions,
+        breakpoints,
+        memory,
+        stack,
+        dwarf,
+    })
 }
 
-// ============================================================================
-// .debug_info: type collection (flat pass)
-// ============================================================================
+fn create_breakpoints_buffer(num_locations: usize) -> js_sys::SharedArrayBuffer {
+    // 3 u32s for metadata and rest is breakpoint status
+    js_sys::SharedArrayBuffer::new((12 + num_locations) as u32)
+}
 
-type TypeMap<Offset> = HashMap<gimli::UnitOffset<Offset>, usize>;
+fn create_wasm_memory(initial: u32, maximum: Option<u32>) -> js_sys::WebAssembly::Memory {
+    let desc = js_sys::Object::new();
+    js_sys::Reflect::set(&desc, &"initial".into(), &(initial as u32).into()).unwrap();
+    if let Some(max) = maximum {
+        js_sys::Reflect::set(&desc, &"maximum".into(), &(max as u32).into()).unwrap();
+    }
+    js_sys::WebAssembly::Memory::new(&desc).expect("create WebAssembly.Memory")
+}
 
-/// Flat scan of all DIEs in a unit to collect type information.
-/// Concrete types (base, pointer, struct, enum, array) → pushed to `info.types`.
-/// Alias types (typedef, const, volatile, restrict) → resolved via chain-following.
-fn parse_unit_types<R: Reader>(
-    dwarf: &gimli::Dwarf<R>,
-    unit: &gimli::Unit<R>,
-    info: &mut DebugInfo,
-    type_map: &mut TypeMap<R::Offset>,
-) -> Result<(), gimli::Error> {
-    let mut alias_map: HashMap<gimli::UnitOffset<R::Offset>, gimli::UnitOffset<R::Offset>> =
-        HashMap::new();
-
-    let mut entries = unit.entries();
-    while let Some(entry) = entries.next_dfs()? {
-        let offset = entry.offset();
-
-        match entry.tag() {
-            gimli::DW_TAG_base_type => {
-                let name = get_die_name(dwarf, unit, entry).unwrap_or_default();
-                let byte_size = get_byte_size(entry).unwrap_or(0);
-                let encoding = get_type_encoding(entry);
-
-                let idx = info.types.len();
-                info.types.push(DebugType {
-                    name,
-                    size: byte_size,
-                    encoding,
-                });
-                type_map.insert(offset, idx);
-            }
-            gimli::DW_TAG_pointer_type => {
-                let byte_size = get_byte_size(entry).unwrap_or(4);
-                let idx = info.types.len();
-                info.types.push(DebugType {
-                    name: "ptr".into(),
-                    size: byte_size,
-                    // TODO: fixme
-                    encoding: TypeEncoding::Address { at: 0 },
-                });
-                type_map.insert(offset, idx);
-            }
-            gimli::DW_TAG_structure_type | gimli::DW_TAG_union_type | gimli::DW_TAG_class_type => {
-                let name = get_die_name(dwarf, unit, entry).unwrap_or_else(|| "<anon>".into());
-                let byte_size = get_byte_size(entry).unwrap_or(0);
-                let idx = info.types.len();
-                info.types.push(DebugType {
-                    name,
-                    size: byte_size,
-                    encoding: TypeEncoding::Unknown,
-                });
-                type_map.insert(offset, idx);
-            }
-            gimli::DW_TAG_reference_type | gimli::DW_TAG_rvalue_reference_type => {
-                let byte_size = get_byte_size(entry).unwrap_or(4);
-                let idx = info.types.len();
-                info.types.push(DebugType {
-                    name: "ref".into(),
-                    size: byte_size,
-                    // TODO: fixme
-                    encoding: TypeEncoding::Address { at: 0 },
-                });
-                type_map.insert(offset, idx);
-            }
-            gimli::DW_TAG_enumeration_type => {
-                let name = get_die_name(dwarf, unit, entry).unwrap_or_else(|| "<enum>".into());
-                let byte_size = get_byte_size(entry).unwrap_or(4);
-                let idx = info.types.len();
-                info.types.push(DebugType {
-                    name,
-                    size: byte_size,
-                    encoding: TypeEncoding::Unsigned,
-                });
-                type_map.insert(offset, idx);
-            }
-            gimli::DW_TAG_array_type => {
-                if let Some(byte_size) = get_byte_size(entry) {
-                    let idx = info.types.len();
-                    info.types.push(DebugType {
-                        name: "array".into(),
-                        size: byte_size,
-                        encoding: TypeEncoding::Unknown,
-                    });
-                    type_map.insert(offset, idx);
-                }
-            }
-            gimli::DW_TAG_typedef
-            | gimli::DW_TAG_const_type
-            | gimli::DW_TAG_volatile_type
-            | gimli::DW_TAG_restrict_type => {
-                if let Some(target) = get_type_ref(entry) {
-                    alias_map.insert(offset, target);
-                }
-            }
-            _ => {}
+fn collect_dwarf_bytes(sections: &HashMap<&str, &[u8]>) -> Vec<u8> {
+    let mut out = Vec::new();
+    for name in [
+        ".debug_abbrev",
+        ".debug_info",
+        ".debug_line",
+        ".debug_line_str",
+        ".debug_str",
+    ] {
+        if let Some(data) = sections.get(name) {
+            out.extend_from_slice(data);
         }
     }
-
-    // Resolve alias chains: typedef → const → base_type etc.
-    let resolved: Vec<_> = alias_map
-        .keys()
-        .filter_map(|alias| {
-            resolve_type_alias(alias, type_map, &alias_map, 0).map(|idx| (*alias, idx))
-        })
-        .collect();
-    for (offset, idx) in resolved {
-        type_map.insert(offset, idx);
-    }
-
-    Ok(())
-}
-
-/// Follow alias chains (typedef → const → base_type) to find the concrete type index.
-fn resolve_type_alias<Offset: Copy + Eq + std::hash::Hash>(
-    offset: &gimli::UnitOffset<Offset>,
-    type_map: &TypeMap<Offset>,
-    alias_map: &HashMap<gimli::UnitOffset<Offset>, gimli::UnitOffset<Offset>>,
-    depth: usize,
-) -> Option<usize> {
-    if depth > 16 {
-        return None;
-    }
-    if let Some(&idx) = type_map.get(offset) {
-        return Some(idx);
-    }
-    let target = alias_map.get(offset)?;
-    resolve_type_alias(target, type_map, alias_map, depth + 1)
+    out
 }
 
 // ============================================================================
-// .debug_info: functions and variables (tree walk)
+// .debug_info: functions (address and DIE offset only)
 // ============================================================================
 
-/// Pass 2: walk the DIE tree and collect subprograms (functions).
-/// Recurses into namespace/module/class/struct/union so nested functions are found.
 fn parse_unit_functions<R: Reader>(
     dwarf: &gimli::Dwarf<R>,
     unit: &gimli::Unit<R>,
-    info: &mut DebugInfo,
-    type_map: &TypeMap<R::Offset>,
+    functions: &mut Vec<DebugFunction>,
 ) -> Result<(), gimli::Error> {
     let mut tree = unit.entries_tree(None)?;
     let root = tree.root()?;
     let mut children = root.children();
 
     while let Some(child) = children.next()? {
-        collect_subprograms_from_node(dwarf, unit, child, info, type_map)?;
+        collect_subprograms(dwarf, unit, child, functions)?;
     }
 
     Ok(())
 }
 
-/// Recursively find subprogram DIEs and push them to info.functions.
-/// Recurse into containers (namespace, module, class, struct, union) to find nested functions.
-fn collect_subprograms_from_node<R: Reader>(
+fn collect_subprograms<R: Reader>(
     dwarf: &gimli::Dwarf<R>,
     unit: &gimli::Unit<R>,
     node: gimli::EntriesTreeNode<'_, '_, R>,
-    info: &mut DebugInfo,
-    type_map: &TypeMap<R::Offset>,
+    functions: &mut Vec<DebugFunction>,
 ) -> Result<(), gimli::Error> {
     let tag = node.entry().tag();
 
     if tag == gimli::DW_TAG_subprogram {
-        let name = get_die_name(dwarf, unit, node.entry());
-        let pc_range = get_pc_range(node.entry());
-        let frame_base = parse_frame_base(node.entry(), unit.encoding());
-
-        if let (Some(name), Some((low_pc, high_pc))) = (name, pc_range) {
-            let mut variables = Vec::new();
-            let mut sub_children = node.children();
-            while let Some(var_node) = sub_children.next()? {
-                collect_variables(
-                    dwarf,
-                    unit,
-                    var_node,
-                    low_pc,
-                    high_pc,
-                    &mut variables,
-                    type_map,
-                )?;
-            }
-
-            let frame = DebugFrame {
-                size: 4, // Allocate space for function tag
-                base: VarLocation(vec![VarLocationRange {
-                    start: low_pc as usize,
-                    end: high_pc as usize,
-                    ops: frame_base,
-                }]),
-                layout: vec![],
-            };
-
-            info.functions.push(DebugFunction {
-                name,
+        if let Some((low_pc, _high_pc)) = get_pc_range(node.entry()) {
+            let offset = node.entry().offset().0.into_u64() as usize;
+            functions.push(DebugFunction {
+                offset,
                 address: low_pc as usize,
-                variables,
-                frame,
+                size: 4,
+                layout: vec![],
             });
         }
         return Ok(());
@@ -282,82 +149,11 @@ fn collect_subprograms_from_node<R: Reader>(
     ) {
         let mut children = node.children();
         while let Some(child) = children.next()? {
-            collect_subprograms_from_node(dwarf, unit, child, info, type_map)?;
+            collect_subprograms(dwarf, unit, child, functions)?;
         }
     }
 
     Ok(())
-}
-
-/// Recursively collect variables from a DIE node.
-/// Handles `DW_TAG_variable`, `DW_TAG_formal_parameter`, and descends into
-/// `DW_TAG_lexical_block` with narrowed scope ranges.
-fn collect_variables<R: Reader>(
-    dwarf: &gimli::Dwarf<R>,
-    unit: &gimli::Unit<R>,
-    node: gimli::EntriesTreeNode<'_, '_, R>,
-    scope_start: u64,
-    scope_end: u64,
-    variables: &mut Vec<DebugVariable>,
-    type_map: &TypeMap<R::Offset>,
-) -> Result<(), gimli::Error> {
-    let tag = node.entry().tag();
-
-    match tag {
-        gimli::DW_TAG_variable | gimli::DW_TAG_formal_parameter => {
-            let name = get_die_name(dwarf, unit, node.entry());
-            let location = parse_var_location(
-                dwarf,
-                unit,
-                node.entry(),
-                scope_start as usize,
-                scope_end as usize,
-            )?;
-            let ty = get_type_ref(node.entry())
-                .and_then(|offset| type_map.get(&offset).copied())
-                .unwrap_or(0_usize);
-
-            if let Some(name) = name {
-                if !location.is_optimized_out() {
-                    variables.push(DebugVariable { name, ty, location });
-                }
-            }
-        }
-        gimli::DW_TAG_lexical_block => {
-            let (block_start, block_end) =
-                get_pc_range(node.entry()).unwrap_or((scope_start, scope_end));
-
-            let mut children = node.children();
-            while let Some(child) = children.next()? {
-                collect_variables(
-                    dwarf,
-                    unit,
-                    child,
-                    block_start,
-                    block_end,
-                    variables,
-                    type_map,
-                )?;
-            }
-        }
-        _ => {}
-    }
-
-    Ok(())
-}
-
-// ============================================================================
-// DIE attribute helpers
-// ============================================================================
-
-fn get_die_name<R: Reader>(
-    dwarf: &gimli::Dwarf<R>,
-    unit: &gimli::Unit<R>,
-    entry: &gimli::DebuggingInformationEntry<R>,
-) -> Option<String> {
-    let attr = entry.attr(gimli::DW_AT_name)?;
-    let s = dwarf.attr_string(unit, attr.value()).ok()?;
-    Some(s.to_string_lossy().ok()?.into_owned())
 }
 
 fn get_pc_range<R: Reader>(entry: &gimli::DebuggingInformationEntry<R>) -> Option<(u64, u64)> {
@@ -373,133 +169,6 @@ fn get_pc_range<R: Reader>(entry: &gimli::DebuggingInformationEntry<R>) -> Optio
     Some((low_pc, high_pc))
 }
 
-fn get_byte_size<R: Reader>(entry: &gimli::DebuggingInformationEntry<R>) -> Option<usize> {
-    entry
-        .attr(gimli::DW_AT_byte_size)?
-        .udata_value()
-        .map(|v| v as usize)
-}
-
-fn get_type_encoding<R: Reader>(entry: &gimli::DebuggingInformationEntry<R>) -> TypeEncoding {
-    let Some(attr) = entry.attr(gimli::DW_AT_encoding) else {
-        return TypeEncoding::Unknown;
-    };
-    match attr.value() {
-        gimli::AttributeValue::Encoding(enc) => match enc {
-            gimli::DW_ATE_signed | gimli::DW_ATE_signed_char => TypeEncoding::Signed,
-            gimli::DW_ATE_unsigned | gimli::DW_ATE_unsigned_char => TypeEncoding::Unsigned,
-            gimli::DW_ATE_float => TypeEncoding::Float,
-            gimli::DW_ATE_boolean => TypeEncoding::Bool,
-            // TODO: fixme
-            gimli::DW_ATE_address => TypeEncoding::Address { at: 0 },
-            _ => TypeEncoding::Unknown,
-        },
-        _ => TypeEncoding::Unknown,
-    }
-}
-
-fn get_type_ref<R: Reader>(
-    entry: &gimli::DebuggingInformationEntry<R>,
-) -> Option<gimli::UnitOffset<R::Offset>> {
-    let attr = entry.attr(gimli::DW_AT_type)?;
-    match attr.value() {
-        gimli::AttributeValue::UnitRef(offset) => Some(offset),
-        _ => None,
-    }
-}
-
-fn parse_frame_base<R: Reader>(
-    entry: &gimli::DebuggingInformationEntry<R>,
-    encoding: gimli::Encoding,
-) -> Vec<DwarfOp> {
-    let Some(attr) = entry.attr(gimli::DW_AT_frame_base) else {
-        return vec![];
-    };
-    match attr.value() {
-        gimli::AttributeValue::Exprloc(expr) => convert_expression(expr, encoding),
-        _ => vec![],
-    }
-}
-
-/// Parse a variable's `DW_AT_location` into location ranges.
-/// Handles both simple expressions (`Exprloc`) and location lists (`LocationListsRef`).
-fn parse_var_location<R: Reader>(
-    dwarf: &gimli::Dwarf<R>,
-    unit: &gimli::Unit<R>,
-    entry: &gimli::DebuggingInformationEntry<R>,
-    default_start: usize,
-    default_end: usize,
-) -> Result<VarLocation, gimli::Error> {
-    let Some(attr) = entry.attr(gimli::DW_AT_location) else {
-        return Ok(VarLocation::default());
-    };
-
-    match attr.value() {
-        gimli::AttributeValue::Exprloc(expr) => {
-            let ops = convert_expression(expr, unit.encoding());
-            if ops.is_empty() {
-                return Ok(VarLocation::default());
-            }
-            Ok(VarLocation(vec![VarLocationRange {
-                start: default_start,
-                end: default_end,
-                ops,
-            }]))
-        }
-        gimli::AttributeValue::LocationListsRef(offset) => {
-            let mut ranges = Vec::new();
-            let mut locations = dwarf.locations(unit, offset)?;
-            while let Some(entry) = locations.next()? {
-                let ops = convert_expression(entry.data, unit.encoding());
-                if ops.is_empty() {
-                    continue;
-                }
-                ranges.push(VarLocationRange {
-                    start: entry.range.begin as usize,
-                    end: entry.range.end as usize,
-                    ops,
-                });
-            }
-            Ok(VarLocation(ranges))
-        }
-        _ => Ok(VarLocation::default()),
-    }
-}
-
-// ============================================================================
-// DWARF expression → DwarfOp conversion
-// ============================================================================
-
-/// Convert a DWARF expression into owned `DwarfOp` values.
-/// Returns empty vec if any unsupported operation is encountered
-/// (an incomplete expression is not semantically valid).
-fn convert_expression<R: Reader>(
-    expr: gimli::Expression<R>,
-    encoding: gimli::Encoding,
-) -> Vec<DwarfOp> {
-    let mut ops = Vec::new();
-    let mut iter = expr.operations(encoding);
-    loop {
-        match iter.next() {
-            Ok(Some(op)) => match op {
-                gimli::Operation::FrameOffset { offset } => {
-                    ops.push(DwarfOp::FrameOffset { offset });
-                }
-                gimli::Operation::WasmLocal { index } => {
-                    ops.push(DwarfOp::Wasm(WasmOp::Local(index as usize)));
-                }
-                gimli::Operation::StackValue => {
-                    ops.push(DwarfOp::StackValue);
-                }
-                _ => return vec![],
-            },
-            Ok(None) => break,
-            Err(_) => return vec![],
-        }
-    }
-    ops
-}
-
 // ============================================================================
 // .debug_line: breakpoint locations
 // ============================================================================
@@ -507,7 +176,8 @@ fn convert_expression<R: Reader>(
 fn parse_unit_lines<R: Reader>(
     dwarf: &gimli::Dwarf<R>,
     unit: &gimli::Unit<R>,
-    info: &mut DebugInfo,
+    locations: &mut Vec<LocationInfo>,
+    files: &mut Vec<String>,
     file_map: &mut HashMap<String, usize>,
 ) -> Result<(), gimli::Error> {
     let Some(program) = unit.line_program.clone() else {
@@ -529,8 +199,8 @@ fn parse_unit_lines<R: Reader>(
         let file_idx = if let Some(&idx) = file_map.get(&filename) {
             idx
         } else {
-            let idx = info.files.len();
-            info.files.push(filename.clone());
+            let idx = files.len();
+            files.push(filename.clone());
             file_map.insert(filename, idx);
             idx
         };
@@ -541,7 +211,7 @@ fn parse_unit_lines<R: Reader>(
             gimli::ColumnType::Column(c) => c.get() as usize,
         };
 
-        info.locations.push(LocationInfo {
+        locations.push(LocationInfo {
             file: file_idx,
             line,
             col,
