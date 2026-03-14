@@ -1,7 +1,7 @@
 use crate::debug::BREAKPOINT_PREFIX_BYTES;
 use crate::types::{DebugFunction, DebugInfo, LocationInfo, MemoryDescriptor};
 use gimli::read::ReaderOffset;
-use gimli::{EndianSlice, LittleEndian, Reader};
+use gimli::{EndianSlice, LittleEndian, Reader, SectionId};
 use std::borrow::Cow;
 use std::collections::HashMap;
 use wasmparser::{Parser, Payload};
@@ -88,23 +88,16 @@ fn collect_dwarf_bytes(sections: &HashMap<&str, &[u8]>) -> HashMap<String, Vec<u
     out
 }
 
-/// Rebuild a gimli::Dwarf from stored sections and run a callback with it.
-/// The Dwarf borrows from internal buffers and cannot be returned; use this to run logic that needs it.
-pub fn with_dwarf<R>(
-    bytes: &HashMap<String, Vec<u8>>,
-    f: impl FnOnce(&gimli::Dwarf<EndianSlice<'_, LittleEndian>>) -> R,
-) -> Result<R, gimli::Error> {
-    let load = |id: gimli::SectionId| {
-        Ok::<_, gimli::Error>(
-            bytes
-                .get(id.name())
-                .map(|v| Cow::Borrowed(v.as_slice()))
-                .unwrap_or(Cow::Borrowed(&[])),
-        )
+pub fn to_dwarf<'a>(
+    bytes: &'a HashMap<String, Vec<u8>>,
+) -> gimli::Dwarf<EndianSlice<'a, LittleEndian>> {
+    let load = |id: SectionId| -> Result<EndianSlice<'a, LittleEndian>, gimli::Error> {
+        let name = id.name();
+        let data = bytes.get(name).map(|v| &v[..]).unwrap_or(&[]);
+        Ok(EndianSlice::new(data, LittleEndian))
     };
-    let sections = gimli::DwarfSections::load(load)?;
-    let dwarf = sections.borrow(|s| EndianSlice::new(Cow::as_ref(s), LittleEndian));
-    Ok(f(&dwarf))
+
+    gimli::Dwarf::load(&load).unwrap()
 }
 
 // ============================================================================
