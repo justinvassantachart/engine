@@ -111,8 +111,6 @@ export class Debugger extends EventEmitter<DebuggerEventMap> {
     const data = event.data;
 
     if (data.type === 'debug') {
-      console.log(data);
-
       const { locations, files } = data.info;
       this._locations = locations.map((loc) => ({
         file: files[loc.file],

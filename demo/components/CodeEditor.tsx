@@ -2,37 +2,30 @@
 
 import { cpp } from '@codemirror/lang-cpp';
 import { oneDark } from '@codemirror/theme-one-dark';
+import { lineNumbers } from '@codemirror/view';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import StopIcon from '@mui/icons-material/Stop';
 import { Box, Button, FormControl, InputLabel, MenuItem, Select, Typography } from '@mui/material';
 import CodeMirror from '@uiw/react-codemirror';
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { LocationInfo, Runtime } from 'runtime';
+import type { Breakpoint, BreakpointHit } from 'runtime';
 
+import { breakpointGutterExtension } from '@/components/breakpointGutter';
 import Terminal, { TerminalHandle } from '@/components/Terminal';
-
-const defaultCode = `#include <iostream>
-
-int ret1() {
-  int x = 1;
-  return x;
-}
-int main() {
-  int x = 1;
-  int y = ret1();
-  int sum = y + 1;
-  std::cout << (sum) << std::endl;
-  return 0;
-}
-`;
+import VariablesPanel from '@/components/VariablesPanel';
+import { DEFAULT_SOURCE_CODE, DEMO_SOURCE_FILE } from '@/config/demoConfig';
 
 type Language = 'C' | 'C++';
 
 export default function CodeEditor() {
-  const [code, setCode] = useState<string>(defaultCode);
+  const [code, setCode] = useState<string>(DEFAULT_SOURCE_CODE);
   const [isRunning, setIsRunning] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
   const [pausedLocation, setPausedLocation] = useState<LocationInfo | null>(null);
+  /** Full breakpoint hit for Variables / Call stack panel (frames + variables). */
+  const [pausedHit, setPausedHit] = useState<BreakpointHit | null>(null);
+  const [breakpointLines, setBreakpointLines] = useState<number[]>([]);
   const [language, setLanguage] = useState<Language>('C++');
   const [terminalHeight, setTerminalHeight] = useState<number>(170);
   const terminalRef = useRef<TerminalHandle | null>(null);
@@ -47,6 +40,8 @@ export default function CodeEditor() {
   const containerRef = useRef<HTMLDivElement | null>(null);
   // Ref to store onData handler for cleanup (prevents duplicate handlers)
   const onDataHandlerRef = useRef<{ dispose: () => void } | null>(null);
+  // Map of line -> runtime Breakpoint for the current run (so we can add/remove while paused).
+  const runtimeBreakpointsRef = useRef<Map<number, Breakpoint>>(new Map());
 
   const handleLanguageChange = (newLanguage: Language) => {
     setLanguage(newLanguage);
@@ -67,7 +62,34 @@ export default function CodeEditor() {
     runtimeRef.current?.debugger.resume();
     setIsPaused(false);
     setPausedLocation(null);
+    setPausedHit(null);
   };
+
+  const toggleBreakpoint = useCallback((line: number) => {
+    setBreakpointLines((prev) => {
+      const hasLine = prev.includes(line);
+      const next = hasLine ? prev.filter((l) => l !== line) : [...prev, line].sort((a, b) => a - b);
+
+      // If a runtime is active, mirror the change into the debugger immediately so
+      // adding/removing breakpoints while paused takes effect without restarting.
+      const rt = runtimeRef.current;
+      if (rt) {
+        const map = runtimeBreakpointsRef.current;
+        if (!hasLine && !map.has(line)) {
+          const bp = rt.debugger.addBreakpoint(String(line));
+          map.set(line, bp);
+        } else if (hasLine) {
+          const existing = map.get(line);
+          if (existing) {
+            rt.debugger.removeBreakpoint(existing);
+            map.delete(line);
+          }
+        }
+      }
+
+      return next;
+    });
+  }, []);
 
   /**
    * Handle Run Button Click
@@ -91,7 +113,9 @@ export default function CodeEditor() {
       terminalRef.current?.writeln('Running...');
 
       const rt = Runtime.create('c');
+      rt.debug = breakpointLines.length > 0; // fast path when no breakpoints
       runtimeRef.current = rt;
+      runtimeBreakpointsRef.current = new Map();
 
       // Set up stdout/stderr streams to write to the terminal
       // Convert lone \n to \r\n for proper terminal display (xterm.js expects \r\n)
@@ -137,24 +161,17 @@ export default function CodeEditor() {
       rt.stderr.pipeTo(stderrStream, { signal }).catch(() => {
         // Ignore abort errors
       });
-      rt.fs = { 'main.c': code };
-      rt.debugger.addBreakpoint('12');
+      rt.fs = { [DEMO_SOURCE_FILE]: code };
+
+      // Seed debugger breakpoints for this run from the current React state.
+      for (const line of breakpointLines) {
+        const bp = rt.debugger.addBreakpoint(String(line));
+        runtimeBreakpointsRef.current.set(line, bp);
+      }
 
       const dbg = rt.debugger;
       dbg.on('breakpoint', (hit) => {
-        // Debug: unwound call stack + resolved variables
-        for (const frame of hit.frames) {
-          console.group(`Frame ${frame.frameIndex} (fn ${frame.functionIndex})`);
-          const vars = frame.variables();
-          if (vars.length === 0) {
-            console.log('  (no variables)');
-          } else {
-            for (const v of vars) {
-              console.log(`  ${v.ty} ${v.name} = ${v.value}`);
-            }
-          }
-          console.groupEnd();
-        }
+        setPausedHit(hit);
         setIsPaused(true);
         setPausedLocation(hit.location);
         terminalRef.current?.writeln(`\r\nPaused at ${hit.location.file}:${hit.location.line}`);
@@ -258,13 +275,11 @@ export default function CodeEditor() {
       // Worker will always send 'stop' message (on success or error)
       await rt.run();
     } catch (error) {
-      console.error('Failed to run code:', error);
-      // Check if error was due to user cancellation (Ctrl+C)
       if (wasStoppedByUserRef.current) {
-        // Execution was stopped by user, error message already shown
         return;
       }
-      terminalRef.current?.writeln('Error: So much stuff will be here once the runtime is wired.');
+      const message = error instanceof Error ? error.message : String(error);
+      terminalRef.current?.writeln(`\r\nError: ${message}`);
     } finally {
       // Clean up: dispose of the stdin event handler (must be in finally to ensure cleanup)
       // This prevents duplicate handlers on subsequent runs
@@ -282,6 +297,7 @@ export default function CodeEditor() {
       setIsRunning(false);
       setIsPaused(false);
       setPausedLocation(null);
+      setPausedHit(null);
     }
   };
 
@@ -334,7 +350,19 @@ export default function CodeEditor() {
     document.body.style.userSelect = 'none';
   };
 
-  const extensions = [cpp()];
+  const breakpointGutterConfig = useMemo(
+    () => ({
+      breakpointLines: new Set(breakpointLines),
+      pausedLine: pausedLocation?.line ?? null,
+      onToggleLine: toggleBreakpoint,
+    }),
+    [breakpointLines, pausedLocation?.line, toggleBreakpoint]
+  );
+
+  const extensions = useMemo(
+    () => [breakpointGutterExtension(breakpointGutterConfig), lineNumbers(), cpp()],
+    [breakpointGutterConfig]
+  );
 
   return (
     <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
@@ -473,94 +501,135 @@ export default function CodeEditor() {
           flex: 1,
           overflow: 'hidden',
           display: 'flex',
-          flexDirection: 'column',
+          flexDirection: 'row',
           position: 'relative',
         }}
       >
-        {/* Code Editor - takes remaining space */}
-        <Box sx={{ flex: 1, overflow: 'auto', background: 'rgba(10, 12, 18, 0.6)', minHeight: 0 }}>
-          <CodeMirror
-            value={code}
-            height="100%"
-            theme={oneDark}
-            extensions={extensions}
-            onChange={(value) => setCode(value)}
-            basicSetup={{
-              lineNumbers: true,
-              foldGutter: true,
-              dropCursor: false,
-              allowMultipleSelections: false,
-              indentOnInput: true,
-              bracketMatching: true,
-              closeBrackets: true,
-              autocompletion: true,
-              highlightSelectionMatches: true,
+        {/* Left: Editor + Output */}
+        <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+          {/* Code Editor - takes remaining space */}
+          <Box
+            sx={{ flex: 1, overflow: 'auto', background: 'rgba(10, 12, 18, 0.6)', minHeight: 0 }}
+          >
+            <CodeMirror
+              value={code}
+              height="100%"
+              theme={oneDark}
+              extensions={extensions}
+              onChange={(value) => setCode(value)}
+              basicSetup={{
+                lineNumbers: false,
+                foldGutter: true,
+                dropCursor: false,
+                allowMultipleSelections: false,
+                indentOnInput: true,
+                bracketMatching: true,
+                closeBrackets: true,
+                autocompletion: true,
+                highlightSelectionMatches: true,
+              }}
+            />
+          </Box>
+
+          {/* Draggable Resizer */}
+          <Box
+            onMouseDown={handleMouseDown}
+            sx={{
+              height: '4px',
+              cursor: 'row-resize',
+              backgroundColor: 'rgba(148, 163, 184, 0.15)',
+              position: 'relative',
+              '&:hover': {
+                backgroundColor: 'rgba(148, 163, 184, 0.3)',
+              },
+              '&::before': {
+                content: '""',
+                position: 'absolute',
+                top: '-2px',
+                left: 0,
+                right: 0,
+                height: '8px',
+                cursor: 'row-resize',
+              },
             }}
           />
+
+          {/* Output Header */}
+          <Box
+            sx={{
+              px: 2.5,
+              py: 0.75,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              borderTop: '1px solid rgba(148, 163, 184, 0.15)',
+              background: 'rgba(9, 11, 16, 0.75)',
+              flexShrink: 0,
+            }}
+          >
+            <Typography
+              variant="caption"
+              sx={{
+                color: 'rgba(255, 255, 255, 0.55)',
+                letterSpacing: '0.12em',
+                textTransform: 'uppercase',
+              }}
+            >
+              Output
+            </Typography>
+            <Typography
+              variant="caption"
+              sx={{
+                color: isPaused ? '#22c55e' : isRunning ? '#fbbf24' : 'rgba(255, 255, 255, 0.4)',
+              }}
+            >
+              {isPaused
+                ? `Paused at ${pausedLocation?.file}:${pausedLocation?.line}`
+                : isRunning
+                  ? 'Running'
+                  : 'Ready'}
+            </Typography>
+          </Box>
+
+          {/* Terminal - fixed height, resizable */}
+          <Terminal ref={terminalRef} height={terminalHeight} />
         </Box>
 
-        {/* Draggable Resizer */}
-        <Box
-          onMouseDown={handleMouseDown}
-          sx={{
-            height: '4px',
-            cursor: 'row-resize',
-            backgroundColor: 'rgba(148, 163, 184, 0.15)',
-            position: 'relative',
-            '&:hover': {
-              backgroundColor: 'rgba(148, 163, 184, 0.3)',
-            },
-            '&::before': {
-              content: '""',
-              position: 'absolute',
-              top: '-2px',
-              left: 0,
-              right: 0,
-              height: '8px',
-              cursor: 'row-resize',
-            },
-          }}
-        />
-
-        {/* Output Header */}
+        {/* Right: Variables / Call stack */}
         <Box
           sx={{
-            px: 2.5,
-            py: 0.75,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            borderTop: '1px solid rgba(148, 163, 184, 0.15)',
-            background: 'rgba(9, 11, 16, 0.75)',
+            width: 280,
             flexShrink: 0,
+            borderLeft: '1px solid rgba(148, 163, 184, 0.15)',
+            background: 'rgba(9, 11, 16, 0.85)',
+            display: 'flex',
+            flexDirection: 'column',
+            minHeight: 0,
           }}
         >
-          <Typography
-            variant="caption"
+          <Box
             sx={{
-              color: 'rgba(255, 255, 255, 0.55)',
-              letterSpacing: '0.12em',
-              textTransform: 'uppercase',
+              px: 1.5,
+              py: 0.75,
+              borderBottom: '1px solid rgba(148, 163, 184, 0.15)',
+              flexShrink: 0,
             }}
           >
-            Output
-          </Typography>
-          <Typography
-            variant="caption"
-            sx={{
-              color: isPaused ? '#22c55e' : isRunning ? '#fbbf24' : 'rgba(255, 255, 255, 0.4)',
-            }}
-          >
-            {isPaused
-              ? `Paused at ${pausedLocation?.file}:${pausedLocation?.line}`
-              : isRunning
-                ? 'Running'
-                : 'Ready'}
-          </Typography>
+            <Typography
+              variant="caption"
+              sx={{
+                color: 'rgba(255,255,255,0.55)',
+                textTransform: 'uppercase',
+                letterSpacing: '0.08em',
+              }}
+            >
+              Variables &amp; Call stack
+            </Typography>
+          </Box>
+          <Box sx={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
+            <VariablesPanel hit={pausedHit} />
+          </Box>
         </Box>
-
-        {/* Terminal - fixed height, resizable */}
-        <Terminal ref={terminalRef} height={terminalHeight} />
       </Box>
     </Box>
   );

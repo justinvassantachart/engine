@@ -160,6 +160,8 @@ pub struct DebugFunction {
     pub size: usize,
     /// The entries in this stack frame
     pub layout: Vec<DebugFrameEntry>,
+    /// Source name from DWARF (e.g. "main", "ret1"). Empty if not present.
+    pub name: String,
 }
 
 impl DebugFunction {

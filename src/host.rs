@@ -144,7 +144,7 @@ impl DebugHost {
 
             // Variables are resolved lazily via get_variables_for_frame() when the frame is expanded.
             frames.push(StackFrame {
-                name: format!("function_{}", func_idx),
+                name: debug_fn.name.clone(),
                 function: func_idx,
                 variables: vec![],
             });

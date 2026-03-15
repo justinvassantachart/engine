@@ -51,6 +51,11 @@ export class PausedStackFrame {
     return this.raw.function;
   }
 
+  /** Function name from DWARF (e.g. "main", "ret1"). */
+  public get name(): string {
+    return this.raw.name;
+  }
+
   /**
    * Variables for this frame, resolved lazily on first access via the host.
    * Each entry has `.name`, `.ty` (type name string), and `.value` (formatted string).
