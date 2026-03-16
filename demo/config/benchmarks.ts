@@ -105,4 +105,57 @@ int main() {
 }
 `.trim(),
   },
+  {
+    id: 'matmul_calls',
+    label: 'Matrix Multiply (calls)',
+    description: '80×80 matrix multiply with inner loop extracted into a function — 512k calls',
+    code: `
+#include <stdio.h>
+#define N 80
+
+static double a[N][N], b[N][N], c[N][N];
+
+__attribute__((noinline))
+double dot_step(double acc, double x, double y) {
+  return acc + x * y;
+}
+
+int main() {
+  for (int i = 0; i < N; i++)
+    for (int j = 0; j < N; j++) {
+      a[i][j] = i + j + 1;
+      b[i][j] = (i == j) ? 1.0 : 0.0;
+    }
+  for (int i = 0; i < N; i++)
+    for (int j = 0; j < N; j++) {
+      c[i][j] = 0.0;
+      for (int k = 0; k < N; k++)
+        c[i][j] = dot_step(c[i][j], a[i][k], b[k][j]);
+    }
+  printf("%.1f\\n", c[N - 1][N - 1]);
+  return 0;
+}
+`.trim(),
+  },
+  {
+    id: 'call_overhead',
+    label: 'Call Overhead',
+    description: 'Trivial function called 10M times — isolates per-call instrumentation cost',
+    code: `
+#include <stdio.h>
+
+__attribute__((noinline))
+int increment(int x) {
+  return x + 1;
+}
+
+int main() {
+  int sum = 0;
+  for (int i = 0; i < 10000000; i++)
+    sum = increment(sum);
+  printf("%d\\n", sum);
+  return 0;
+}
+`.trim(),
+  },
 ];

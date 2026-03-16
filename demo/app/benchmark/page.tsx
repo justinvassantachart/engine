@@ -291,11 +291,11 @@ export default function BenchmarkPage() {
   const [state, setState] = useState<BenchmarkState>({ phase: 'idle' });
   const cancelRef = useRef(false);
 
-  const runBenchmarks = useCallback(async () => {
+  const runBenchmarks = useCallback(async (subset = BENCHMARKS) => {
     cancelRef.current = false;
     const results: BenchmarkResult[] = [];
 
-    for (const bench of BENCHMARKS) {
+    for (const bench of subset) {
       if (cancelRef.current) break;
 
       const debugRuns: number[] = [];
@@ -375,10 +375,30 @@ export default function BenchmarkPage() {
               background: '#f9fafb',
               borderRadius: 6,
               border: '1px solid #e5e7eb',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 12,
             }}
           >
+            <button
+              onClick={() => runBenchmarks([b])}
+              disabled={state.phase === 'running'}
+              style={{
+                padding: '4px 12px',
+                background: state.phase === 'running' ? '#e5e7eb' : '#4f46e5',
+                color: state.phase === 'running' ? '#9ca3af' : '#fff',
+                border: 'none',
+                borderRadius: 4,
+                cursor: state.phase === 'running' ? 'not-allowed' : 'pointer',
+                fontWeight: 600,
+                fontSize: 12,
+                flexShrink: 0,
+              }}
+            >
+              Run
+            </button>
             <span style={{ fontWeight: 600 }}>{b.label}</span>
-            <span style={{ color: '#6b7280', fontSize: 13, marginLeft: 8 }}>{b.description}</span>
+            <span style={{ color: '#6b7280', fontSize: 13 }}>{b.description}</span>
           </div>
         ))}
       </div>
