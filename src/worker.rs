@@ -10,7 +10,6 @@ use crate::types::{FsNode, WorkerOut, WorkerStart};
 mod debug;
 pub mod dwarf;
 mod execution;
-mod host;
 pub mod instrument;
 mod io;
 mod runtime;

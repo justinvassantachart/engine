@@ -30,8 +30,6 @@ struct Instrumenter<'a> {
 
     num_imported_functions: u32,
     num_imported_globals: u32,
-    /// Total number of globals (imported + defined) after parsing all sections.
-    num_globals: u32,
 
     code_section_start: usize,
 
@@ -56,7 +54,6 @@ impl<'a> Instrumenter<'a> {
             sp_gl_index: 0,
             num_imported_functions: 0,
             num_imported_globals: 0,
-            num_globals: 0,
             code_section_start: 0,
             breakpoints,
         }
@@ -126,7 +123,6 @@ impl<'a> reencode::Reencode for Instrumenter<'a> {
         globals: &mut wasm_encoder::GlobalSection,
         section: wasmparser::GlobalSectionReader<'_>,
     ) -> InstrResult {
-        self.num_globals = self.num_imported_globals + section.count();
         self.validator
             .global_section(&section)
             .map_err(reencode::Error::from)?;
@@ -294,6 +290,19 @@ struct WasmLocations {
     globals: BTreeSet<usize>,
 }
 
+fn wasm_locations_for_bkpt(func: &DebugFunction, bkpt_idx: usize) -> WasmLocations {
+    let mut locs = WasmLocations::default();
+    for e in &func.layout {
+        if e.lifetime.contains(&bkpt_idx) {
+            match e.location {
+                WasmLocation::Operand(i) => locs.operands.insert(i),
+                WasmLocation::Local(i) => locs.locals.insert(i),
+                WasmLocation::Global(i) => locs.globals.insert(i),
+            };
+        }
+    }
+    locs
+}
 
 struct FnInstrumenter<'a, 'b, 'c> {
     instr: &'a mut Instrumenter<'b>,
@@ -376,18 +385,19 @@ impl<'a, 'b, 'c> FnInstrumenter<'a, 'b, 'c> {
     }
 
     fn emit_bkpt(&mut self, bkpt_idx: usize) -> InstrResult {
-        // Save every local and every original global to the debug stack frame so that
-        // `host.rs` can reconstruct variables from DWARF. Globals are needed for
-        // C variables that live in linear memory (accessed via the C stack pointer
-        // global as a frame-base address + DW_OP_plus_uconst offset).
-        let n_locals = self.validator.len_locals() as usize;
-        let n_globals = self.instr.num_globals as usize;
-        let locs = WasmLocations {
-            locals: (0..n_locals).collect(),
-            globals: (0..n_globals).collect(),
-            operands: BTreeSet::new(),
-        };
+        // High-level goal:
+        // Loop through all variables of the function.
+        // For every variable with an active location at this point in the
+        // program, insert instrumentation code to store the WASM internals
+        // needed to derive the variable's value at runtime onto the debug
+        // stack frame of this function.
+        //
+        // All instrumentation code must have no observable side effects.
+        // In particular, all values of locals must be preserved and the
+        // state of the operand stack must be preserved.
+        let locs = wasm_locations_for_bkpt(self.debug_func(), bkpt_idx);
 
+        self.emit_operands(&locs, bkpt_idx)?;
         self.emit_locals(&locs, bkpt_idx)?;
         self.emit_globals(&locs, bkpt_idx)?;
 
@@ -547,14 +557,10 @@ impl<'a, 'b, 'c> FnInstrumenter<'a, 'b, 'c> {
                 continue;
             };
 
-            // Use the instrumented index (non-imported globals are shifted +1 because
-            // we prepended our own debug-SP global import).
-            let instrumented_idx = self.instr.global_index(global_idx as u32)?;
-
             self.instructions
                 .push(Instruction::GlobalGet(self.instr.sp_gl_index));
             self.instructions
-                .push(Instruction::GlobalGet(instrumented_idx));
+                .push(Instruction::GlobalGet(global_idx as u32));
             self.emit_store(ty, offset);
         }
 

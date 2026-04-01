@@ -27,13 +27,6 @@ export class Runtime {
   public readonly lang: Lang;
 
   /**
-   * When `true` (default), the worker compiles with debug info and breakpoint
-   * instrumentation. When `false`, runs without DWARF/instrumentation (faster).
-   * Set to `false` for faster runs when you don't need breakpoints.
-   */
-  public debug = true;
-
-  /**
    * The *initial* filesystem that the code sees.
    *
    * This is neither updated while the code is running, nor
@@ -143,7 +136,7 @@ export class Runtime {
         const message: WorkerStart = {
           fs: this.fs,
           stdin_buffer: this.in.buffer,
-          is_debug: this.debug,
+          is_debug: true,
         };
         worker.postMessage(message);
       });

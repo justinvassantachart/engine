@@ -1,8 +1,6 @@
 import EventEmitter from 'events';
 
-import type { LocationInfo as RustLocation, Variable, WorkerOut } from '../../../pkg/runtime';
-import init, { DebugHost } from '../../../pkg/runtime';
-import wasmBinary from '../../../pkg/runtime_bg.wasm';
+import type { LocationInfo as RustLocation, WorkerOut } from '../../../pkg/runtime';
 import { Internals } from '../internals';
 import { Breakpoint, BreakpointSpecifier } from './breakpoint';
 import { BreakpointHit } from './hit';
@@ -24,9 +22,6 @@ export class Debugger extends EventEmitter<DebuggerEventMap> {
   [Internals]: {
     addWorker(worker: Worker): void;
     removeWorker(worker: Worker): void;
-
-    /** Rust Host instance, created when DebugInfo arrives (after the wasm module has loaded). */
-    host: DebugHost | null;
 
     /**
      * Int32Array view over bytes 0..11 of the SharedArrayBuffer.
@@ -57,7 +52,6 @@ export class Debugger extends EventEmitter<DebuggerEventMap> {
     this[Internals] = {
       addWorker: this.addWorker.bind(this),
       removeWorker: this.removeWorker.bind(this),
-      host: null,
       sentinel: new Int32Array(),
       flags: new Uint8Array(),
     };
@@ -89,28 +83,16 @@ export class Debugger extends EventEmitter<DebuggerEventMap> {
     Atomics.notify(this[Internals].sentinel, 0);
   }
 
-  /**
-   * Returns variables for the given frame index (0 = innermost). Used for lazy variable
-   * evaluation when a frame is expanded.
-   */
-  public getVariablesForFrame(frameIndex: number): Variable[] {
-    const host = this[Internals].host;
-    if (!host) return [];
-    return Array.from(
-      (
-        host as DebugHost & { get_variables_for_frame(i: number): Variable[] }
-      ).get_variables_for_frame(frameIndex)
-    ) as Variable[];
-  }
-
   private addWorker(worker: Worker): void {
     worker.addEventListener('message', this.onMessage);
   }
 
-  private async onMessage(event: MessageEvent<WorkerOut>) {
+  private onMessage(event: MessageEvent<WorkerOut>) {
     const data = event.data;
 
     if (data.type === 'debug') {
+      console.log(data);
+
       const { locations, files } = data.info;
       this._locations = locations.map((loc) => ({
         file: files[loc.file],
@@ -120,8 +102,6 @@ export class Debugger extends EventEmitter<DebuggerEventMap> {
       }));
 
       const info = data.info;
-      await init(wasmBinary);
-      this[Internals].host = new DebugHost(info);
       this[Internals].sentinel = new Int32Array(info.breakpoints, 0, 4);
       this[Internals].flags = new Uint8Array(info.breakpoints, 16);
       this._breakpoints.forEach((bp) => bp[Internals].resolve());
@@ -130,12 +110,10 @@ export class Debugger extends EventEmitter<DebuggerEventMap> {
     }
 
     if (data.type === 'breakpoint') {
-      // Worker wrote breakpoint index and SP to breakpoints buffer (see debug.rs bkpt())
       const index = this[Internals].sentinel[2];
       const loc = this._locations[index];
       if (!loc) return; // TODO: possible deadlock if no hit registered but worker waiting?
-      const frames = this[Internals].host?.get_frames() ?? [];
-      const hit = BreakpointHit[Internals].create(this, loc, frames);
+      const hit = BreakpointHit[Internals].create(this, loc, []);
       this.emit('breakpoint', hit, this);
     }
   }

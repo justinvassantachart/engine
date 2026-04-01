@@ -150,9 +150,7 @@ pub enum WasmLocation {
 
 #[derive(Debug, Clone, Tsify, Serialize, Deserialize)]
 pub struct DebugFunction {
-    /// Index of the DWARF unit containing this function
-    pub unit: usize,
-    /// Offset of this function within its DWARF unit
+    /// Offset of this function in the DWARF
     pub offset: usize,
     /// Code section offset of the start of the function
     pub address: usize,
@@ -160,8 +158,6 @@ pub struct DebugFunction {
     pub size: usize,
     /// The entries in this stack frame
     pub layout: Vec<DebugFrameEntry>,
-    /// Source name from DWARF (e.g. "main", "ret1"). Empty if not present.
-    pub name: String,
 }
 
 impl DebugFunction {
