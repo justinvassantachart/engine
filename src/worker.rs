@@ -7,6 +7,7 @@ use web_sys::{DedicatedWorkerGlobalScope, MessageEvent};
 use crate::execution::Execution;
 use crate::types::{FsNode, WorkerOut, WorkerStart};
 
+pub mod dap;
 mod debug;
 pub mod dwarf;
 mod execution;
