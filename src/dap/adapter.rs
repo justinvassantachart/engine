@@ -34,4 +34,14 @@ impl Adapter {
         let vars: Vec<Variable> = Vec::new(); // TODO: resolve variables
         serde_wasm_bindgen::to_value(&vars).map_err(|e| JsError::new(&e.to_string()))
     }
+
+    #[wasm_bindgen(js_name = "continue")]
+    pub fn continue_(&self) {
+        /// write to the sentinel value
+        let sentinel =
+            js_sys::Int32Array::new_with_byte_offset_and_length(&self.info.breakpoints, 0, 1);
+
+        js_sys::Atomics::add(&sentinel, 0, 1).unwrap();
+        js_sys::Atomics::notify(&sentinel, 0).unwrap();
+    }
 }
