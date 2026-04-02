@@ -137,6 +137,14 @@ impl Debugger {
         if !self.bkpt_enabled(index) {
             return false;
         }
+        let sentinel =
+            js_sys::Int32Array::new_with_byte_offset_and_length(&self.info.breakpoints, 0, 4);
+        let sp = js_sys::Reflect::get(&self.stack_pointer, &"value".into())
+            .unwrap()
+            .as_f64()
+            .unwrap() as i32;
+        js_sys::Atomics::store(&sentinel, 2, index as i32).unwrap();
+        js_sys::Atomics::store(&sentinel, 3, sp).unwrap();
 
         WorkerOut::Breakpoint.send();
         self.wait_for_resume();
