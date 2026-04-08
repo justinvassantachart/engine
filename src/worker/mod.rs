@@ -4,18 +4,13 @@ use wasm_bindgen::prelude::*;
 use wasmer_wasix::virtual_fs::{AsyncWriteExt, FileSystem, create_dir_all, mem_fs};
 use web_sys::{DedicatedWorkerGlobalScope, MessageEvent};
 
-use crate::execution::Execution;
 use crate::types::{FsNode, WorkerOut, WorkerStart};
 
-pub mod dap;
-mod debug;
-pub mod dwarf;
 mod execution;
-pub mod instrument;
 mod io;
 mod runtime;
-pub mod types;
-mod util;
+
+use execution::Execution;
 
 // ============================================================================
 // Helpers

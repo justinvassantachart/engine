@@ -7,7 +7,6 @@ version = "0.1.0"
 edition = "2024"
 
 [lib]
-path = 'src/worker.rs'
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]

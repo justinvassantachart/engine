@@ -1,5 +1,4 @@
 use std::cell::RefCell;
-use std::collections::HashMap;
 use std::rc::Rc;
 
 use wasm_bindgen::closure::Closure;
@@ -12,7 +11,7 @@ use crate::types::DebugInfo;
 struct DapState {
     seq_counter: i64,
     debugger: Option<Debugger>,
-    event_callbacks: HashMap<String, js_sys::Function>,
+    callback: Option<js_sys::Function>,
     _closure: Option<Closure<dyn FnMut(web_sys::MessageEvent)>>,
 }
 
@@ -20,6 +19,78 @@ impl DapState {
     fn next_seq(&mut self) -> i64 {
         self.seq_counter += 1;
         self.seq_counter
+    }
+
+    fn debugger(&self) -> Option<&Debugger> {
+        self.debugger.as_ref()
+    }
+
+    fn handle_set_breakpoints(
+        &self,
+        rseq: i64,
+        seq: i64,
+        command: &str,
+        args: &serde_json::Value,
+    ) -> ProtocolMessage {
+        let source = args
+            .get("source")
+            .and_then(|s| s.get("path"))
+            .and_then(|p| p.as_str())
+            .unwrap_or("");
+        let lines: Vec<i64> = args
+            .get("breakpoints")
+            .and_then(|b| b.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|bp| bp.get("line").and_then(|l| l.as_i64()))
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        let Some(dbg) = self.debugger() else {
+            return err(rseq, seq, command, "No debugger attached");
+        };
+        let results = dbg.set_breakpoints(source, &lines);
+        let bps: Vec<_> = results
+            .iter()
+            .map(|(line, verified)| serde_json::json!({ "verified": verified, "line": line }))
+            .collect();
+        ok(rseq, seq, command, serde_json::json!({ "breakpoints": bps }))
+    }
+
+    fn handle_stack_trace(&self, rseq: i64, seq: i64, command: &str) -> ProtocolMessage {
+        let Some(dbg) = self.debugger() else {
+            return err(rseq, seq, command, "No debugger attached");
+        };
+        let frames = dbg.backtrace();
+        let total = frames.len();
+        let stack_frames: Vec<_> = frames
+            .iter()
+            .map(|f| {
+                serde_json::json!({
+                    "id": f.id,
+                    "name": f.name,
+                    "line": f.line,
+                    "column": f.column,
+                })
+            })
+            .collect();
+        ok(
+            rseq,
+            seq,
+            command,
+            serde_json::json!({
+                "stackFrames": stack_frames,
+                "totalFrames": total,
+            }),
+        )
+    }
+
+    fn handle_continue(&self, rseq: i64, seq: i64, command: &str) -> ProtocolMessage {
+        if let Some(dbg) = self.debugger() {
+            dbg.continue_();
+        }
+        ok(rseq, seq, command, serde_json::json!({}))
     }
 }
 
@@ -51,7 +122,7 @@ fn err(seq: i64, request_seq: i64, command: &str, msg: &str) -> ProtocolMessage 
 fn emit_event(state: &Rc<RefCell<DapState>>, event_name: &str, body: Option<serde_json::Value>) {
     let (callback, seq) = {
         let mut s = state.borrow_mut();
-        let cb = s.event_callbacks.get(event_name).cloned();
+        let cb = s.callback.clone();
         let seq = s.next_seq();
         (cb, seq)
     };
@@ -81,7 +152,7 @@ impl DapAdapter {
             state: Rc::new(RefCell::new(DapState {
                 seq_counter: 0,
                 debugger: None,
-                event_callbacks: HashMap::new(),
+                callback: None,
                 _closure: None,
             })),
         }
@@ -152,90 +223,17 @@ impl DapAdapter {
         let rseq = state.next_seq();
 
         let response = match command.as_str() {
-            "setBreakpoints" => {
-                let source = args
-                    .get("source")
-                    .and_then(|s| s.get("path"))
-                    .and_then(|p| p.as_str())
-                    .unwrap_or("");
-                let lines: Vec<i64> = args
-                    .get("breakpoints")
-                    .and_then(|b| b.as_array())
-                    .map(|arr| {
-                        arr.iter()
-                            .filter_map(|bp| bp.get("line").and_then(|l| l.as_i64()))
-                            .collect()
-                    })
-                    .unwrap_or_default();
-
-                match state
-                    .debugger
-                    .as_ref()
-                    .map(|d| d.set_breakpoints(source, &lines))
-                {
-                    Some(results) => {
-                        let bps: Vec<_> = results
-                            .iter()
-                            .map(|(line, verified)| {
-                                serde_json::json!({ "verified": verified, "line": line })
-                            })
-                            .collect();
-                        ok(
-                            rseq,
-                            seq,
-                            &command,
-                            serde_json::json!({ "breakpoints": bps }),
-                        )
-                    }
-                    None => err(rseq, seq, &command, "No debugger attached"),
-                }
-            }
-
-            "stackTrace" => match state.debugger.as_ref().map(|d| d.backtrace()) {
-                Some(frames) => {
-                    let total = frames.len();
-                    let stack_frames: Vec<_> = frames
-                        .iter()
-                        .map(|f| {
-                            serde_json::json!({
-                                "id": f.id,
-                                "name": f.name,
-                                "line": f.line,
-                                "column": f.column,
-                            })
-                        })
-                        .collect();
-                    ok(
-                        rseq,
-                        seq,
-                        &command,
-                        serde_json::json!({
-                            "stackFrames": stack_frames,
-                            "totalFrames": total,
-                        }),
-                    )
-                }
-                None => err(rseq, seq, &command, "No debugger attached"),
-            },
-
-            "continue" => {
-                if let Some(dbg) = state.debugger.as_ref() {
-                    dbg.continue_();
-                }
-                ok(rseq, seq, &command, serde_json::json!({}))
-            }
-
-            _ => err(rseq, seq, &command, &format!("Unknown command: {command}")),
+            "setBreakpoints" => state.handle_set_breakpoints(rseq, seq, &command, &args),
+            "stackTrace" => state.handle_stack_trace(rseq, seq, &command),
+            "continue" => state.handle_continue(rseq, seq, &command),
+            other => err(rseq, seq, other, &format!("Unknown command: {other}")),
         };
 
         serde_wasm_bindgen::to_value(&response).unwrap_or(JsValue::NULL)
     }
 
-    /// Registers a callback for a DAP event type (`"initialized"`, `"stopped"`).
-    pub fn on(&self, event: &str, callback: js_sys::Function) {
-        self.state
-            .borrow_mut()
-            .event_callbacks
-            .insert(event.to_string(), callback);
+    /// Registers a callback that receives all DAP events.
+    pub fn on(&self, callback: js_sys::Function) {
+        self.state.borrow_mut().callback = Some(callback);
     }
 }

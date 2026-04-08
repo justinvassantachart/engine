@@ -16,12 +16,12 @@ use wasmer_wasix::{
 use web_sys::DedicatedWorkerGlobalScope;
 
 use crate::debug::WorkerDebugger;
-use crate::dwarf::parse_debug_info;
-use crate::instrument::instrument_wasm;
-use crate::io::Stdin;
-use crate::io::Stdout;
-use crate::runtime::JsRuntime;
+use crate::debug::dwarf::parse_debug_info;
+use crate::debug::instrument::instrument_wasm;
 use crate::types::{StdoutMode, WorkerOut};
+
+use super::io::{Stdin, Stdout};
+use super::runtime::JsRuntime;
 
 use std::fmt::Debug;
 
