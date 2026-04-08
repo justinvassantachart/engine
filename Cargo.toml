@@ -30,7 +30,7 @@ wasmer-wasix = { version = "0.601.0", default-features = false, features = [
     "js",
     "js-default"
 ] }
-web-sys = { version = '0.3.83', features = ['DedicatedWorkerGlobalScope', 'MessageEvent', 'console'] } 
+web-sys = { version = '0.3.83', features = ['DedicatedWorkerGlobalScope', 'EventTarget', 'MessageEvent', 'Worker', 'console'] } 
 futures = "0.3.31"
 console_error_panic_hook = "0.1.7"
 async-trait = "0.1.89"
