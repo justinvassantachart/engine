@@ -1,4 +1,4 @@
-use super::{function::FnInstrumenter, Error, InstrResult};
+use super::{Error, FnInstrumenter, InstrResult};
 use crate::types::DebugInfo;
 use wasm_encoder::reencode::{self, Reencode};
 

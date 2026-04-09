@@ -6,6 +6,8 @@ use wasm_bindgen::JsValue;
 use wasmer::{MemoryType, Pages};
 use web_sys::DedicatedWorkerGlobalScope;
 
+use crate::debug::dwarf::Dwarf;
+
 #[derive(Debug, Tsify, Deserialize)]
 #[serde(untagged)]
 pub enum FsNode {
@@ -134,8 +136,9 @@ pub struct DebugInfo {
     /// The debug stack of the executing program
     pub stack: MemoryDescriptor,
 
-    /// Raw DWARF sections (by name, e.g. ".debug_info") for use with a debugger.
-    pub dwarf: HashMap<String, Vec<u8>>,
+    /// Wrapper around DWARF debug information
+    #[serde(with = "crate::debug::dwarf::serde")]
+    pub dwarf: Dwarf,
 }
 
 #[derive(Debug, Clone, Hash, Eq, PartialEq, Serialize, Deserialize)]

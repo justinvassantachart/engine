@@ -16,8 +16,8 @@ use wasmer_wasix::{
 use web_sys::DedicatedWorkerGlobalScope;
 
 use crate::debug::WorkerDebugger;
-use crate::debug::dwarf::parse_debug_info;
-use crate::debug::instrument::instrument_wasm;
+use crate::debug::dwarf_old::parse_debug_info;
+use crate::debug::instrument::{InstrumenterResult, instrument_wasm};
 use crate::types::{StdoutMode, WorkerOut};
 
 use super::io::{Stdin, Stdout};
@@ -145,9 +145,9 @@ impl<'a> Step<'a> {
                 }
                 .send();
 
-                let mut debug_info = parse_debug_info(&wasm).ensure("Parsed debug info")?;
-                wasm = instrument_wasm(&wasm, &mut debug_info).ensure("Instrumented WASM")?;
-                debugger = Some(WorkerDebugger::new(debug_info));
+                let InstrumenterResult { info, wasm } =
+                    instrument_wasm(&wasm).ensure("Instrumented WASM")?;
+                debugger = Some(WorkerDebugger::new(info));
 
                 WorkerOut::Download {
                     data: wasm.clone(),

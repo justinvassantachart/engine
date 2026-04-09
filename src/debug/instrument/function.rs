@@ -1,8 +1,17 @@
-use super::{encoder::Instrumenter, InstrResult};
+use super::{InstrResult, Instrumenter};
 use crate::types::{DebugFunction, WasmLocation};
 use std::collections::{BTreeSet, HashMap, HashSet};
-use wasm_encoder::{reencode, Instruction, MemArg};
+use wasm_encoder::reencode::Reencode;
+use wasm_encoder::{Instruction, MemArg, reencode};
 use wasmparser::ValType;
+
+macro_rules! error {
+    ($($arg:tt)*) => {
+        Err($crate::debug::instrument::InstrError::UserError(
+            $crate::debug::instrument::Error::msg(format!($($arg)*)),
+        ))
+    };
+}
 
 #[derive(Default)]
 struct WasmLocations {
@@ -316,9 +325,7 @@ impl<'a, 'b, 'c> FnInstrumenter<'a, 'b, 'c> {
         self.stack_intructions.push(instr_count + 1);
     }
 
-    pub fn instrument(
-        mut self,
-    ) -> InstrResult<wasm_encoder::Function> {
+    pub fn instrument(mut self) -> InstrResult<wasm_encoder::Function> {
         // Clear the stack frame for this function
         // This is a safety check to ensure we always start instrumentation at a known state.
         self.debug_func().reset();

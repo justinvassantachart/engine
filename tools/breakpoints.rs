@@ -3,8 +3,7 @@ use std::env;
 use std::fs;
 use std::process;
 
-use runtime::dwarf::parse_debug_info;
-use runtime::instrument::instrument_wasm;
+use runtime::debug::instrument::{instrument_wasm, InstrumenterResult};
 use wasmparser::{Parser, Payload};
 
 fn main() {
@@ -20,16 +19,19 @@ fn main() {
         process::exit(1);
     });
 
-    let mut debug_info = match parse_debug_info(&wasm_bytes) {
-        Ok(info) => info,
+    let InstrumenterResult {
+        wasm: instrumented,
+        ref info,
+    } = match instrument_wasm(&wasm_bytes) {
+        Ok(r) => r,
         Err(e) => {
-            eprintln!("Failed to parse DWARF info: {}", e);
+            eprintln!("Failed to parse/instrument WASM: {}", e);
             process::exit(1);
         }
     };
 
-    let locations = &debug_info.locations;
-    let files = &debug_info.files;
+    let locations = &info.locations;
+    let files = &info.files;
 
     println!("=== DWARF locations ({}) ===", locations.len());
     for (i, loc) in locations.iter().enumerate() {
@@ -47,14 +49,6 @@ fn main() {
         );
     }
     println!();
-
-    let instrumented = match instrument_wasm(&wasm_bytes, &mut debug_info) {
-        Ok(bytes) => bytes,
-        Err(e) => {
-            eprintln!("Instrumentation failed: {}", e);
-            process::exit(1);
-        }
-    };
 
     let orig_len = wasm_bytes.len() as i64;
     let inst_len = instrumented.len() as i64;
