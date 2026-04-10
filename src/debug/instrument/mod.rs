@@ -1,4 +1,8 @@
 //! WASM instrumentation for debugging.
+pub mod encoder;
+pub mod function;
+pub use encoder::*;
+pub use function::*;
 
 use crate::debug::dwarf::Dwarf;
 use crate::types::{DebugInfo, MemoryDescriptor};
@@ -6,11 +10,6 @@ use anyhow::Result;
 use std::collections::HashMap;
 use wasm_encoder::reencode;
 use wasmparser::Payload;
-
-pub mod encoder;
-pub mod function;
-pub use encoder::*;
-pub use function::*;
 
 pub type Error = anyhow::Error;
 pub type InstrError = reencode::Error<Error>;
