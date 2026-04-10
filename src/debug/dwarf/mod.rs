@@ -7,8 +7,8 @@ pub use unit::*;
 use ::serde::{Deserialize, Serialize};
 use anyhow::Result;
 use gimli::{DwarfSections, EndianRcSlice, LittleEndian, SectionId};
-use std::collections::HashMap;
 use std::rc::Rc;
+use std::{collections::HashMap, path::Path};
 use wasmparser::{Parser, Payload};
 
 /// The reader type we use any time we interface with `gimli`.
@@ -75,5 +75,10 @@ impl Dwarf {
             sections,
             units,
         })
+    }
+
+    /// Gets all locations across all compilation units
+    pub fn locations(&self) -> impl Iterator<Item = Location<'_>> {
+        self.units.iter().flat_map(|u| u.locations())
     }
 }

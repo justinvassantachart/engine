@@ -1,4 +1,7 @@
-use std::{num::NonZeroU64, path::PathBuf};
+use std::{
+    num::NonZeroU64,
+    path::{Path, PathBuf},
+};
 
 use super::R;
 use anyhow::Result;
@@ -19,13 +22,36 @@ pub struct Unit {
 #[repr(Rust, packed)]
 pub struct LineRow {
     /// PC address within code segment
-    address: u64,
+    address: usize,
     /// Index of corresponding file within this unit
-    file_index: u64,
+    file_index: usize,
     /// Line number within file (one-indexed)
-    line: u64,
+    line: usize,
     /// Column number (0 is left edge)
-    column: u64,
+    column: usize,
+}
+
+impl LineRow {
+    #[inline]
+    pub fn address(&self) -> usize {
+        self.address
+    }
+
+    #[inline]
+    pub fn line(&self) -> usize {
+        self.line
+    }
+
+    #[inline]
+    pub fn column(&self) -> usize {
+        self.column
+    }
+}
+
+pub struct Location<'a> {
+    pub unit: &'a Unit,
+    pub line: &'a LineRow,
+    pub file: &'a Path,
 }
 
 impl Unit {
@@ -58,6 +84,14 @@ impl Unit {
     pub fn unit(&self) -> &gimli::Unit<R> {
         &self.unit
     }
+
+    pub fn locations(&self) -> impl Iterator<Item = Location<'_>> {
+        self.lines.iter().map(|l| Location {
+            unit: self,
+            line: l,
+            file: &self.files[l.file_index as usize],
+        })
+    }
 }
 
 fn parse_lines(
@@ -75,10 +109,10 @@ fn parse_lines(
         }
 
         lines.push(LineRow {
-            address: line_row.address(),
-            file_index: line_row.file_index(),
-            line: line_row.line().map(NonZeroU64::get).unwrap_or(0),
-            column,
+            address: line_row.address() as usize,
+            file_index: line_row.file_index() as usize,
+            line: line_row.line().map(NonZeroU64::get).unwrap_or(0) as usize,
+            column: column as usize,
         })
     }
 

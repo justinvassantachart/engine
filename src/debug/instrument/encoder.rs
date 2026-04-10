@@ -23,6 +23,13 @@ pub struct Instrumenter<'a> {
 
 impl<'a> Instrumenter<'a> {
     pub fn new(info: &'a mut DebugInfo) -> Self {
+        let mut breakpoints = HashMap::new();
+        for (index, loc) in info.dwarf.locations().enumerate() {
+            breakpoints
+                .entry(loc.line.address() as usize)
+                .or_insert(index);
+        }
+
         Self {
             info,
             validator: wasmparser::Validator::new(),
@@ -33,7 +40,7 @@ impl<'a> Instrumenter<'a> {
             num_imported_functions: 0,
             num_imported_globals: 0,
             code_section_start: 0,
-            breakpoints: HashMap::new(),
+            breakpoints,
         }
     }
 
