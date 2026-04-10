@@ -6,6 +6,8 @@ use wasm_bindgen::JsValue;
 use wasmer::{MemoryType, Pages};
 use web_sys::DedicatedWorkerGlobalScope;
 
+use crate::debug::dwarf::{DieReference, Dwarf};
+
 #[derive(Debug, Tsify, Deserialize)]
 #[serde(untagged)]
 pub enum FsNode {
@@ -108,10 +110,6 @@ impl MemoryDescriptor {
 /// Debug information parsed from DWARF
 #[derive(Debug, Clone, Tsify, Serialize, Deserialize)]
 pub struct DebugInfo {
-    /// Breakpoint locations (file index, line, col, WASM address).
-    pub locations: Vec<LocationInfo>,
-    /// Deduplicated source filenames; index matches `LocationInfo::file`.
-    pub files: Vec<String>,
     pub functions: Vec<DebugFunction>,
 
     /// SharedArrayBuffer that controls breakpoint operation in the debugger.
@@ -134,8 +132,9 @@ pub struct DebugInfo {
     /// The debug stack of the executing program
     pub stack: MemoryDescriptor,
 
-    /// Raw DWARF sections (by name, e.g. ".debug_info") for use with a debugger.
-    pub dwarf: HashMap<String, Vec<u8>>,
+    /// Wrapper around DWARF debug information
+    #[serde(with = "crate::debug::dwarf::serde")]
+    pub dwarf: Dwarf,
 }
 
 #[derive(Debug, Clone, Hash, Eq, PartialEq, Serialize, Deserialize)]
@@ -150,12 +149,9 @@ pub enum WasmLocation {
 
 #[derive(Debug, Clone, Tsify, Serialize, Deserialize)]
 pub struct DebugFunction {
-    /// DW_AT_name from the DWARF
-    pub name: String,
-    /// Offset of this function in the DWARF
-    pub offset: usize,
-    /// Code section offset of the start of the function
     pub address: usize,
+    /// Reference to dwarf die for this function
+    pub die_ref: DieReference,
     /// The total size in bytes of the stack frame, including it's 32-bit tag
     pub size: usize,
     /// The entries in this stack frame

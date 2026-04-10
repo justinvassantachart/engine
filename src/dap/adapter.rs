@@ -55,14 +55,21 @@ impl DapState {
             .iter()
             .map(|(line, verified)| serde_json::json!({ "verified": verified, "line": line }))
             .collect();
-        ok(rseq, seq, command, serde_json::json!({ "breakpoints": bps }))
+        ok(
+            rseq,
+            seq,
+            command,
+            serde_json::json!({ "breakpoints": bps }),
+        )
     }
 
     fn handle_stack_trace(&self, rseq: i64, seq: i64, command: &str) -> ProtocolMessage {
         let Some(dbg) = self.debugger() else {
             return err(rseq, seq, command, "No debugger attached");
         };
-        let frames = dbg.backtrace();
+        let Ok(frames) = dbg.backtrace() else {
+            return err(rseq, seq, command, "Failed to get backtrace");
+        };
         let total = frames.len();
         let stack_frames: Vec<_> = frames
             .iter()

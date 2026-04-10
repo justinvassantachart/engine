@@ -6,7 +6,7 @@ import dts from 'vite-plugin-dts';
 const outDir = 'dist';
 
 export default defineConfig({
-  plugins: [dts()],
+  plugins: [wasm(), dts()],
   worker: {
     format: 'es',
     plugins: () => [wasm()],

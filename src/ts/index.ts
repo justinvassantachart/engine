@@ -1,4 +1,6 @@
 import { StdoutMode, WorkerOut, WorkerStart } from '../../pkg/runtime';
+import init from '../../pkg/runtime';
+import wasmBinary from '../../pkg/runtime_bg.wasm';
 import { Debugger } from './debugger';
 import { Internals } from './internals';
 import RustWorker from './worker?worker&inline';
@@ -13,7 +15,7 @@ export class Runtime {
   private out = new StdoutStream(1);
   private err = new StdoutStream(2);
   private in = new StdinStream();
-  public debugger = new Debugger();
+  public readonly debugger: Debugger;
 
   /** A function which, when called, rejects the ongoing execution */
   private rejector?: () => void;
@@ -68,11 +70,15 @@ export class Runtime {
     return this.err.stream;
   }
 
-  static create(lang: Lang): Runtime {
+  static async create(lang: Lang): Promise<Runtime> {
+    // TODO: Using `wasmBinary` bakes the wasm rust binary into the package
+    // In the future, we should resolve from CDN on prod
+    await init(wasmBinary);
     return new Runtime(lang);
   }
 
   private constructor(lang: Lang) {
+    this.debugger = new Debugger();
     this.lang = lang;
   }
 
@@ -98,7 +104,7 @@ export class Runtime {
     /* Set up handling for stdout/stderr */
     this.out.addWorker(worker);
     this.err.addWorker(worker);
-    this.debugger[Internals].addWorker(worker);
+    this.debugger[Internals].attach(worker);
 
     try {
       await new Promise<void>(async (resolve, reject) => {
@@ -147,7 +153,6 @@ export class Runtime {
       this.out.removeWorker(worker);
       this.err.removeWorker(worker);
       this.in.clear();
-      this.debugger[Internals].removeWorker(worker);
       worker.terminate();
     }
   }
@@ -241,4 +246,3 @@ class StdinStream {
 }
 
 export * from './debugger';
-export * from './debugger/harness';

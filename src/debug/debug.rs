@@ -35,7 +35,7 @@ impl Debugger {
     }
 
     /// Walks the debug stack and returns the current call stack.
-    pub fn backtrace(&self) -> Vec<StackFrame> {
+    pub fn backtrace(&self) -> anyhow::Result<Vec<StackFrame>> {
         let sp = self.sentinel.get_index(3) as u32;
         let buffer = self.info.stack.memory.buffer();
         let buffer = buffer.unchecked_ref::<js_sys::ArrayBuffer>();
@@ -50,17 +50,20 @@ impl Debugger {
             if func_idx >= self.info.functions.len() {
                 break;
             }
+
             let func = &self.info.functions[func_idx];
+            let die = func.die_ref.deref(&self.info.dwarf)?;
+
             frames.push(StackFrame {
                 id: frames.len() as u32,
-                name: func.name.clone(),
+                name: die.name().unwrap_or(String::new()),
                 line: 0, // TODO: resolve from DWARF
                 column: 0,
             });
             pos += func.size as u32;
         }
 
-        frames
+        Ok(frames)
     }
 
     /// Replaces breakpoints for the given source file.
@@ -184,10 +187,6 @@ impl WorkerDebugger {
 
     /// Check if a breakpoint at the given index is enabled
     pub fn bkpt_enabled(&self, index: usize) -> bool {
-        if index > self.info.locations.len() {
-            return false;
-        }
-
         let flags = js_sys::Uint8Array::new_with_byte_offset(
             &self.info.breakpoints,
             BREAKPOINT_PREFIX_BYTES as u32,
