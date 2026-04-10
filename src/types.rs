@@ -149,12 +149,9 @@ pub enum WasmLocation {
 
 #[derive(Debug, Clone, Tsify, Serialize, Deserialize)]
 pub struct DebugFunction {
-    /// DW_AT_name from the DWARF
-    pub name: String,
-    /// Index of dwarf unit containing this function
-    pub die_ref: DieReference,
-    /// Code section offset of the start of the function
     pub address: usize,
+    /// Reference to dwarf die for this function
+    pub die_ref: DieReference,
     /// The total size in bytes of the stack frame, including it's 32-bit tag
     pub size: usize,
     /// The entries in this stack frame

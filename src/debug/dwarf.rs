@@ -1,20 +1,20 @@
 use ::serde::{Deserialize, Serialize};
 use anyhow::Result;
-use gimli::{DwarfSections, EndianRcSlice, LittleEndian, SectionId};
+use gimli::{DwarfSections, EndianRcSlice, LittleEndian, Reader, SectionId};
 use std::collections::HashMap;
 use std::rc::Rc;
 use wasmparser::{Parser, Payload};
 
 /// The reader type we use any time we interface with `gimli`.
-type Reader = EndianRcSlice<LittleEndian>;
+type R = EndianRcSlice<LittleEndian>;
 
 #[derive(Debug)]
 pub struct Dwarf {
     /// Provides direct access to `gimli`
-    inner: gimli::Dwarf<Reader>,
+    inner: gimli::Dwarf<R>,
     /// DWARF sections maintained for serialization.
     /// References same memory as `inner`.
-    sections: gimli::DwarfSections<Reader>,
+    sections: gimli::DwarfSections<R>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -22,6 +22,45 @@ pub struct DieReference {
     unit_index: usize,
     #[serde(with = "serde::unit_offset")]
     unit_ofs: gimli::UnitOffset,
+}
+
+impl DieReference {
+    pub fn deref<'a>(&self, dwarf: &'a Dwarf) -> Result<Die<'a>> {
+        let Some(header) = dwarf.inner.units().skip(self.unit_index).nth(0) else {
+            return Err(anyhow::anyhow!("Unit index out of bounds"));
+        };
+
+        let unit = dwarf.inner.unit(header?)?;
+        let die = unit.entry(self.unit_ofs)?;
+
+        Ok(Die {
+            dwarf: &dwarf.inner,
+            unit: unit,
+            die,
+        })
+    }
+}
+
+pub struct Die<'a> {
+    dwarf: &'a gimli::Dwarf<R>,
+    unit: gimli::Unit<R>,
+    die: gimli::DebuggingInformationEntry<R>,
+}
+
+impl<'a> Die<'a> {
+    pub fn name(&self) -> Option<String> {
+        self.attr_to_string(gimli::DW_AT_name)
+    }
+
+    pub fn attr_to_string(&self, attr: gimli::DwAt) -> Option<String> {
+        self.die
+            .attr(attr)
+            .and_then(|attr| self.dwarf.attr_string(&self.unit, attr.value()).ok())
+            .map(|l| l.to_string_lossy().map(|s| s.to_string()))
+            .transpose()
+            .ok()
+            .unwrap_or(None)
+    }
 }
 
 impl Clone for Dwarf {
@@ -54,7 +93,7 @@ impl Clone for Dwarf {
 impl Dwarf {
     /// Load Dwarf from section map
     pub fn from_sections(sections: &HashMap<&str, &[u8]>) -> Result<Self> {
-        let sections = DwarfSections::load(|id: SectionId| -> Result<Reader, gimli::Error> {
+        let sections = DwarfSections::load(|id: SectionId| -> Result<R, gimli::Error> {
             let data = sections.get(id.name()).copied().unwrap_or(&[]);
             Ok(EndianRcSlice::new(Rc::from(data), LittleEndian))
         })?;
@@ -66,11 +105,11 @@ impl Dwarf {
 pub mod serde {
     use std::collections::HashMap;
 
-    use super::{Dwarf, Reader};
+    use super::{Dwarf, R};
     use gimli::Section;
     use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-    fn insert<S: Section<Reader>>(m: &mut HashMap<String, Vec<u8>>, section: &S) {
+    fn insert<S: Section<R>>(m: &mut HashMap<String, Vec<u8>>, section: &S) {
         let bytes = section.reader().bytes();
         if bytes.len() > 0 {
             m.insert(S::id().name().to_string(), bytes.to_vec());
