@@ -1,6 +1,8 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
+use anyhow::{Context, Result};
+use serde_json::{json, Value};
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::prelude::*;
 
@@ -25,13 +27,7 @@ impl DapState {
         self.debugger.as_ref()
     }
 
-    fn handle_set_breakpoints(
-        &self,
-        rseq: i64,
-        seq: i64,
-        command: &str,
-        args: &serde_json::Value,
-    ) -> ProtocolMessage {
+    fn handle_set_breakpoints(&self, args: &Value) -> Result<Value> {
         let source = args
             .get("source")
             .and_then(|s| s.get("path"))
@@ -47,34 +43,23 @@ impl DapState {
             })
             .unwrap_or_default();
 
-        let Some(dbg) = self.debugger() else {
-            return err(rseq, seq, command, "No debugger attached");
-        };
+        let dbg = self.debugger().context("No debugger attached")?;
         let results = dbg.set_breakpoints(source, &lines);
         let bps: Vec<_> = results
             .iter()
-            .map(|(line, verified)| serde_json::json!({ "verified": verified, "line": line }))
+            .map(|(line, verified)| json!({ "verified": verified, "line": line }))
             .collect();
-        ok(
-            rseq,
-            seq,
-            command,
-            serde_json::json!({ "breakpoints": bps }),
-        )
+        Ok(json!({ "breakpoints": bps }))
     }
 
-    fn handle_stack_trace(&self, rseq: i64, seq: i64, command: &str) -> ProtocolMessage {
-        let Some(dbg) = self.debugger() else {
-            return err(rseq, seq, command, "No debugger attached");
-        };
-        let Ok(frames) = dbg.backtrace() else {
-            return err(rseq, seq, command, "Failed to get backtrace");
-        };
+    fn handle_stack_trace(&self) -> Result<Value> {
+        let dbg = self.debugger().context("No debugger attached")?;
+        let frames = dbg.backtrace().context("Failed to get backtrace")?;
         let total = frames.len();
         let stack_frames: Vec<_> = frames
             .iter()
             .map(|f| {
-                serde_json::json!({
+                json!({
                     "id": f.id,
                     "name": f.name,
                     "line": f.line,
@@ -82,51 +67,50 @@ impl DapState {
                 })
             })
             .collect();
-        ok(
-            rseq,
-            seq,
-            command,
-            serde_json::json!({
-                "stackFrames": stack_frames,
-                "totalFrames": total,
-            }),
-        )
+        Ok(json!({
+            "stackFrames": stack_frames,
+            "totalFrames": total,
+        }))
     }
 
-    fn handle_continue(&self, rseq: i64, seq: i64, command: &str) -> ProtocolMessage {
+    fn handle_continue(&self) -> Result<Value> {
         if let Some(dbg) = self.debugger() {
             dbg.continue_();
         }
-        ok(rseq, seq, command, serde_json::json!({}))
+        Ok(json!({}))
     }
 }
 
-fn ok(seq: i64, request_seq: i64, command: &str, body: serde_json::Value) -> ProtocolMessage {
-    ProtocolMessage::Response {
-        seq,
-        request_seq,
-        success: true,
-        command: command.to_string(),
-        message: None,
-        body: Some(body),
-    }
-}
-
-fn err(seq: i64, request_seq: i64, command: &str, msg: &str) -> ProtocolMessage {
-    ProtocolMessage::Response {
-        seq,
-        request_seq,
-        success: false,
-        command: command.to_string(),
-        message: Some(msg.to_string()),
-        body: None,
+fn respond(
+    rseq: i64,
+    seq: i64,
+    command: &str,
+    result: Result<Value>,
+) -> ProtocolMessage {
+    match result {
+        Ok(body) => ProtocolMessage::Response {
+            seq: rseq,
+            request_seq: seq,
+            success: true,
+            command: command.to_string(),
+            message: None,
+            body: Some(body),
+        },
+        Err(e) => ProtocolMessage::Response {
+            seq: rseq,
+            request_seq: seq,
+            success: false,
+            command: command.to_string(),
+            message: Some(e.to_string()),
+            body: None,
+        },
     }
 }
 
 /// Emits a DAP event to the registered callback (if any).
 /// Borrows state briefly to read the callback, then drops the borrow before
 /// invoking the callback so the callback can safely call back into the adapter.
-fn emit_event(state: &Rc<RefCell<DapState>>, event_name: &str, body: Option<serde_json::Value>) {
+fn emit_event(state: &Rc<RefCell<DapState>>, event_name: &str, body: Option<Value>) {
     let (callback, seq) = {
         let mut s = state.borrow_mut();
         let cb = s.callback.clone();
@@ -194,7 +178,7 @@ impl DapAdapter {
                     emit_event(
                         &state,
                         "stopped",
-                        Some(serde_json::json!({ "reason": "breakpoint" })),
+                        Some(json!({ "reason": "breakpoint" })),
                     );
                 }
                 _ => {}
@@ -225,16 +209,18 @@ impl DapAdapter {
             return JsValue::NULL;
         };
 
-        let args = arguments.unwrap_or(serde_json::Value::Null);
+        let args = arguments.unwrap_or(Value::Null);
         let mut state = self.state.borrow_mut();
         let rseq = state.next_seq();
 
-        let response = match command.as_str() {
-            "setBreakpoints" => state.handle_set_breakpoints(rseq, seq, &command, &args),
-            "stackTrace" => state.handle_stack_trace(rseq, seq, &command),
-            "continue" => state.handle_continue(rseq, seq, &command),
-            other => err(rseq, seq, other, &format!("Unknown command: {other}")),
+        let result = match command.as_str() {
+            "setBreakpoints" => state.handle_set_breakpoints(&args),
+            "stackTrace" => state.handle_stack_trace(),
+            "continue" => state.handle_continue(),
+            other => Err(anyhow::anyhow!("Unknown command: {other}")),
         };
+
+        let response = respond(rseq, seq, &command, result);
 
         serde_wasm_bindgen::to_value(&response).unwrap_or(JsValue::NULL)
     }
