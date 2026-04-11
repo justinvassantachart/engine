@@ -3,6 +3,8 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use crate::debug::dwarf::{Die, Dwarf};
+
 use super::R;
 use anyhow::Result;
 use gimli::Reader;
@@ -14,7 +16,7 @@ pub struct Unit {
     files: Vec<PathBuf>,
     /// Information about the lines in this unit.
     /// Each of these is theoretically a breakable program statement
-    /// (whether it is actually depends on if istrumentation code was generated for it)
+    /// (whether it actually is depends on if instrumentation code was generated)
     lines: Vec<LineRow>,
 }
 
@@ -79,6 +81,17 @@ impl Unit {
         }
 
         Ok(Unit { unit, files, lines })
+    }
+
+    /// Gets the root DIE for this unit
+    pub fn root<'a>(&'a self, dwarf: &'a Dwarf) -> gimli::Result<Die<'a>> {
+        let mut entries = self.unit.entries();
+        entries.next_entry()?;
+        let die = entries
+            .current()
+            .ok_or(gimli::Error::MissingUnitDie)?
+            .clone();
+        Ok(Die::new(&dwarf.inner, &self.unit, die))
     }
 
     pub fn unit(&self) -> &gimli::Unit<R> {

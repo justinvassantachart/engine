@@ -2,7 +2,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use anyhow::{Context, Result};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::prelude::*;
 
@@ -81,12 +81,7 @@ impl DapState {
     }
 }
 
-fn respond(
-    rseq: i64,
-    seq: i64,
-    command: &str,
-    result: Result<Value>,
-) -> ProtocolMessage {
+fn respond(rseq: i64, seq: i64, command: &str, result: Result<Value>) -> ProtocolMessage {
     match result {
         Ok(body) => ProtocolMessage::Response {
             seq: rseq,
@@ -175,11 +170,7 @@ impl DapAdapter {
                     emit_event(&state, "initialized", None);
                 }
                 "breakpoint" => {
-                    emit_event(
-                        &state,
-                        "stopped",
-                        Some(json!({ "reason": "breakpoint" })),
-                    );
+                    emit_event(&state, "stopped", Some(json!({ "reason": "breakpoint" })));
                 }
                 _ => {}
             }

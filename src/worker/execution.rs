@@ -131,7 +131,7 @@ impl<'a> Step<'a> {
         let mut debugger = None;
 
         let binary_bytes = if binary_loc.starts_with("/") {
-            let mut wasm = self
+            let wasm = self
                 .exec
                 .read_bytes(binary_loc)
                 .await

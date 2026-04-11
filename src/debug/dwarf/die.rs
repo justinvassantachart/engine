@@ -1,6 +1,8 @@
 use anyhow::{Result, anyhow};
 use serde::{Deserialize, Serialize};
 
+use crate::weak_error;
+
 use super::{Dwarf, R};
 use gimli::Reader;
 
@@ -20,11 +22,7 @@ impl DieReference {
         let unit = unit.unit();
         let die = unit.entry(self.unit_ofs)?;
 
-        Ok(Die {
-            dwarf: &dwarf.inner,
-            unit,
-            die,
-        })
+        Ok(Die::new(&dwarf.inner, unit, die))
     }
 }
 
@@ -35,6 +33,14 @@ pub struct Die<'a> {
 }
 
 impl<'a> Die<'a> {
+    pub(crate) fn new(
+        dwarf: &'a gimli::Dwarf<R>,
+        unit: &'a gimli::Unit<R>,
+        die: gimli::DebuggingInformationEntry<R>,
+    ) -> Self {
+        Self { dwarf, unit, die }
+    }
+
     pub fn name(&self) -> Option<String> {
         self.attr_to_string(gimli::DW_AT_name)
     }
@@ -47,5 +53,21 @@ impl<'a> Die<'a> {
             .transpose()
             .ok()
             .unwrap_or(None)
+    }
+
+    pub fn for_each_children_t<T>(&self, mut f: impl FnMut(Die<'a>) -> Option<T>) -> Option<T> {
+        let mut tree = weak_error!(self.unit.entries_tree(Some(self.die.offset())))?;
+
+        let root = weak_error!(tree.root())?;
+        let mut children = root.children();
+        while let Some(c) = weak_error!(children.next())? {
+            let die = Die::new(self.dwarf, self.unit, c.entry().clone());
+
+            if let Some(r) = f(die) {
+                return Some(r);
+            }
+        }
+
+        None
     }
 }

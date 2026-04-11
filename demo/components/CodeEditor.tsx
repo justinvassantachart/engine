@@ -7,7 +7,7 @@ import StopIcon from '@mui/icons-material/Stop';
 import { Box, Button, FormControl, InputLabel, MenuItem, Select, Typography } from '@mui/material';
 import CodeMirror from '@uiw/react-codemirror';
 import React, { useEffect, useRef, useState } from 'react';
-import { LocationInfo, runDebuggerStitchingHarness, Runtime } from 'runtime';
+import { LocationInfo, Runtime } from 'runtime';
 
 import Terminal, { TerminalHandle } from '@/components/Terminal';
 
@@ -58,7 +58,7 @@ export default function CodeEditor() {
   };
 
   const handleContinue = () => {
-    runtimeRef.current?.debugger.resume();
+    // runtimeRef.current?.debugger.resume();
     setIsPaused(false);
     setPausedLocation(null);
   };
@@ -84,7 +84,7 @@ export default function CodeEditor() {
       terminalRef.current?.clear();
       terminalRef.current?.writeln('Running...');
 
-      const rt = Runtime.create('c');
+      const rt = await Runtime.create('c');
       runtimeRef.current = rt;
 
       // Set up stdout/stderr streams to write to the terminal
@@ -132,12 +132,9 @@ export default function CodeEditor() {
         // Ignore abort errors
       });
       rt.fs = { 'main.c': code };
-      rt.debugger.addBreakpoint('main.c:6');
+      // rt.debugger.addBreakpoint('main.c:6');
 
       const dbg = rt.debugger;
-      if (process.env.NODE_ENV !== 'production') {
-        runDebuggerStitchingHarness(dbg);
-      }
       dbg.on('breakpoint', (hit) => {
         setIsPaused(true);
         setPausedLocation(hit.location);

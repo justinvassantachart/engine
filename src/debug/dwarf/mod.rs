@@ -4,12 +4,10 @@ pub mod unit;
 pub use die::*;
 pub use unit::*;
 
-use ::serde::{Deserialize, Serialize};
 use anyhow::Result;
 use gimli::{DwarfSections, EndianRcSlice, LittleEndian, SectionId};
+use std::collections::HashMap;
 use std::rc::Rc;
-use std::{collections::HashMap, path::Path};
-use wasmparser::{Parser, Payload};
 
 /// The reader type we use any time we interface with `gimli`.
 type R = EndianRcSlice<LittleEndian>;

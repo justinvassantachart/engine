@@ -1,8 +1,58 @@
+use wasm_bindgen::JsCast;
+use web_sys::DedicatedWorkerGlobalScope;
+
+/// Whether we are currently running inside a web worker
+pub fn is_worker() -> bool {
+    let global = js_sys::global();
+    return global.is_instance_of::<DedicatedWorkerGlobalScope>();
+}
+
 /// Prints a formatted string to the JavaScript console.
 #[macro_export]
 macro_rules! log {
-    ($($arg:tt)*) => {
-        web_sys::console::log_1(&format!($($arg)*).into());
+    ($($arg:tt)*) => {{
+        let prefix = if $crate::util::is_worker() {
+            "[runtime:worker] "
+        } else {
+            "[runtime:main] "
+        };
+        let body = format!("{}", format_args!($($arg)*));
+        let fmt = {
+            let mut s = String::with_capacity(prefix.len() + 6);
+            s.push_str("%c");
+            s.push_str(prefix);
+            s.push_str("%c%s");
+            s
+        };
+        web_sys::console::log_4(
+            &wasm_bindgen::JsValue::from_str(&fmt),
+            &wasm_bindgen::JsValue::from_str("font-weight: bold"),
+            &wasm_bindgen::JsValue::from_str(""),
+            &wasm_bindgen::JsValue::from_str(&body),
+        );
+    }};
+}
+
+/// Transforms `Result` into `Option` and logs an error if it occurs.
+#[macro_export]
+macro_rules! weak_error {
+    ($res:expr) => {
+        match $res {
+            Ok(v) => Some(v),
+            Err(e) => {
+                $crate::log!("{:?}", e);
+                None
+            }
+        }
+    };
+    ($res:expr, $msg:expr) => {
+        match $res {
+            Ok(v) => Some(v),
+            Err(e) => {
+                $crate::log!("{}: {:?}", $msg, e);
+                None
+            }
+        }
     };
 }
 
