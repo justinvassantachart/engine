@@ -48,7 +48,7 @@ macro_rules! weak_error {
         match $res {
             Ok(v) => Some(v),
             Err(e) => {
-                $crate::log!("{:?}", e);
+                $crate::warn!("{:?}", e);
                 None
             }
         }
@@ -57,7 +57,7 @@ macro_rules! weak_error {
         match $res {
             Ok(v) => Some(v),
             Err(e) => {
-                $crate::log!("{}: {:?}", $msg, e);
+                $crate::warn!("{}: {:?}", $msg, e);
                 None
             }
         }
