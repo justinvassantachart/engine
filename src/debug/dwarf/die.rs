@@ -1,3 +1,5 @@
+use std::collections::VecDeque;
+
 use anyhow::{Result, anyhow};
 use serde::{Deserialize, Serialize};
 
@@ -80,7 +82,7 @@ impl<'a> Die<'a> {
     }
 
     /// Loop through child DIEs until a value is found, returning it (if any)
-    pub fn find_in_children<T>(&self, mut f: impl FnMut(Die<'a>) -> Option<T>) -> Option<T> {
+    pub fn find_children<T>(&self, mut f: impl FnMut(Die<'a>) -> Option<T>) -> Option<T> {
         let mut tree = weak_error!(self.ctx.unit_ref().entries_tree(Some(self.die.offset())))?;
 
         let root = weak_error!(tree.root())?;
@@ -97,8 +99,8 @@ impl<'a> Die<'a> {
     }
 
     /// Loop through all child DIEs, performing an action on each
-    pub fn for_each_children(&self, mut f: impl FnMut(Die)) {
-        self.find_in_children::<()>(|die| {
+    pub fn for_each_child(&self, mut f: impl FnMut(Die)) {
+        self.find_children::<()>(|die| {
             f(die);
             None
         });
@@ -107,7 +109,7 @@ impl<'a> Die<'a> {
     /// Loop through all children DIEs, collecting a value for each (if any)
     pub fn collect_children<T>(&self, mut f: impl FnMut(Die) -> Option<T>) -> Vec<T> {
         let mut result = vec![];
-        self.for_each_children(|die| {
+        self.for_each_child(|die| {
             if let Some(r) = f(die) {
                 result.push(r);
             }
@@ -115,4 +117,38 @@ impl<'a> Die<'a> {
 
         result
     }
+
+    pub fn traverse(&self, mut f: impl FnMut(Die) -> Visit) {
+        let mut queue = VecDeque::from([self.die.offset()]);
+
+        while let Some(offset) = queue.pop_front() {
+            let Some(mut tree) = weak_error!(self.ctx.unit.unit().entries_tree(Some(offset)))
+            else {
+                return;
+            };
+
+            let Some(root) = weak_error!(tree.root()) else {
+                return;
+            };
+
+            let mut children = root.children();
+            while let Some(Some(child)) = weak_error!(children.next()) {
+                let die = Die::new(self.ctx.clone(), child.entry().clone());
+                match f(die) {
+                    Visit::Continue => queue.push_back(offset),
+                    Visit::SkipChildren => {}
+                    Visit::Break => return,
+                }
+            }
+        }
+    }
+}
+
+pub enum Visit {
+    /// Traverse the next node, including children
+    Continue,
+    /// Skip the children of this node
+    SkipChildren,
+    /// Stop traversal immediately
+    Break,
 }
