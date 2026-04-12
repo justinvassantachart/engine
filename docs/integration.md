@@ -61,12 +61,12 @@ rt.stop();
 
 ## Debugger (DAP)
 
-The debugger exposes a [Debug Adapter Protocol](https://microsoft.github.io/debug-adapter-protocol/) interface. Requests are sent synchronously and return a response. Events are emitted asynchronously through the `dap` listener.
+The debugger exposes a [Debug Adapter Protocol](https://microsoft.github.io/debug-adapter-protocol/) interface. Requests are sent synchronously and return a response. DAP messages (events, and optionally routed responses) are emitted asynchronously through the `event` listener.
 
 ```ts
 const dbg = rt.debugger;
 
-dbg.on('dap', (msg) => {
+dbg.on('event', (msg) => {
   // receives both events (type: 'event') and — if you choose to route them here — responses
   console.log(msg);
 });
@@ -83,7 +83,7 @@ dbg.send({ type: 'request', seq: 1, command: 'initialize', arguments: {} });
 
 // 2. Wait for the `initialized` event — fires when compilation is done and
 //    the runtime is ready to accept configuration.
-dbg.on('dap', (msg) => {
+dbg.on('event', (msg) => {
   if (msg.type === 'event' && msg.event === 'initialized') {
     // 3. Set breakpoints (one call per source file)
     dbg.send({
@@ -166,4 +166,4 @@ if (msg.type === 'event' && msg.event === 'terminated') {
 
 - The runtime compiles C++ to WASM in-browser using clang — the first run may take a few seconds.
 - There is one thread (`id: 1`). Multi-threading is not supported.
-- `send()` returns the response synchronously. Events arrive asynchronously via `on('dap', ...)`.
+- `send()` returns the response synchronously. DAP traffic that is pushed from the adapter arrives asynchronously via `on('event', ...)`.

@@ -91,7 +91,7 @@ export default function CodeEditor() {
       // temp: auto-run DAP handshake for testing
       const testDbg = rt.debugger;
       let seq = 1;
-      testDbg.on('dap', (msg: { type: string; event?: string }) => {
+      testDbg.on('event', (msg: { type: string; event?: string }) => {
         console.log(msg.type === 'event' ? 'DAP EVENT:' : 'DAP RESPONSE:', msg);
         if (msg.type === 'event' && msg.event === 'initialized') {
           console.log('initialized — sending configuration');
