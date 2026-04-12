@@ -88,6 +88,35 @@ export default function CodeEditor() {
       (window as { __rt?: typeof rt }).__rt = rt; // temp: expose for console testing
       runtimeRef.current = rt;
 
+      // temp: auto-run DAP handshake for testing
+      const testDbg = rt.debugger;
+      let seq = 1;
+      testDbg.on('dap', (msg: { type: string; event?: string }) => {
+        console.log(msg.type === 'event' ? 'DAP EVENT:' : 'DAP RESPONSE:', msg);
+        if (msg.type === 'event' && msg.event === 'initialized') {
+          console.log('initialized — sending configuration');
+          testDbg.send({
+            type: 'request',
+            seq: seq++,
+            command: 'setBreakpoints',
+            arguments: { source: { path: '/main.c' }, breakpoints: [] },
+          });
+          testDbg.send({
+            type: 'request',
+            seq: seq++,
+            command: 'setExceptionBreakpoints',
+            arguments: { filters: [] },
+          });
+          testDbg.send({
+            type: 'request',
+            seq: seq++,
+            command: 'configurationDone',
+            arguments: {},
+          });
+        }
+      });
+      testDbg.send({ type: 'request', seq: seq++, command: 'initialize', arguments: {} });
+
       // Set up stdout/stderr streams to write to the terminal
       // Convert lone \n to \r\n for proper terminal display (xterm.js expects \r\n)
 

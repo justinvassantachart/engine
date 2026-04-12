@@ -35,7 +35,7 @@ export class Debugger extends EventEmitter<DebuggerEventMap> {
   }
 
   public send(message: unknown): unknown {
-    return this.dap.sendMessage(message); // return the response for logging purposes
+    return this.dap.sendMessage(message); // return the response from the DAP adapter. This is sync. events tho are async and emitted through the on('dap') listener.
   }
 
   private attach(worker: Worker) {

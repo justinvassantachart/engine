@@ -85,7 +85,7 @@ impl Debugger {
         Vec::new() // TODO
     }
 
-    pub fn get_variables(&self) -> Vec<Variable> {
+    pub fn get_variables(&self, _frame_id: u32) -> Vec<Variable> {
         Vec::new() // TODO: resolve variables from debug stack + DWARF
     }
 

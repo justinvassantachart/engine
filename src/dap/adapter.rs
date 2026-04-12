@@ -28,6 +28,7 @@ impl DapState {
         self.debugger.as_ref()
     }
 
+    // Returns the capababilities. TODO: check what more we can support.
     fn handle_initialize(&self) -> Result<Value> {
         Ok(json!({
             "supportsConfigurationDoneRequest": true,
@@ -35,17 +36,20 @@ impl DapState {
         }))
     }
 
+    // interacts with wait_for_resume in the worker to unblock after config is done.
     fn handle_configuration_done(&self) -> Result<Value> {
         if let Some(dbg) = self.debugger() {
             dbg.continue_();
         }
-        Ok(json!({}))
+        Ok(Value::Null)
     }
 
+    // We do not support exception breakpoints, but handle the request so we do not blow up.
     fn handle_set_exception_breakpoints(&self) -> Result<Value> {
         Ok(json!({ "breakpoints": [] }))
     }
 
+    // WASM doesn't have threads in the traditional sense, so we report a single "main" thread. NOTE: we might extend later.
     fn handle_threads(&self) -> Result<Value> {
         Ok(json!({
             "threads": [{ "id": 1, "name": "main" }]
@@ -69,6 +73,7 @@ impl DapState {
             .unwrap_or_default();
 
         let dbg = self.debugger().context("No debugger attached")?;
+        // TODO: set_breakpoints. once implemented, verify this handler does the right thing with the results (e.g. line numbers, verified status)
         let results = dbg.set_breakpoints(source, &lines);
         let bps: Vec<_> = results
             .iter()
@@ -90,6 +95,7 @@ impl DapState {
                     "name": f.name,
                     "line": f.line,
                     "column": f.column,
+                    // TODO: resolve later with jacob using DIE info from DWARF.
                     "source": source,
                 })
             })
@@ -100,29 +106,40 @@ impl DapState {
         }))
     }
 
-    fn handle_scopes(&self, _args: &Value) -> Result<Value> {
+    // TODO: possibly have seperate scope for different variable types, depending on what Fabio's get_variables does.
+    fn handle_scopes(&self, args: &Value) -> Result<Value> {
+        let frame_id = args
+            .get("frameId")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0);
+        // Encode frame_id into variablesReference: frame 0 → ref 1, frame 1 → ref 2, …
+        // (0 means "no children" in DAP, so we offset by 1)
+        let variables_reference = frame_id + 1;
         Ok(json!({
             "scopes": [{
                 "name": "Locals",
-                "variablesReference": 1,
+                "variablesReference": variables_reference,
                 "expensive": false,
             }]
         }))
     }
 
+    // TODO: this currently returns all variables in a single "Locals" scope. We might want to split into different scopes (e.g. Locals, Globals, etc) depending on what Fabio provides.
     fn handle_variables(&self, args: &Value) -> Result<Value> {
         let reference = args
             .get("variablesReference")
             .and_then(|v| v.as_i64())
             .unwrap_or(0);
 
-        if reference != 1 {
+        // this means the request is for variables in a scope that has no children (e.g. an optimized-out variable, or a scope that doesn't exist for some reason), so we return an empty list.
+        if reference < 1 {
             return Ok(json!({ "variables": [] }));
         }
 
+        let frame_id = (reference - 1) as u32;
         let dbg = self.debugger().context("No debugger attached")?;
         let vars: Vec<_> = dbg
-            .get_variables()
+            .get_variables(frame_id)
             .iter()
             .map(|v| json!({
                 "name": v.name,
@@ -141,7 +158,7 @@ impl DapState {
         Ok(json!({ "allThreadsContinued": true }))
     }
 
-    // TODO: needs partner to expose step(mode) on Debugger to set sentinel[1] before resuming.
+    // TODO: need to agree with Fabio on how to expose step(mode) on Debugger to set sentinel[1] before resuming.
     // For now these fall through to a plain continue so the program doesn't hang.
     fn handle_next(&self) -> Result<Value> {
         if let Some(dbg) = self.debugger() {
@@ -173,7 +190,8 @@ fn respond(rseq: i64, seq: i64, command: &str, result: Result<Value>) -> Protoco
             success: true,
             command: command.to_string(),
             message: None,
-            body: Some(body),
+            // DAP spec requires body to be omitted if null, so we convert it to an Option here.
+            body: if body.is_null() { None } else { Some(body) },
         },
         Err(e) => ProtocolMessage::Response {
             seq: rseq,
@@ -251,6 +269,8 @@ impl DapAdapter {
                     let info: DebugInfo = serde_wasm_bindgen::from_value(info_val)
                         .expect("DebugInfo deserialization");
                     state.borrow_mut().debugger = Some(Debugger::new(info));
+                    // this is basically our own flavor added to the initalization handshake sequence. We only omit this once our debugger is ready.
+                    emit_event(&state, "initialized", None);
                 }
                 "breakpoint" => {
                     emit_event(&state, "stopped", Some(json!({
@@ -273,7 +293,8 @@ impl DapAdapter {
         self.state.borrow_mut()._closure = Some(closure);
     }
 
-    /// Sends a DAP request and returns the response.
+    /// Sends a DAP request and returns the response synchronously.
+    /// Events are emitted separately through the registered callback.
     #[wasm_bindgen(js_name = "sendMessage")]
     pub fn send_message(&self, msg: JsValue) -> JsValue {
         let request: ProtocolMessage = match serde_wasm_bindgen::from_value(msg) {
@@ -308,16 +329,11 @@ impl DapAdapter {
                 "next" => state.handle_next(),
                 "stepIn" => state.handle_step_in(),
                 "stepOut" => state.handle_step_out(),
+                "disconnect" => Ok(Value::Null),
                 other => Err(anyhow::anyhow!("Unknown command: {other}")),
             };
             (rseq, result)
         }; // borrow_mut dropped here
-
-        // `initialize` response must be followed by an `initialized` event.
-        // Emitted after dropping the borrow so the callback can safely re-enter the adapter.
-        if command == "initialize" && result.is_ok() {
-            emit_event(&self.state, "initialized", None);
-        }
 
         let response = respond(rseq, seq, &command, result);
         let ser = serde_wasm_bindgen::Serializer::new().serialize_maps_as_objects(true);
