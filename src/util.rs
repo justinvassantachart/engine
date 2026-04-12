@@ -7,33 +7,41 @@ pub fn is_worker() -> bool {
     return global.is_instance_of::<DedicatedWorkerGlobalScope>();
 }
 
-/// Prints a formatted string to the JavaScript console.
+#[doc(hidden)]
 #[macro_export]
-macro_rules! log {
-    ($($arg:tt)*) => {{
+macro_rules! __out {
+    ($log_fn:path, $($arg:tt)*) => {{
         let prefix = if $crate::util::is_worker() {
-            "[runtime:worker] "
+            "[runtime:worker]"
         } else {
-            "[runtime:main] "
+            "[runtime:main]"
         };
-        let body = format!("{}", format_args!($($arg)*));
-        let fmt = {
-            let mut s = String::with_capacity(prefix.len() + 6);
-            s.push_str("%c");
-            s.push_str(prefix);
-            s.push_str("%c%s");
-            s
-        };
-        web_sys::console::log_4(
-            &wasm_bindgen::JsValue::from_str(&fmt),
-            &wasm_bindgen::JsValue::from_str("font-weight: bold"),
-            &wasm_bindgen::JsValue::from_str(""),
-            &wasm_bindgen::JsValue::from_str(&body),
+        $log_fn(
+            &::wasm_bindgen::JsValue::from_str(&format!("%c{}%c %s", prefix)),
+            &::wasm_bindgen::JsValue::from_str("font-weight: bold"),
+            &::wasm_bindgen::JsValue::from_str(""),
+            &::wasm_bindgen::JsValue::from_str(&format!($($arg)*)),
         );
     }};
 }
 
-/// Transforms `Result` into `Option` and logs an error if it occurs.
+/// Prints a formatted string to the JavaScript console.
+#[macro_export(local_inner_macros)]
+macro_rules! log {
+    ($($arg:tt)*) => {
+        __out!(::web_sys::console::log_4, $($arg)*)
+    };
+}
+
+/// Prints a formatted warning to the JavaScript console.
+#[macro_export(local_inner_macros)]
+macro_rules! warn {
+    ($($arg:tt)*) => {
+        __out!(::web_sys::console::warn_4, $($arg)*)
+    };
+}
+
+/// Transforms `Result` into `Option` and logs a warning if an error occurs.
 #[macro_export]
 macro_rules! weak_error {
     ($res:expr) => {
