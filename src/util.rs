@@ -1,54 +1,41 @@
-use wasm_bindgen::JsCast;
-use web_sys::DedicatedWorkerGlobalScope;
-
-/// Whether we are currently running inside a web worker
-pub fn is_worker() -> bool {
-    let global = js_sys::global();
-    return global.is_instance_of::<DedicatedWorkerGlobalScope>();
-}
-
 #[doc(hidden)]
-#[macro_export]
 macro_rules! __out {
     ($log_fn:path, $($arg:tt)*) => {{
-        let prefix = if $crate::util::is_worker() {
-            "[runtime:worker]"
-        } else {
-            "[runtime:main]"
-        };
         $log_fn(
-            &::wasm_bindgen::JsValue::from_str(&format!("%c{}%c %s", prefix)),
-            &::wasm_bindgen::JsValue::from_str("font-weight: bold"),
-            &::wasm_bindgen::JsValue::from_str(""),
+            &::wasm_bindgen::JsValue::from_str(&format!(
+                "%c[{}] %s",
+                concat!(file!(), ":\u{200B}", line!()),
+            )),
+            &::wasm_bindgen::JsValue::from_str("font-weight:bold"),
             &::wasm_bindgen::JsValue::from_str(&format!($($arg)*)),
         );
     }};
 }
+pub(crate) use __out;
 
 /// Prints a formatted string to the JavaScript console.
-#[macro_export(local_inner_macros)]
 macro_rules! log {
     ($($arg:tt)*) => {
-        __out!(::web_sys::console::log_4, $($arg)*)
+        $crate::util::__out!(::web_sys::console::log_3, $($arg)*)
     };
 }
+pub(crate) use log;
 
 /// Prints a formatted warning to the JavaScript console.
-#[macro_export(local_inner_macros)]
-macro_rules! warn {
+macro_rules! warning {
     ($($arg:tt)*) => {
-        __out!(::web_sys::console::warn_4, $($arg)*)
+        $crate::util::__out!(::web_sys::console::warn_3, $($arg)*)
     };
 }
+pub(crate) use warning;
 
 /// Transforms `Result` into `Option` and logs a warning if an error occurs.
-#[macro_export]
 macro_rules! weak_error {
     ($res:expr) => {
         match $res {
             Ok(v) => Some(v),
             Err(e) => {
-                $crate::warn!("{:?}", e);
+                $crate::util::warning!("{:?}", e);
                 None
             }
         }
@@ -57,12 +44,13 @@ macro_rules! weak_error {
         match $res {
             Ok(v) => Some(v),
             Err(e) => {
-                $crate::warn!("{}: {:?}", $msg, e);
+                $crate::util::warning!("{}: {:?}", $msg, e);
                 None
             }
         }
     };
 }
+pub(crate) use weak_error;
 
 pub mod val_type_serde {
     use serde::{Deserialize, Deserializer, Serializer};
