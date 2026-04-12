@@ -1,5 +1,7 @@
 use super::{InstrResult, Instrumenter};
-use crate::types::{DebugFunction, WasmLocation};
+use crate::debug::dwarf::Die;
+use crate::debug::instrument::InstrError;
+use crate::types::{DebugFrameEntry, DebugFunction, GlobalAddress, WasmLocation};
 use std::collections::{BTreeSet, HashMap, HashSet};
 use wasm_encoder::reencode::Reencode;
 use wasm_encoder::{Instruction, MemArg, reencode};
@@ -13,6 +15,29 @@ macro_rules! error {
     };
 }
 
+impl DebugFunction {
+    /// Clears the layout of the stack frame and resets it to its minimum size.
+    pub fn reset(&mut self) {
+        self.size = 4; // Space for current PC in frame
+        self.layout.clear();
+    }
+
+    /// Ensures an entry exists for `loc` and returns its offset.
+    /// `bkpt` will be added to the lifetime of the found or created entry.
+    /// Returns [None] if an entry could not be created (e.g. we cannot store wasm ref types).
+    pub fn place(&mut self, location: WasmLocation) -> usize {
+        if let Some(pos) = self.layout.iter().position(|e| e.location == location) {
+            return self.layout[pos].offset;
+        }
+
+        let offset = self.size;
+        let size = 8;
+        self.size += size;
+        self.layout.push(DebugFrameEntry { offset, location });
+        offset
+    }
+}
+
 #[derive(Default)]
 struct WasmLocations {
     operands: BTreeSet<usize>,
@@ -20,23 +45,9 @@ struct WasmLocations {
     globals: BTreeSet<usize>,
 }
 
-fn wasm_locations_for_bkpt(func: &DebugFunction, bkpt_idx: usize) -> WasmLocations {
-    let mut locs = WasmLocations::default();
-    for e in &func.layout {
-        if e.lifetime.contains(&bkpt_idx) {
-            match e.location {
-                WasmLocation::Operand(i) => locs.operands.insert(i),
-                WasmLocation::Local(i) => locs.locals.insert(i),
-                WasmLocation::Global(i) => locs.globals.insert(i),
-            };
-        }
-    }
-    locs
-}
-
 pub struct FnInstrumenter<'a, 'b, 'c> {
     instr: &'a mut Instrumenter<'b>,
-    debug_func_idx: usize,
+    func_idx: usize,
     func_body: wasmparser::FunctionBody<'c>,
 
     /// A [wasmparser] validator used to track the types of locals and operands
@@ -68,7 +79,7 @@ pub struct FnInstrumenter<'a, 'b, 'c> {
 impl<'a, 'b, 'c> FnInstrumenter<'a, 'b, 'c> {
     pub fn new(
         instr: &'a mut Instrumenter<'b>,
-        debug_func_idx: usize,
+        func_idx: usize,
         func_body: wasmparser::FunctionBody<'c>,
     ) -> InstrResult<Self> {
         let mut validator = instr
@@ -81,7 +92,7 @@ impl<'a, 'b, 'c> FnInstrumenter<'a, 'b, 'c> {
 
         Ok(Self {
             instr,
-            debug_func_idx,
+            func_idx,
             func_body,
             validator,
 
@@ -91,20 +102,24 @@ impl<'a, 'b, 'c> FnInstrumenter<'a, 'b, 'c> {
         })
     }
 
-    fn debug_func(&mut self) -> &mut DebugFunction {
-        &mut self.instr.info.functions[self.debug_func_idx]
+    fn func(&self) -> &DebugFunction {
+        &self.instr.info.functions[self.func_idx]
+    }
+
+    fn func_mut(&mut self) -> &mut DebugFunction {
+        &mut self.instr.info.functions[self.func_idx]
     }
 
     fn emit_header(&mut self) {
         let instr_count = self.instructions.len();
-        let frame_size = self.debug_func().size;
+        let frame_size = self.func_mut().size;
         self.instructions.extend([
             Instruction::GlobalGet(self.instr.sp_gl_index),
             Instruction::I32Const(frame_size as i32),
             Instruction::I32Sub,
             Instruction::GlobalSet(self.instr.sp_gl_index),
             Instruction::GlobalGet(self.instr.sp_gl_index),
-            Instruction::I32Const(self.debug_func_idx as i32),
+            Instruction::I32Const(self.func_idx as i32),
             Instruction::I32Store(MemArg {
                 offset: 0,
                 align: 2,
@@ -114,7 +129,12 @@ impl<'a, 'b, 'c> FnInstrumenter<'a, 'b, 'c> {
         self.stack_intructions.push(instr_count + 1);
     }
 
-    fn emit_bkpt(&mut self, bkpt_idx: usize) -> InstrResult {
+    fn locations_at(&self, pc: GlobalAddress) -> WasmLocations {
+        let fun = self.func().die_ref.deref(&self.instr.info.dwarf);
+        WasmLocations::default()
+    }
+
+    fn emit_bkpt(&mut self, bkpt_idx: usize, pc: GlobalAddress) -> InstrResult {
         // High-level goal:
         // Loop through all variables of the function.
         // For every variable with an active location at this point in the
@@ -125,11 +145,11 @@ impl<'a, 'b, 'c> FnInstrumenter<'a, 'b, 'c> {
         // All instrumentation code must have no observable side effects.
         // In particular, all values of locals must be preserved and the
         // state of the operand stack must be preserved.
-        let locs = wasm_locations_for_bkpt(self.debug_func(), bkpt_idx);
+        let locs = self.locations_at(pc);
 
-        self.emit_operands(&locs, bkpt_idx)?;
-        self.emit_locals(&locs, bkpt_idx)?;
-        self.emit_globals(&locs, bkpt_idx)?;
+        self.emit_operands(&locs)?;
+        self.emit_locals(&locs)?;
+        self.emit_globals(&locs)?;
 
         self.instructions
             .push(Instruction::I32Const(bkpt_idx as i32));
@@ -150,7 +170,7 @@ impl<'a, 'b, 'c> FnInstrumenter<'a, 'b, 'c> {
     /// preemptively as soon as it is pushed by recognizing in advance that its value will
     /// be needed at a later point in the program. This would avoid the need to unroll the
     /// stack in this manner.
-    fn emit_operands(&mut self, locs: &WasmLocations, bkpt: usize) -> InstrResult {
+    fn emit_operands(&mut self, locs: &WasmLocations) -> InstrResult {
         let Some(&first) = locs.operands.first() else {
             return Ok(());
         };
@@ -213,13 +233,7 @@ impl<'a, 'b, 'c> FnInstrumenter<'a, 'b, 'c> {
 
             // Store the operand value to the debug stack
             if locs.operands.contains(&operand_idx) {
-                let Some(offset) =
-                    self.debug_func()
-                        .place(WasmLocation::Operand(operand_idx), ty, bkpt)
-                else {
-                    continue;
-                };
-
+                let offset = self.func_mut().place(WasmLocation::Operand(operand_idx));
                 self.instructions
                     .push(Instruction::GlobalGet(self.instr.sp_gl_index));
                 self.instructions.push(Instruction::LocalGet(scratch_idx));
@@ -244,19 +258,13 @@ impl<'a, 'b, 'c> FnInstrumenter<'a, 'b, 'c> {
         Ok(())
     }
 
-    fn emit_locals(&mut self, locs: &WasmLocations, bkpt: usize) -> InstrResult {
+    fn emit_locals(&mut self, locs: &WasmLocations) -> InstrResult {
         for &local_idx in &locs.locals {
             let Some(ty) = self.validator.get_local_type(local_idx as u32) else {
                 return error!("Couldn't get type of local {:?}", local_idx);
             };
 
-            let Some(offset) = self
-                .debug_func()
-                .place(WasmLocation::Local(local_idx), ty, bkpt)
-            else {
-                continue;
-            };
-
+            let offset = self.func_mut().place(WasmLocation::Local(local_idx));
             self.instructions
                 .push(Instruction::GlobalGet(self.instr.sp_gl_index));
             self.instructions
@@ -268,7 +276,7 @@ impl<'a, 'b, 'c> FnInstrumenter<'a, 'b, 'c> {
         Ok(())
     }
 
-    fn emit_globals(&mut self, locs: &WasmLocations, bkpt: usize) -> InstrResult {
+    fn emit_globals(&mut self, locs: &WasmLocations) -> InstrResult {
         let Some(types) = self.instr.validator.types(0) else {
             return error!("Could not get module types");
         };
@@ -280,12 +288,7 @@ impl<'a, 'b, 'c> FnInstrumenter<'a, 'b, 'c> {
             .collect();
 
         for (global_idx, ty) in globals {
-            let Some(offset) = self
-                .debug_func()
-                .place(WasmLocation::Global(global_idx), ty, bkpt)
-            else {
-                continue;
-            };
+            let offset = self.func_mut().place(WasmLocation::Global(global_idx));
 
             self.instructions
                 .push(Instruction::GlobalGet(self.instr.sp_gl_index));
@@ -315,7 +318,7 @@ impl<'a, 'b, 'c> FnInstrumenter<'a, 'b, 'c> {
 
     fn emit_footer(&mut self) {
         let instr_count = self.instructions.len();
-        let frame_size = self.debug_func().size;
+        let frame_size = self.func_mut().size;
         self.instructions.extend([
             Instruction::GlobalGet(self.instr.sp_gl_index),
             Instruction::I32Const(frame_size as i32),
@@ -328,7 +331,7 @@ impl<'a, 'b, 'c> FnInstrumenter<'a, 'b, 'c> {
     pub fn instrument(mut self) -> InstrResult<wasm_encoder::Function> {
         // Clear the stack frame for this function
         // This is a safety check to ensure we always start instrumentation at a known state.
-        self.debug_func().reset();
+        self.func_mut().reset();
         self.emit_header();
 
         let mut reader = self
@@ -339,11 +342,12 @@ impl<'a, 'b, 'c> FnInstrumenter<'a, 'b, 'c> {
         let body_rel_start = self.instr.code_ofs(self.func_body.range().start);
         let first_instr_rel = self.instr.code_ofs(reader.original_position());
 
-        for code_ofs in body_rel_start..first_instr_rel {
+        for code_ofs in body_rel_start.0..first_instr_rel.0 {
+            let code_ofs = GlobalAddress(code_ofs);
             let Some(bkpt_idx) = self.instr.breakpoints.get(&code_ofs).copied() else {
                 continue;
             };
-            self.emit_bkpt(bkpt_idx)?;
+            self.emit_bkpt(bkpt_idx, code_ofs)?;
         }
 
         while !reader.eof() {
@@ -351,7 +355,7 @@ impl<'a, 'b, 'c> FnInstrumenter<'a, 'b, 'c> {
             let code_ofs = self.instr.code_ofs(binary_ofs);
 
             if let Some(&bkpt_idx) = self.instr.breakpoints.get(&code_ofs) {
-                self.emit_bkpt(bkpt_idx)?;
+                self.emit_bkpt(bkpt_idx, code_ofs)?;
             }
 
             // Pass this operator to the wasmparser validator. It will internally
@@ -413,7 +417,7 @@ impl<'a, 'b, 'c> FnInstrumenter<'a, 'b, 'c> {
         reader.finish()?;
 
         /* Adjust stack instructions to include stack size */
-        let frame_size = self.debug_func().size;
+        let frame_size = self.func_mut().size;
         for instr_index in self.stack_intructions {
             let inst = &mut self.instructions[instr_index];
             assert!(matches!(*inst, Instruction::I32Const(_)));

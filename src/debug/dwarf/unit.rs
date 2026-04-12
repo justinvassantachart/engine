@@ -5,6 +5,7 @@ use std::{
 
 use crate::{
     debug::dwarf::{DerefContext, Die, Dwarf},
+    types::GlobalAddress,
     util::weak_error,
 };
 
@@ -21,13 +22,15 @@ pub struct Unit {
     /// Each of these is theoretically a breakable program statement
     /// (whether it actually is depends on if instrumentation code was generated)
     lines: Vec<LineRow>,
+    /// The index of the first location in this unit in the global locations list
+    loc_offset: usize,
 }
 
 #[derive(PartialEq, Debug, Clone)]
 #[repr(Rust, packed)]
 pub struct LineRow {
     /// PC address within code segment
-    address: usize,
+    address: GlobalAddress,
     /// Index of corresponding file within this unit
     file_index: usize,
     /// Line number within file (one-indexed)
@@ -38,7 +41,7 @@ pub struct LineRow {
 
 impl LineRow {
     #[inline]
-    pub fn address(&self) -> usize {
+    pub fn address(&self) -> GlobalAddress {
         self.address
     }
 
@@ -72,6 +75,7 @@ impl Unit {
             index: self.index.clone(),
             files: self.files.clone(),
             lines: self.lines.clone(),
+            loc_offset: self.loc_offset.clone(),
         }
     }
 
@@ -106,6 +110,7 @@ impl Unit {
 pub struct UnitParser<'a> {
     dwarf: &'a gimli::Dwarf<R>,
     unit_index: usize,
+    loc_index: usize,
 }
 
 impl<'a> UnitParser<'a> {
@@ -113,6 +118,7 @@ impl<'a> UnitParser<'a> {
         UnitParser {
             dwarf,
             unit_index: 0,
+            loc_index: 0,
         }
     }
 
@@ -130,11 +136,15 @@ impl<'a> UnitParser<'a> {
         let index = self.unit_index;
         self.unit_index += 1;
 
+        let loc_offset = self.loc_index;
+        self.loc_index += lines.len();
+
         Some(Unit {
             unit,
             index,
             files,
             lines,
+            loc_offset,
         })
     }
 }
@@ -154,7 +164,7 @@ fn parse_lines(
         }
 
         lines.push(LineRow {
-            address: line_row.address() as usize,
+            address: line_row.address().into(),
             file_index: line_row.file_index() as usize,
             line: line_row.line().map(NonZeroU64::get).unwrap_or(0) as usize,
             column: column as usize,

@@ -183,75 +183,10 @@ pub struct DebugFunction {
     pub layout: Vec<DebugFrameEntry>,
 }
 
-impl DebugFunction {
-    /// Clears the layout of the stack frame and resets it to its minimum size.
-    pub fn reset(&mut self) {
-        self.size = 4; // Space for debug function index tag
-        self.layout.clear();
-    }
-
-    /// Ensures an entry exists for `loc` and `ty` and returns its offset.
-    /// `bkpt` will be added to the lifetime of the found or created entry.
-    /// Returns [None] if an entry could not be created (e.g. we cannot store wasm ref types).
-    pub fn place(
-        &mut self,
-        loc: WasmLocation,
-        ty: wasmparser::ValType,
-        bkpt: usize,
-    ) -> Option<usize> {
-        use wasmparser::ValType;
-        if matches!(ty, ValType::Ref(_)) {
-            return None;
-        }
-        if let Some(pos) = self
-            .layout
-            .iter()
-            .position(|e| e.location == loc && e.ty == ty)
-        {
-            self.layout[pos].lifetime.insert(bkpt);
-            return Some(self.layout[pos].offset);
-        }
-
-        let offset = self.size;
-        let size = match ty {
-            ValType::I32 | ValType::F32 => 4,
-            ValType::I64 | ValType::F64 => 8,
-            ValType::V128 => 16,
-            ValType::Ref(_) => unreachable!(),
-        };
-        self.size += size;
-        let mut entry = DebugFrameEntry {
-            offset,
-            ty,
-            location: loc,
-            lifetime: HashSet::default(),
-        };
-        entry.lifetime.insert(bkpt);
-        self.layout.push(entry);
-        Some(offset)
-    }
-}
-
 #[derive(Debug, Clone, Tsify, Serialize, Deserialize)]
 pub struct DebugFrameEntry {
     /// The byte offset of this entry in its containing stack frame
     pub offset: usize,
-    /// The WebAssembly type of the value stored by the entry
-    #[serde(with = "crate::util::val_type_serde")]
-    pub ty: wasmparser::ValType,
     /// The WebAssembly location (local, global, or stack) represented by this entry's value
     pub location: WasmLocation,
-    /// A list of breakpoint indices for which this entry is considered valid.
-    ///
-    /// If a breakpoint index `N` is contained in this list, then accessing this entry's
-    /// value immediately after hitting breakpoint `N` will yield a valid value.
-    ///
-    /// More than one [DebugFrameEntry] in a frame may share the same [DebugFrameEntry::location],
-    /// but they are guaranteed to never have overlapping values in [DebugFrameEntry::lifetime].
-    /// This permits two frame entries with the same location to contain different types
-    /// at different points during the function's execution – for example, `WasmOp::Stack(0)`
-    /// might have type [wasmparser::ValType::I32] at the beginning of a function, but change to
-    /// [wasmparser::ValType::F64] later on in the function as values are shifted on and off
-    /// the operand stack.
-    pub lifetime: HashSet<usize>,
 }

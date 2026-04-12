@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use super::{Error, FnInstrumenter, InstrResult};
-use crate::types::DebugInfo;
+use crate::types::{DebugInfo, GlobalAddress};
 use wasm_encoder::reencode::{self};
 
 pub struct Instrumenter<'a> {
@@ -18,16 +18,14 @@ pub struct Instrumenter<'a> {
     pub code_section_start: usize,
 
     /// Map from code-section byte offset to breakpoint index (1-based; 0 is sentinel).
-    pub breakpoints: std::collections::HashMap<usize, usize>,
+    pub breakpoints: std::collections::HashMap<GlobalAddress, usize>,
 }
 
 impl<'a> Instrumenter<'a> {
     pub fn new(info: &'a mut DebugInfo) -> Self {
         let mut breakpoints = HashMap::new();
         for (index, loc) in info.dwarf.locations().enumerate() {
-            breakpoints
-                .entry(loc.line.address() as usize)
-                .or_insert(index);
+            breakpoints.entry(loc.line.address()).or_insert(index);
         }
 
         Self {
@@ -46,8 +44,8 @@ impl<'a> Instrumenter<'a> {
 
     /// Converts an offset into the WASM binary into an offset relative to the code section.
     /// DWARF represents PC values relative to start of the code section.
-    pub fn code_ofs(&self, address: usize) -> usize {
-        address.saturating_sub(self.code_section_start)
+    pub fn code_ofs(&self, address: usize) -> GlobalAddress {
+        GlobalAddress(address.saturating_sub(self.code_section_start) as u64)
     }
 }
 
