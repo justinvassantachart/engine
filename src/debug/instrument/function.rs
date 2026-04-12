@@ -18,7 +18,9 @@ macro_rules! error {
 impl DebugFunction {
     /// Clears the layout of the stack frame and resets it to its minimum size.
     pub fn reset(&mut self) {
-        self.size = 4; // Space for current PC in frame
+        self.size = 0;
+        self.size += 4; // Space for function tag
+        self.size += 4; // Space for function PC (TODO: update on call)
         self.layout.clear();
     }
 
