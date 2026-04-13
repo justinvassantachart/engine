@@ -14,6 +14,7 @@ unsafe impl Send for Debuggee {}
 pub struct Debuggee {
     info: DebugInfo,
     stack_pointer: js_sys::WebAssembly::Global,
+    stack: js_sys::DataView,
     state: js_sys::Int32Array,
     flags: js_sys::Uint8Array,
 }
@@ -40,8 +41,14 @@ impl Debuggee {
     pub fn new(info: DebugInfo) -> Self {
         let state = info.get_bp_state();
         let flags = info.get_bp_flags();
+
+        let stack = info.stack.memory.buffer();
+        let stack = stack.unchecked_ref::<js_sys::ArrayBuffer>();
+        let stack = js_sys::DataView::new(stack, 0, stack.byte_length() as usize);
+
         Self {
             stack_pointer: create_stack_pointer(&info, &state).expect("Created stack pointer"),
+            stack,
             state,
             flags,
             info,
@@ -125,13 +132,13 @@ impl Debuggee {
         if !self.bkpt_enabled(index) {
             return false;
         }
-        let sp = self.stack_pointer.value().as_f64().unwrap() as i32;
 
+        let sp = self.stack_pointer.value().as_f64().unwrap() as i32;
         let pc = self
             .info
             .dwarf
             .location_at(index)
-            .map(|location| location.line.address());
+            .map(|location| location.address());
 
         let Some(pc) = pc else {
             warning!(
@@ -141,11 +148,10 @@ impl Debuggee {
             return false;
         };
 
-        let stack_buffer = self.info.stack.memory.buffer();
-        let stack_buffer = stack_buffer.unchecked_ref::<js_sys::ArrayBuffer>();
-        let stack_view =
-            js_sys::DataView::new(stack_buffer, 0, stack_buffer.byte_length() as usize);
-        stack_view.set_uint32_endian(sp as usize, pc.0 as u32, true);
+        // On a breakpoint hit we must write the current PC into the most recent frame.
+        // This avoids having to add instrumentation code to do this on every line,
+        // and instead only do it when a breakpoint is actually hit
+        self.stack.set_uint32_endian(sp as usize, pc.0 as u32, true);
 
         js_sys::Atomics::store(&self.state, 0, sp).unwrap();
         WorkerOut::Breakpoint.send();

@@ -62,6 +62,14 @@ pub struct Location<'a> {
     pub file: &'a Path,
 }
 
+impl<'a> std::ops::Deref for Location<'a> {
+    type Target = LineRow;
+
+    fn deref(&self) -> &Self::Target {
+        &self.line
+    }
+}
+
 impl std::ops::Deref for Unit {
     type Target = gimli::Unit<R>;
 

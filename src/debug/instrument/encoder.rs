@@ -25,7 +25,7 @@ impl<'a> Instrumenter<'a> {
     pub fn new(info: &'a mut DebugInfo) -> Self {
         let mut breakpoints = HashMap::new();
         for (index, loc) in info.dwarf.locations().enumerate() {
-            breakpoints.entry(loc.line.address()).or_insert(index);
+            breakpoints.entry(loc.address()).or_insert(index);
         }
 
         Self {
