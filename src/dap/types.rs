@@ -1,4 +1,23 @@
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+
+use crate::debug::dwarf::DieReference;
+
+enum ScopeEntry {
+    /// Root scope for a frame — returns all locals/params/globals
+    Frame { frame_id: u32 },
+    
+    /// TODO: handle nested types somehow
+    // Variable {
+        // TODO
+    // },
+}
+
+#[derive(Default)]
+pub struct ScopeMap {
+    next_ref: i64,
+    entries: HashMap<i64, ScopeEntry>,
+}
 
 // ---------------------------------------------------------------------------
 // Base Protocol

@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::prelude::*;
 
-use crate::dap::types::ProtocolMessage;
+use crate::dap::types::{ProtocolMessage, ScopeMap};
 use crate::debug::Debugger;
 use crate::types::DebugInfo;
 
@@ -19,6 +19,7 @@ struct DapState {
     /// We emitted `initialized` for this debug session (once per worker / run).
     initialized_emitted: bool,
     callback: Option<js_sys::Function>,
+    scopes: ScopeMap,
     _closure: Option<Closure<dyn FnMut(web_sys::MessageEvent)>>,
 }
 
@@ -113,10 +114,7 @@ impl DapState {
 
     // TODO: possibly have seperate scope for different variable types, depending on what Fabio's get_variables does.
     fn handle_scopes(&self, args: &Value) -> Result<Value> {
-        let frame_id = args
-            .get("frameId")
-            .and_then(|v| v.as_i64())
-            .unwrap_or(0);
+        let frame_id = args.get("frameId").and_then(|v| v.as_i64()).unwrap_or(0);
         // Encode frame_id into variablesReference: frame 0 → ref 1, frame 1 → ref 2, …
         // (0 means "no children" in DAP, so we offset by 1)
         let variables_reference = frame_id + 1;
@@ -146,12 +144,14 @@ impl DapState {
         let vars: Vec<_> = dbg
             .get_variables(frame_id)
             .iter()
-            .map(|v| json!({
-                "name": v.name,
-                "value": v.value,
-                "type": v.r#type,
-                "variablesReference": 0,
-            }))
+            .map(|v| {
+                json!({
+                    "name": v.name,
+                    "value": v.value,
+                    "type": v.r#type,
+                    "variablesReference": 0,
+                })
+            })
             .collect();
         Ok(json!({ "variables": vars }))
     }
@@ -263,6 +263,7 @@ impl DapAdapter {
                 client_initialized: false,
                 initialized_emitted: false,
                 callback: None,
+                scopes: ScopeMap::default(),
                 _closure: None,
             })),
         }
@@ -309,11 +310,15 @@ impl DapAdapter {
                     try_emit_initialized(&state);
                 }
                 "breakpoint" => {
-                    emit_event(&state, "stopped", Some(json!({
-                        "reason": "breakpoint",
-                        "threadId": 1,
-                        "allThreadsStopped": true,
-                    })));
+                    emit_event(
+                        &state,
+                        "stopped",
+                        Some(json!({
+                            "reason": "breakpoint",
+                            "threadId": 1,
+                            "allThreadsStopped": true,
+                        })),
+                    );
                 }
                 "stop" => {
                     emit_event(&state, "terminated", Some(json!({ "restart": false })));
