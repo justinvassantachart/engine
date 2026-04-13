@@ -1,6 +1,7 @@
 use crate::types::{DebugInfo, WorkerOut};
-use crate::util::weak_error;
+use crate::util::{warning, weak_error};
 use js_sys::{Object, Reflect, WebAssembly};
+use wasm_bindgen::JsCast;
 use wasm_bindgen::prelude::*;
 use wasmer::{
     AsStoreMut, Function, FunctionEnv, FunctionEnvMut, Global, Imports, Memory, js::AsJs,
@@ -124,12 +125,29 @@ impl Debuggee {
         if !self.bkpt_enabled(index) {
             return false;
         }
-        let sp = Reflect::get(&self.stack_pointer, &"value".into())
-            .unwrap()
-            .as_f64()
-            .unwrap() as i32;
-        js_sys::Atomics::store(&self.state, 0, sp).unwrap();
+        let sp = self.stack_pointer.value().as_f64().unwrap() as i32;
 
+        let pc = self
+            .info
+            .dwarf
+            .location_at(index)
+            .map(|location| location.line.address());
+
+        let Some(pc) = pc else {
+            warning!(
+                "Could not find corresponding location for breakpoint index {:?}",
+                index
+            );
+            return false;
+        };
+
+        let stack_buffer = self.info.stack.memory.buffer();
+        let stack_buffer = stack_buffer.unchecked_ref::<js_sys::ArrayBuffer>();
+        let stack_view =
+            js_sys::DataView::new(stack_buffer, 0, stack_buffer.byte_length() as usize);
+        stack_view.set_uint32_endian(sp as usize, pc.0 as u32, true);
+
+        js_sys::Atomics::store(&self.state, 0, sp).unwrap();
         WorkerOut::Breakpoint.send();
         self.wait_for_resume();
         true

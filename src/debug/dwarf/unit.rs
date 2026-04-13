@@ -113,6 +113,15 @@ impl Unit {
             file: &self.files[l.file_index as usize],
         })
     }
+
+    pub fn location_at(&self, index: usize) -> Option<Location<'_>> {
+        let local_index = index.checked_sub(self.loc_offset)?;
+        self.lines.get(local_index).map(|line| Location {
+            unit: self,
+            line,
+            file: &self.files[line.file_index as usize],
+        })
+    }
 }
 
 pub struct UnitParser<'a> {

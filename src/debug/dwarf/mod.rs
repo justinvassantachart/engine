@@ -90,4 +90,8 @@ impl Dwarf {
     pub fn locations(&self) -> impl Iterator<Item = Location<'_>> {
         self.units.iter().flat_map(|u| u.locations())
     }
+
+    pub fn location_at(&self, index: usize) -> Option<Location<'_>> {
+        self.units.iter().find_map(|u| u.location_at(index))
+    }
 }
