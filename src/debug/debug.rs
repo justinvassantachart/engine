@@ -18,8 +18,6 @@ pub struct Variable {
     pub r#type: Option<String>,
 }
 
-pub const BREAKPOINT_PREFIX_BYTES: usize = 16;
-
 // ---------------------------------------------------------------------------
 // Main-thread Debugger
 // ---------------------------------------------------------------------------
@@ -28,27 +26,18 @@ pub const BREAKPOINT_PREFIX_BYTES: usize = 16;
 /// Constructed from `DebugInfo` received via the worker's `debug` message.
 pub struct Debugger {
     info: DebugInfo,
-    sentinel: js_sys::Int32Array,
-    flags: js_sys::Uint8Array,
+    state: js_sys::Int32Array,
 }
 
 impl Debugger {
     pub fn new(info: DebugInfo) -> Self {
-        let sentinel = js_sys::Int32Array::new_with_byte_offset_and_length(&info.breakpoints, 0, 4);
-        let flags = js_sys::Uint8Array::new_with_byte_offset(
-            &info.breakpoints,
-            BREAKPOINT_PREFIX_BYTES as u32,
-        );
-        Self {
-            info,
-            sentinel,
-            flags,
-        }
+        let state = info.get_bp_state();
+        Self { info, state }
     }
 
     /// Walks the debug stack and returns the current call stack.
     pub fn backtrace(&self) -> anyhow::Result<Vec<StackFrame>> {
-        let sp = self.sentinel.get_index(3) as u32;
+        let sp = self.state.get_index(0) as u32;
         let buffer = self.info.stack.memory.buffer();
         let buffer = buffer.unchecked_ref::<js_sys::ArrayBuffer>();
         let stack_top = buffer.byte_length();
@@ -89,9 +78,9 @@ impl Debugger {
         Vec::new() // TODO: resolve variables from debug stack + DWARF
     }
 
-    /// Resumes the worker by signaling through the sentinel.
+    /// Resumes the worker by signaling through the SAB.
     pub fn continue_(&self) {
-        js_sys::Atomics::add(&self.sentinel, 0, 1).unwrap();
-        js_sys::Atomics::notify(&self.sentinel, 0).unwrap();
+        js_sys::Atomics::store(&self.state, 0, 0).unwrap();
+        js_sys::Atomics::notify(&self.state, 0).unwrap();
     }
 }

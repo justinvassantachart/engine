@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use serde_repr::Serialize_repr;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use tsify::Tsify;
 use wasm_bindgen::JsValue;
 use wasmer::{MemoryType, Pages};
@@ -142,17 +142,36 @@ pub struct DebugInfo {
     /// List of debuggable functions, sorted by low_pc
     pub functions: Vec<DebugFunction>,
 
-    /// SharedArrayBuffer that controls breakpoint operation in the debugger.
+    /// This buffer encodes execution state and breakpoint metadata in a
+    /// compact, fixed layout. All fields are little-endian.
     ///
-    /// - `[u32` Sentinel
-    /// - `[u32]` Mode:
-    ///   - `0` — Pause on breakpoints
-    ///   - `1` — Step into (pause on next location in program order)
-    ///   - `2` — Step over (pause when stack depth ≥ current)
-    ///   - `3` — Step out (pause when stack depth > current)
-    /// - `[u32]` Current breakpoint location
-    /// - `[u32]` The saved debug stack pointer (0 if not in breakpoint)
-    /// - `[u32] ...` How many times each breakpoint location has been selected by a breakpoint
+    /// ```md
+    /// ┌────────┬──────────────┬──────────────────────────────────────────────┐
+    /// │ Offset │ Size         │ Field                                        │
+    /// ├────────┼──────────────┼──────────────────────────────────────────────┤
+    /// │ 0      │ u32          │ Stack Pointer                                │
+    /// │        │              │   Current value of the stack pointer (SP).   │
+    /// │        │              │   Will be 0 while the debuggee is running,   │
+    /// │        │              │   and non-zero when paused on a breakpoint.  │
+    /// │        │              │                                              │
+    /// │ 4      │ u32          │ Mode                                         │
+    /// │        │              │   Execution control mode:                    │
+    /// │        │              │     0 → Pause on breakpoints                 │
+    /// │        │              │     1 → Step into                            │
+    /// │        │              │     2 → Step over                            │
+    /// │        │              │     3 → Step out                             │
+    /// │        │              │                                              │
+    /// │ 8      │ u8[N]        │ Breakpoint Counts                            │
+    /// │        │              │   One byte per breakpoint location.          │
+    /// │        │              │   Each entry counts how many times the       │
+    /// │        │              │   corresponding breakpoint has been set.     │
+    /// └────────┴──────────────┴──────────────────────────────────────────────┘
+    /// ```
+    ///
+    /// Notes:
+    /// - `N` is the number of breakpoint locations being tracked.
+    /// - The breakpoint array begins immediately at offset 8 and is densely packed.
+    ///
     #[serde(with = "serde_wasm_bindgen::preserve")]
     pub breakpoints: js_sys::SharedArrayBuffer,
 
@@ -166,6 +185,9 @@ pub struct DebugInfo {
     #[serde(with = "crate::debug::dwarf::serde")]
     pub dwarf: Dwarf,
 }
+
+/// Size in bytes of the `breakpoints` buffer prefix.
+pub const BP_PREFIX_BYTES: usize = 8;
 
 #[derive(Debug, Clone, Hash, Eq, PartialEq, Serialize, Deserialize)]
 pub enum WasmLocation {
@@ -204,6 +226,14 @@ pub struct DebugFrameEntry {
 // ============================================================================
 
 impl DebugInfo {
+    pub fn get_bp_state(&self) -> js_sys::Int32Array {
+        js_sys::Int32Array::new_with_byte_offset_and_length(&self.breakpoints, 0, 2)
+    }
+
+    pub fn get_bp_flags(&self) -> js_sys::Uint8Array {
+        js_sys::Uint8Array::new_with_byte_offset(&self.breakpoints, BP_PREFIX_BYTES as u32)
+    }
+
     /// Finds the index of the function containing this address, if any
     pub fn fn_index_at(&self, pc: GlobalAddress) -> Option<usize> {
         self.functions

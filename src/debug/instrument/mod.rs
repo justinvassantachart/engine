@@ -4,10 +4,9 @@ pub mod function;
 pub use encoder::*;
 pub use function::*;
 
-use crate::debug::BREAKPOINT_PREFIX_BYTES;
 use crate::debug::dwarf::Dwarf;
-use crate::types::{DebugFunction, DebugInfo, MemoryDescriptor};
-use crate::util::{warning, weak_error};
+use crate::types::{BP_PREFIX_BYTES, DebugFunction, DebugInfo, MemoryDescriptor};
+use crate::util::weak_error;
 use anyhow::Result;
 use std::collections::HashMap;
 use wasm_encoder::reencode;
@@ -43,7 +42,7 @@ fn parse_debug_info(wasm: &[u8]) -> Result<DebugInfo> {
 
     Ok(DebugInfo {
         functions: parse_debug_functions(&dwarf),
-        breakpoints: js_sys::SharedArrayBuffer::new((BREAKPOINT_PREFIX_BYTES + nlocs) as u32),
+        breakpoints: js_sys::SharedArrayBuffer::new((BP_PREFIX_BYTES + nlocs) as u32),
         memory: MemoryDescriptor::new(memory_initial, 16 * memory_initial),
         stack: MemoryDescriptor::new(16, 16),
         dwarf,
