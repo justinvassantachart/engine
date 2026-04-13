@@ -232,11 +232,7 @@ impl<'a> reencode::Reencode for Instrumenter<'a> {
         /* Get the debug function entry for this function based on its address */
         let body_start = func.range().start;
         let code_ofs = self.code_ofs(body_start);
-        let debug_func_idx = self
-            .info
-            .functions
-            .iter()
-            .position(|f| f.address == code_ofs.into());
+        let debug_func_idx = self.info.fn_index_at(code_ofs.into());
 
         let Some(debug_func_idx) = debug_func_idx else {
             // If this is not a function with a corresponding DWARF entry,

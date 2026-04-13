@@ -8,6 +8,10 @@ use web_sys::DedicatedWorkerGlobalScope;
 
 use crate::debug::dwarf::{DieReference, Dwarf};
 
+// ============================================================================
+// Types
+// ============================================================================
+
 /// Byte offset in the WASM code section
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Tsify, Serialize, Deserialize,
@@ -135,6 +139,7 @@ impl MemoryDescriptor {
 /// Debug information parsed from DWARF
 #[derive(Debug, Clone, Tsify, Serialize, Deserialize)]
 pub struct DebugInfo {
+    /// List of debuggable functions, sorted by low_pc
     pub functions: Vec<DebugFunction>,
 
     /// SharedArrayBuffer that controls breakpoint operation in the debugger.
@@ -174,7 +179,10 @@ pub enum WasmLocation {
 
 #[derive(Debug, Clone, Tsify, Serialize, Deserialize)]
 pub struct DebugFunction {
-    pub address: GlobalAddress,
+    /// The first address in this function
+    pub low_pc: GlobalAddress,
+    /// The first address past the end of this function
+    pub high_pc: GlobalAddress,
     /// Reference to dwarf die for this function
     pub die_ref: DieReference,
     /// The total size in bytes of the stack frame, including it's 32-bit tag
@@ -189,4 +197,58 @@ pub struct DebugFrameEntry {
     pub offset: usize,
     /// The WebAssembly location (local, global, or stack) represented by this entry's value
     pub location: WasmLocation,
+}
+
+// ============================================================================
+// Implementations
+// ============================================================================
+
+impl DebugInfo {
+    /// Finds the index of the function containing this address, if any
+    pub fn fn_index_at(&self, pc: GlobalAddress) -> Option<usize> {
+        self.functions
+            .binary_search_by(|f| {
+                if pc < f.low_pc {
+                    std::cmp::Ordering::Greater
+                } else if pc >= f.high_pc {
+                    std::cmp::Ordering::Less
+                } else {
+                    std::cmp::Ordering::Equal
+                }
+            })
+            .ok()
+    }
+
+    /// Finds the function containing this address, if any
+    pub fn fn_at(&self, pc: GlobalAddress) -> Option<&DebugFunction> {
+        self.fn_index_at(pc).map(|idx| &self.functions[idx])
+    }
+}
+
+impl DebugFunction {
+    pub fn contains(&self, pc: GlobalAddress) -> bool {
+        pc >= self.low_pc && pc < self.high_pc
+    }
+
+    /// Clears the layout of the stack frame and resets it to its minimum size.
+    pub fn reset(&mut self) {
+        self.size = 0;
+        self.size += 4; // Space for function PC
+        self.layout.clear();
+    }
+
+    /// Ensures an entry exists for `loc` and returns its offset.
+    /// `bkpt` will be added to the lifetime of the found or created entry.
+    /// Returns [None] if an entry could not be created (e.g. we cannot store wasm ref types).
+    pub fn place(&mut self, location: WasmLocation) -> usize {
+        if let Some(pos) = self.layout.iter().position(|e| e.location == location) {
+            return self.layout[pos].offset;
+        }
+
+        let offset = self.size;
+        let size = 8;
+        self.size += size;
+        self.layout.push(DebugFrameEntry { offset, location });
+        offset
+    }
 }

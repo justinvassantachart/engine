@@ -15,31 +15,6 @@ macro_rules! error {
     };
 }
 
-impl DebugFunction {
-    /// Clears the layout of the stack frame and resets it to its minimum size.
-    pub fn reset(&mut self) {
-        self.size = 0;
-        self.size += 4; // Space for function tag
-        self.size += 4; // Space for function PC (TODO: update on call)
-        self.layout.clear();
-    }
-
-    /// Ensures an entry exists for `loc` and returns its offset.
-    /// `bkpt` will be added to the lifetime of the found or created entry.
-    /// Returns [None] if an entry could not be created (e.g. we cannot store wasm ref types).
-    pub fn place(&mut self, location: WasmLocation) -> usize {
-        if let Some(pos) = self.layout.iter().position(|e| e.location == location) {
-            return self.layout[pos].offset;
-        }
-
-        let offset = self.size;
-        let size = 8;
-        self.size += size;
-        self.layout.push(DebugFrameEntry { offset, location });
-        offset
-    }
-}
-
 #[derive(Default)]
 struct WasmLocations {
     operands: BTreeSet<usize>,

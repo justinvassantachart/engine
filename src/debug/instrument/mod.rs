@@ -51,7 +51,7 @@ fn parse_debug_info(wasm: &[u8]) -> Result<DebugInfo> {
 }
 
 fn parse_debug_functions(dwarf: &Dwarf) -> Vec<DebugFunction> {
-    dwarf
+    let mut fns = dwarf
         .units()
         .iter()
         .flat_map(|unit| {
@@ -68,15 +68,22 @@ fn parse_debug_functions(dwarf: &Dwarf) -> Vec<DebugFunction> {
                     return None;
                 };
 
+                let Some(high_pc) = child.high_pc() else {
+                    return None;
+                };
+
                 Some(DebugFunction {
-                    address: low_pc,
+                    low_pc,
+                    high_pc,
                     die_ref: child.die_ref(),
                     size: 0,
                     layout: Vec::default(),
                 })
             })
         })
-        .collect()
+        .collect::<Vec<DebugFunction>>();
+    fns.sort_by_key(|f| f.low_pc);
+    fns
 }
 
 pub struct InstrumenterResult {
