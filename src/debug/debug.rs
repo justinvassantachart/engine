@@ -1,4 +1,4 @@
-use crate::types::DebugInfo;
+use crate::types::{DebugInfo, GlobalAddress};
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::JsCast;
 
@@ -35,30 +35,33 @@ impl Debugger {
         Self { info, state }
     }
 
-    /// Walks the debug stack and returns the current call stack.
-    pub fn backtrace(&self) -> anyhow::Result<Vec<StackFrame>> {
+    fn stack_view(&self) -> (js_sys::DataView, u32, u32) {
         let sp = self.state.get_index(0) as u32;
         let buffer = self.info.stack.memory.buffer();
         let buffer = buffer.unchecked_ref::<js_sys::ArrayBuffer>();
         let stack_top = buffer.byte_length();
-        let stack_view = js_sys::DataView::new(buffer, 0, stack_top as usize);
+        let view = js_sys::DataView::new(buffer, 0, stack_top as usize);
+        (view, sp, stack_top)
+    }
 
+    /// Walks the debug stack and returns the current call stack.
+    pub fn backtrace(&self) -> anyhow::Result<Vec<StackFrame>> {
+        let (view, sp, stack_top) = self.stack_view();
         let mut frames = Vec::new();
         let mut pos = sp;
 
         while pos < stack_top {
-            let func_idx = stack_view.get_uint32_endian(pos as usize, true) as usize;
-            if func_idx >= self.info.functions.len() {
-                break;
-            }
-
-            let func = &self.info.functions[func_idx];
+            let pc = GlobalAddress(view.get_uint32_endian(pos as usize, true) as u64);
+            let func = match self.info.fn_at(pc) {
+                Some(f) => f,
+                None => break,
+            };
             let die = func.die_ref.deref(&self.info.dwarf)?;
 
             frames.push(StackFrame {
                 id: frames.len() as u32,
                 name: die.name().unwrap_or(String::new()),
-                line: 0, // TODO: resolve from DWARF
+                line: 0,
                 column: 0,
                 source: None,
             });
