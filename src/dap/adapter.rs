@@ -7,9 +7,26 @@ use serde_json::{Value, json};
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::prelude::*;
 
-use crate::dap::types::{ProtocolMessage, ScopeMap};
+use crate::dap::types::{ProtocolMessage, ScopeEntry, ScopeMap};
 use crate::debug::Debugger;
 use crate::types::DebugInfo;
+
+impl ScopeMap {
+    fn allocate(&mut self, entry: ScopeEntry) -> i64 {
+        self.next_ref += 1;
+        self.entries.insert(self.next_ref, entry);
+        self.next_ref
+    }
+
+    fn get(&self, reference: i64) -> Option<&ScopeEntry> {
+        self.entries.get(&reference)
+    }
+
+    fn clear(&mut self) {
+        self.next_ref = 0;
+        self.entries.clear();
+    }
+}
 
 struct DapState {
     seq_counter: i64,
