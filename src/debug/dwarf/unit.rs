@@ -62,6 +62,14 @@ pub struct Location<'a> {
     pub file: &'a Path,
 }
 
+impl std::ops::Deref for Unit {
+    type Target = gimli::Unit<R>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.unit
+    }
+}
+
 impl Unit {
     pub fn clone(&self, dwarf: &gimli::Dwarf<R>) -> Self {
         let unit = {

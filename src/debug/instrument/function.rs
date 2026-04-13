@@ -1,5 +1,5 @@
 use super::{InstrResult, Instrumenter};
-use crate::debug::dwarf::{get_location, get_variables};
+use crate::debug::dwarf::{R, get_location, get_variables};
 use crate::debug::instrument::InstrError;
 use crate::types::{DebugFunction, GlobalAddress, WasmLocation};
 use std::collections::{BTreeSet, HashMap, HashSet};
@@ -20,6 +20,17 @@ struct WasmLocations {
     operands: BTreeSet<usize>,
     locals: BTreeSet<usize>,
     globals: BTreeSet<usize>,
+}
+
+impl WasmLocations {
+    fn operation(&mut self, op: &gimli::Operation<R>) {
+        match *op {
+            gimli::Operation::WasmLocal { index } => self.locals.insert(index as usize),
+            gimli::Operation::WasmGlobal { index } => self.globals.insert(index as usize),
+            gimli::Operation::WasmStack { index } => self.operands.insert(index as usize),
+            _ => true,
+        };
+    }
 }
 
 pub struct FnInstrumenter<'a, 'b, 'c> {
@@ -115,20 +126,29 @@ impl<'a, 'b, 'c> FnInstrumenter<'a, 'b, 'c> {
 
         let vars = get_variables(&fun, pc);
         let mut locs = WasmLocations::default();
+        let mut fbreg = fun.expression(gimli::DW_AT_frame_base, pc);
 
         for var in vars {
             let Some(expr) = get_location(&var, pc) else {
                 continue;
             };
 
-            for op in expr.operations(fun.ctx().unit.unit().encoding()) {
+            for op in expr.operations(fun.ctx().unit.encoding()) {
                 let op = op.map_err(|e| InstrError::UserError(e.into()))?;
-                match op {
-                    gimli::Operation::WasmLocal { index } => locs.locals.insert(index as usize),
-                    gimli::Operation::WasmGlobal { index } => locs.globals.insert(index as usize),
-                    gimli::Operation::WasmStack { index } => locs.operands.insert(index as usize),
-                    _ => true,
-                };
+                locs.operation(&op);
+
+                /* Add frame base locations for FrameOffset */
+                if matches!(op, gimli::Operation::FrameOffset { .. })
+                    && let Some(expr) = fbreg
+                {
+                    for op in expr.operations(fun.ctx().unit.encoding()) {
+                        let op = op.map_err(|e| InstrError::UserError(e.into()))?;
+                        locs.operation(&op);
+                    }
+
+                    /* Don't need to handle frame base locations more than once */
+                    fbreg = None;
+                }
             }
         }
 

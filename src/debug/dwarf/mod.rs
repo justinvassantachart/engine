@@ -14,7 +14,7 @@ use std::rc::Rc;
 use crate::util::weak_error;
 
 /// The reader type we use any time we interface with `gimli`.
-type R = EndianRcSlice<LittleEndian>;
+pub type R = EndianRcSlice<LittleEndian>;
 
 #[derive(Debug)]
 pub struct Dwarf {

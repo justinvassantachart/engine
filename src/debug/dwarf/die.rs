@@ -106,6 +106,31 @@ impl<'a> Die<'a> {
         }
     }
 
+    pub fn expression(&self, attr: gimli::DwAt, pc: GlobalAddress) -> Option<gimli::Expression<R>> {
+        let Some(attr) = self.attr_value(attr) else {
+            return None;
+        };
+
+        let unit = self.ctx().unit_ref();
+        let addr = pc.0;
+
+        match attr {
+            gimli::AttributeValue::Exprloc(expr) => Some(expr),
+            other => {
+                let Some(it) = weak_error!(unit.attr_locations(other))? else {
+                    return None;
+                };
+                for res in it {
+                    let entry = weak_error!(res)?;
+                    if addr >= entry.range.begin && addr < entry.range.end {
+                        return Some(entry.data);
+                    }
+                }
+                None
+            }
+        }
+    }
+
     pub fn attr_to_string(&self, attr: gimli::DwAt) -> Option<String> {
         weak_error!(
             self.attr(attr)
