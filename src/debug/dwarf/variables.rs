@@ -1,5 +1,5 @@
 use crate::{
-    debug::dwarf::{Die, Visit},
+    debug::dwarf::{Die, DieReference, Visit},
     types::GlobalAddress,
 };
 use gimli::read::Expression;
@@ -50,4 +50,9 @@ pub fn get_variables<'a>(die: &Die<'a>, pc: GlobalAddress) -> Vec<Die<'a>> {
 /// Gets the location expression for a variable at the given PC
 pub fn get_location(die: &Die<'_>, pc: GlobalAddress) -> Option<Expression<R>> {
     die.expression(gimli::DW_AT_location, pc)
+}
+
+pub struct Value {
+    inner: Vec<gimli::Piece<R>>,
+    ty: DieReference,
 }
