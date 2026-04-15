@@ -53,75 +53,19 @@ pub fn get_location(die: &Die<'_>, pc: GlobalAddress) -> Option<Expression<R>> {
     die.expression(gimli::DW_AT_location, pc)
 }
 
-type TypeId = gimli::DieReference;
-
 pub struct Value {
     inner: Vec<gimli::Piece<R>>,
-    ty: TypeId,
+    ty: Type,
 }
 
-pub struct TypeGraph {
-    types: HashMap<TypeId, TypeDeclaration>,
-}
+impl Value {
+    /// initial idea: look at the pieces
+    pub fn address(&self) -> Option<u64> {
+        None
+    }
 
-#[derive(Clone, Debug)]
-pub enum MemberLocation {
-    Offset(i64),
-    Expr(gimli::Expression<R>),
-}
-
-#[derive(Clone, Debug)]
-pub struct StructureMember {
-    pub location: Option<MemberLocation>,
-    pub name: Option<String>,
-    pub ty: TypeId,
-}
-
-#[derive(Clone, Debug)]
-pub enum ReferenceKind {
-    Pointer,
-    Reference,
-}
-
-#[derive(Clone, Copy, PartialEq, Debug)]
-pub enum Modifier {
-    TypeDef,
-    Const,
-    Volatile,
-    Atomic,
-    Restrict,
-}
-
-#[derive(Clone, Debug)]
-pub enum ArrayBound {
-    Expr(gimli::Expression<R>),
-    Count(i64),
-}
-
-#[derive(Clone, Debug)]
-pub enum TypeDeclaration {
-    Scalar {
-        name: String,
-        byte_size: u64,
-        encoding: gimli::DwAte,
-    },
-    Array {
-        byte_size: Option<u64>,
-        element_type: TypeId,
-        lower_bound: ArrayBound,
-        upper_bound: Option<ArrayBound>,
-    },
-    Referential {
-        target: TypeId,
-        kind: ReferenceKind,
-    },
-    Structure {
-        name: Option<String>,
-        byte_size: u64,
-        members: Vec<StructureMember>,
-    },
-    ModifiedType {
-        modifier: Modifier,
-        inner: TypeId,
-    },
+    /// Need the info to inspect the wasm locactions
+    pub fn children(&self, info: &DebugInfo) -> Vec<Value> {
+        Vec::default()
+    }
 }

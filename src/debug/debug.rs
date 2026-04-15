@@ -16,8 +16,7 @@ pub struct StackFrame {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Variable {
     pub name: String,
-    pub value: String,
-    pub r#type: Option<String>,
+    pub value: Value,
 }
 
 // ---------------------------------------------------------------------------
