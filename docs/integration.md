@@ -74,32 +74,48 @@ dbg.on('event', (msg) => {
 
 ### Initialization Sequence
 
-The DAP initialization sequence must happen after `run()` is called but before the program starts executing. The runtime pauses automatically before execution and waits for `configurationDone`.
+Order matches the usual DAP lifecycle:
+
+1. **Client →** `initialize` request
+2. **Adapter →** `initialize` response (body includes **Capabilities**, e.g. `supportsConfigurationDoneRequest`)
+3. **Adapter** builds the internal debugger when the worker sends its `debug` message (instrumented binary ready).
+4. **Adapter →** `initialized` event — emitted only after step **2** has completed **and** step **3** has happened (so the client never configures before the adapter is ready).
+5. **Client →** `setBreakpoints` (zero or more; one request per source file)
+6. **Client →** `setFunctionBreakpoints` if `supportsFunctionBreakpoints` is true (this runtime advertises `false`; you can omit it)
+7. **Client →** `setExceptionBreakpoints` when you have filters to set
+8. **Client →** `configurationDone`
+9. **Adapter →** `configurationDone` response — the debuggee then leaves its initial wait and **starts running**
+
+Call `run()` when the worker should compile and execute; the worker blocks until step **8** completes. A typical pattern is: register `dbg.on('event', …)`, send **`initialize`**, then **`await rt.run()`** (which starts the worker). React to **`initialized`** with steps **5–8**.
 
 ```ts
-// 1. Send initialize immediately after calling run()
-dbg.send({ type: 'request', seq: 1, command: 'initialize', arguments: {} });
-// → response: capabilities
+let seq = 1;
 
-// 2. Wait for the `initialized` event — fires when compilation is done and
-//    the runtime is ready to accept configuration.
-dbg.on('event', (msg) => {
-  if (msg.type === 'event' && msg.event === 'initialized') {
-    // 3. Set breakpoints (one call per source file)
-    dbg.send({
-      type: 'request',
-      seq: 2,
-      command: 'setBreakpoints',
-      arguments: {
-        source: { path: '/main.c' },
-        breakpoints: [{ line: 5 }],
-      },
-    });
+dbg.on('event', (msg: { type: string; event?: string }) => {
+  if (msg.type !== 'event' || msg.event !== 'initialized') return;
 
-    // 4. Signal that configuration is done — the program starts running after this
-    dbg.send({ type: 'request', seq: 3, command: 'configurationDone', arguments: {} });
-  }
+  dbg.send({
+    type: 'request',
+    seq: seq++,
+    command: 'setBreakpoints',
+    arguments: {
+      source: { path: '/main.c' },
+      breakpoints: [{ line: 5 }],
+    },
+  });
+
+  dbg.send({
+    type: 'request',
+    seq: seq++,
+    command: 'setExceptionBreakpoints',
+    arguments: { filters: [] },
+  });
+
+  dbg.send({ type: 'request', seq: seq++, command: 'configurationDone', arguments: {} });
 });
+
+dbg.send({ type: 'request', seq: seq++, command: 'initialize', arguments: {} });
+await rt.run();
 ```
 
 ### Handling a Breakpoint Hit
@@ -139,6 +155,7 @@ if (msg.type === 'event' && msg.event === 'stopped') {
 | `initialize`              | Start session, returns capabilities   |
 | `configurationDone`       | Signal setup complete, program starts |
 | `setBreakpoints`          | Set breakpoints for a source file     |
+| `setFunctionBreakpoints`  | Empty when advertised unsupported     |
 | `setExceptionBreakpoints` | Accepted but no-op                    |
 | `threads`                 | Returns a single `main` thread        |
 | `stackTrace`              | Returns the current call stack        |

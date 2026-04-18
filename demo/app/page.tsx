@@ -61,7 +61,7 @@ export default function Home() {
               elevation={0}
               sx={{
                 width: '100%',
-                height: { xs: 560, md: 640 },
+                height: { xs: 'min(92vh, 720px)', md: 700 },
                 display: 'flex',
                 flexDirection: 'column',
                 overflow: 'hidden',

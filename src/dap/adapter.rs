@@ -14,6 +14,10 @@ use crate::types::DebugInfo;
 struct DapState {
     seq_counter: i64,
     debugger: Option<Debugger>,
+    /// `initialize` request was handled and the client received the capabilities response.
+    client_initialized: bool,
+    /// We emitted `initialized` for this debug session (once per worker / run).
+    initialized_emitted: bool,
     callback: Option<js_sys::Function>,
     _closure: Option<Closure<dyn FnMut(web_sys::MessageEvent)>>,
 }
@@ -33,14 +37,15 @@ impl DapState {
         Ok(json!({
             "supportsConfigurationDoneRequest": true,
             "supportsStepBack": false,
+            "supportsFunctionBreakpoints": false,
         }))
     }
 
     // interacts with wait_for_resume in the worker to unblock after config is done.
     fn handle_configuration_done(&self) -> Result<Value> {
-        if let Some(dbg) = self.debugger() {
-            dbg.continue_();
-        }
+        self.debugger()
+            .context("configurationDone: debugger not ready")?
+            .continue_();
         Ok(Value::Null)
     }
 
@@ -228,6 +233,20 @@ fn emit_event(state: &Rc<RefCell<DapState>>, event_name: &str, body: Option<Valu
     }
 }
 
+/// DAP: `InitializedEvent` must be sent only after the `initialize` response was delivered,
+/// and once the debug adapter is ready. Here readiness means we have a [`Debugger`] from the
+/// worker's `debug` message.
+fn try_emit_initialized(state: &Rc<RefCell<DapState>>) {
+    let should = {
+        let s = state.borrow();
+        s.client_initialized && s.debugger.is_some() && !s.initialized_emitted
+    };
+    if should {
+        state.borrow_mut().initialized_emitted = true;
+        emit_event(state, "initialized", None);
+    }
+}
+
 #[wasm_bindgen]
 pub struct DapAdapter {
     state: Rc<RefCell<DapState>>,
@@ -241,6 +260,8 @@ impl DapAdapter {
             state: Rc::new(RefCell::new(DapState {
                 seq_counter: 0,
                 debugger: None,
+                client_initialized: false,
+                initialized_emitted: false,
                 callback: None,
                 _closure: None,
             })),
@@ -252,7 +273,23 @@ impl DapAdapter {
     /// Listens for the worker's `debug` message (containing `DebugInfo`) to construct
     /// the internal `Debugger`, `breakpoint` messages to emit DAP `stopped` events,
     /// and `stop` messages to emit `terminated`.
+    ///
+    /// **Session flags:** we reset `initialized_emitted` so each worker/run can emit `initialized`
+    /// again, but we **do not** clear `client_initialized`. Reasons:
+    /// - The host may send `initialize` before `run()` attaches the worker; clearing here would
+    ///   prevent `initialized` from ever firing on the subsequent `debug` message.
+    /// - On **re-run** (same adapter instance, new worker), the client often does **not** send
+    ///   `initialize` again. Keeping `client_initialized` true means the next `debug` message can
+    ///   emit `initialized` immediately without waiting for another `initialize` request. That is
+    /// intentional for this embedding. A client that wants a strict fresh DAP session per run
+    /// should send `initialize` again (and/or construct a new runtime so the adapter is new).
     pub fn attach(&self, worker: web_sys::Worker) {
+        {
+            let mut s = self.state.borrow_mut();
+            s.debugger = None;
+            s.initialized_emitted = false;
+        }
+
         let state = self.state.clone();
 
         let closure = Closure::wrap(Box::new(move |event: web_sys::MessageEvent| {
@@ -269,8 +306,7 @@ impl DapAdapter {
                     let info: DebugInfo = serde_wasm_bindgen::from_value(info_val)
                         .expect("DebugInfo deserialization");
                     state.borrow_mut().debugger = Some(Debugger::new(info));
-                    // this is basically our own flavor added to the initalization handshake sequence. We only omit this once our debugger is ready.
-                    emit_event(&state, "initialized", None);
+                    try_emit_initialized(&state);
                 }
                 "breakpoint" => {
                     emit_event(&state, "stopped", Some(json!({
@@ -317,9 +353,13 @@ impl DapAdapter {
             let mut state = self.state.borrow_mut();
             let rseq = state.next_seq();
             let result = match command.as_str() {
-                "initialize" => state.handle_initialize(),
+                "initialize" => {
+                    state.client_initialized = true;
+                    state.handle_initialize()
+                }
                 "configurationDone" => state.handle_configuration_done(),
                 "setExceptionBreakpoints" => state.handle_set_exception_breakpoints(),
+                "setFunctionBreakpoints" => Ok(json!({ "breakpoints": [] })),
                 "threads" => state.handle_threads(),
                 "setBreakpoints" => state.handle_set_breakpoints(&args),
                 "stackTrace" => state.handle_stack_trace(),
@@ -337,7 +377,13 @@ impl DapAdapter {
 
         let response = respond(rseq, seq, &command, result);
         let ser = serde_wasm_bindgen::Serializer::new().serialize_maps_as_objects(true);
-        response.serialize(&ser).unwrap_or(JsValue::NULL)
+        let out = response.serialize(&ser).unwrap_or(JsValue::NULL);
+
+        if command == "initialize" {
+            try_emit_initialized(&self.state);
+        }
+
+        out
     }
 
     /// Registers a callback that receives all DAP events.
