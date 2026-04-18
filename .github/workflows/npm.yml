@@ -1,0 +1,50 @@
+name: Publish @rustydwarf/runtime
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install wasm-pack
+        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "23.x"
+          cache: npm
+          registry-url: "https://registry.npmjs.org"
+
+      - run: npm ci
+
+      - run: echo "cur_version=$(jq -r .version package.json)" >> $GITHUB_ENV
+      - run: echo "prev_version=$(npm view . version 2>/dev/null || echo '0.0.0')" >> $GITHUB_ENV
+
+      - if: env.cur_version != env.prev_version
+        run: echo "Version changed from ${{ env.prev_version }} to ${{ env.cur_version }}"
+
+      - name: Publish to npm
+        if: env.cur_version != env.prev_version
+        run: |
+          npm publish --provenance --verbose --access public
+          git tag v${{ env.cur_version }}
+          git push origin v${{ env.cur_version }}
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NODE_AUTH_TOKEN }}
