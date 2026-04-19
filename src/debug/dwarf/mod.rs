@@ -1,12 +1,12 @@
 pub mod die;
 pub mod serde;
+pub mod types;
 pub mod unit;
 pub mod variables;
-pub mod types;
 pub use die::*;
+pub use types::*;
 pub use unit::*;
 pub use variables::*;
-pub use types::*;
 
 use anyhow::Result;
 use gimli::{DwarfSections, EndianRcSlice, LittleEndian, SectionId};
@@ -27,6 +27,8 @@ pub struct Dwarf {
     sections: gimli::DwarfSections<R>,
     /// List of dwarf unit wrappers
     units: Vec<Unit>,
+    /// Lookup table that maps DIE to TypeDeclarations
+    type_graph: Rc<TypeGraph>,
 }
 
 impl Clone for Dwarf {
