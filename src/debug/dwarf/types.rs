@@ -1,5 +1,5 @@
 use crate::debug::dwarf::{DieReference, Dwarf};
-use::std::rc::Rc;
+use ::std::rc::Rc;
 
 use super::R;
 use std::collections::HashMap;
@@ -75,6 +75,12 @@ pub enum TypeDeclaration {
         modifier: Modifier,
         inner: TypeId,
     },
+}
+
+impl Type {
+    pub fn new(root: TypeId, graph: Rc<TypeGraph>) -> Self {
+        Self { root, graph }
+    }
 }
 
 pub fn parse_graph(dwarf: &Dwarf) -> Option<TypeGraph> {

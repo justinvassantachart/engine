@@ -58,9 +58,10 @@ pub struct Value {
 }
 
 impl Value {
-    pub fn string(&self) -> String {
-        format!("<unimplemented>")
+    pub fn new(pieces: Vec<gimli::Piece<R>>, ty: Type) -> Self {
+        Self { inner: pieces, ty }
     }
+
     /// initial idea: look at the pieces
     pub fn address(&self) -> Option<u64> {
         None

@@ -1,5 +1,5 @@
-use crate::debug::dwarf::{Value, get_location, get_variables as dwarf_get_variables};
-use crate::types::{DebugInfo, GlobalAddress};
+use crate::debug::dwarf::{Type, Value, get_location, get_variables as dwarf_get_variables};
+use crate::types::{DebugFunction, DebugInfo, GlobalAddress, WasmLocation};
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::JsCast;
 
@@ -32,6 +32,19 @@ impl Debugger {
     pub fn new(info: DebugInfo) -> Self {
         let state = info.get_bp_state();
         Self { info, state }
+    }
+
+    fn read_wasm_value(
+        &self,
+        view: &js_sys::DataView,
+        frame_pos: u32,
+        func: &DebugFunction,
+        loc: &WasmLocation,
+    ) -> Option<gimli::Value> {
+        let entry = func.layout.iter().find(|e| &e.location == loc)?;
+        let offset = (frame_pos as usize) + entry.offset;
+        let raw = view.get_uint32_endian(offset, true) as u64;
+        Some(gimli::Value::Generic(raw))
     }
 
     fn stack_view(&self) -> (js_sys::DataView, u32, u32) {
@@ -111,6 +124,9 @@ impl Debugger {
 
         let (view, _, _) = self.stack_view();
         let var_dies = dwarf_get_variables(&die, pc);
+        /// TODO: Jacob needs to implement this
+        let type_graph = self.info.dwarf.type_graph();
+        let encoding = die.ctx().unit.unit().encoding();
         let mut variables = Vec::new();
 
         for var_die in &var_dies {
@@ -119,35 +135,45 @@ impl Debugger {
                 continue;
             };
 
-            let encoding = die.ctx().unit.unit().encoding();
-            for op in expr.operations(encoding) {
-                let Ok(op) = op else { continue };
-                let wasm_loc = match op {
-                    gimli::Operation::WasmLocal { index } => {
-                        crate::types::WasmLocation::Local(index as usize)
+            let mut eval = expr.evaluation(encoding);
+            let pieces = loop {
+                match eval.evaluate() {
+                    Ok(gimli::EvaluationResult::Complete) => break eval.result(),
+                    Ok(gimli::EvaluationResult::RequiresWasmLocal { index }) => {
+                        let loc = WasmLocation::Local(index as usize);
+                        let Some(val) = self.read_wasm_value(&view, pos, func, &loc) else {
+                            break vec![];
+                        };
+                        let _ = eval.resume_with_wasm_value(val);
                     }
-                    gimli::Operation::WasmGlobal { index } => {
-                        crate::types::WasmLocation::Global(index as usize)
+                    Ok(gimli::EvaluationResult::RequiresWasmGlobal { index }) => {
+                        let loc = WasmLocation::Global(index as usize);
+                        let Some(val) = self.read_wasm_value(&view, pos, func, &loc) else {
+                            break vec![];
+                        };
+                        let _ = eval.resume_with_wasm_value(val);
                     }
-                    gimli::Operation::WasmStack { index } => {
-                        crate::types::WasmLocation::Operand(index as usize)
+                    Ok(gimli::EvaluationResult::RequiresWasmStack { index }) => {
+                        let loc = WasmLocation::Operand(index as usize);
+                        let Some(val) = self.read_wasm_value(&view, pos, func, &loc) else {
+                            break vec![];
+                        };
+                        let _ = eval.resume_with_wasm_value(val);
                     }
-                    _ => continue,
-                };
-
-                let Some(entry) = func.layout.iter().find(|e| e.location == wasm_loc) else {
-                    continue;
-                };
-                let value = view.get_float64_endian((pos as usize) + entry.offset, true);
-
-                variables.push(Variable {
-                    name,
-                    value: format!("{value}"),
-                });
-                break;
+                    _ => break vec![],
+                }
+            };
+            if pieces.is_empty() {
+                continue;
             }
+            let Some(type_id) = var_die.type_ref() else {
+                continue;
+            };
+            variables.push(Variable {
+                name,
+                value: Value::new(pieces, Type::new(type_id, type_graph.clone())),
+            });
         }
-
         variables
     }
 

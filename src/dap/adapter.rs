@@ -161,7 +161,7 @@ impl DapState {
                     .map(|v| {
                         json!({
                             "name": v.name,
-                            "value": v.value.string(),
+                            "value": v.value,
                             "variablesReference": 0,
                         })
                     })

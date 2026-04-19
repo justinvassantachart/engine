@@ -106,6 +106,17 @@ impl<'a> Die<'a> {
         }
     }
 
+    pub fn type_ref(&self) -> Option<DieReference> {
+        let attr = self.attr(gimli::DW_AT_type)?;
+        match attr.value() {
+            gimli::AttributeValue::UnitRef(offset) => Some(DieReference {
+                unit_index: self.ctx.unit.index(),
+                unit_ofs: offset,
+            }),
+            _ => None,
+        }
+    }
+
     pub fn expression(&self, attr: gimli::DwAt, pc: GlobalAddress) -> Option<gimli::Expression<R>> {
         let Some(attr) = self.attr_value(attr) else {
             return None;
