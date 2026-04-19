@@ -1,4 +1,5 @@
 use crate::debug::dwarf::{DieReference, Dwarf};
+use::std::rc::Rc;
 
 use super::R;
 use std::collections::HashMap;

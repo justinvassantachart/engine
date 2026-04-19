@@ -1,9 +1,8 @@
 use crate::{
-    debug::dwarf::{Die, DieReference, Visit},
-    types::GlobalAddress,
+    debug::dwarf::{Die, Type, Visit},
+    types::{DebugInfo, GlobalAddress},
 };
 use gimli::read::Expression;
-use std::collections::HashMap;
 
 use super::R;
 
@@ -59,6 +58,9 @@ pub struct Value {
 }
 
 impl Value {
+    pub fn string(&self) -> String {
+        format!("<unimplemented>")
+    }
     /// initial idea: look at the pieces
     pub fn address(&self) -> Option<u64> {
         None

@@ -1,6 +1,5 @@
 use crate::debug::dwarf::{Value, get_location, get_variables as dwarf_get_variables};
 use crate::types::{DebugInfo, GlobalAddress};
-use anyhow::Context;
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::JsCast;
 
@@ -13,7 +12,6 @@ pub struct StackFrame {
     pub source: Option<String>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Variable {
     pub name: String,
     pub value: Value,
