@@ -9,7 +9,7 @@ use crate::util::{warning, weak_error};
 use super::{Dwarf, R, Unit};
 use gimli::Reader;
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, Hash, PartialEq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Hash, PartialEq, Eq)]
 pub struct DieReference {
     unit_index: usize,
     #[serde(with = "crate::debug::dwarf::serde::unit_offset")]

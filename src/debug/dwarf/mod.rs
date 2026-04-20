@@ -27,8 +27,6 @@ pub struct Dwarf {
     sections: gimli::DwarfSections<R>,
     /// List of dwarf unit wrappers
     units: Vec<Unit>,
-    /// Lookup table that maps DIE to TypeDeclarations
-    type_graph: Rc<TypeGraph>,
 }
 
 impl Clone for Dwarf {

@@ -1,4 +1,8 @@
-use crate::debug::dwarf::{Type, Value, get_location, get_variables as dwarf_get_variables};
+use std::rc::Rc;
+
+use crate::debug::dwarf::{
+    Type, TypeGraph, Value, get_location, get_variables as dwarf_get_variables,
+};
 use crate::types::{DebugFunction, DebugInfo, GlobalAddress, WasmLocation};
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::JsCast;
@@ -25,13 +29,15 @@ pub struct Variable {
 /// Constructed from `DebugInfo` received via the worker's `debug` message.
 pub struct Debugger {
     info: DebugInfo,
+    types: Rc<TypeGraph>,
     state: js_sys::Int32Array,
 }
 
 impl Debugger {
     pub fn new(info: DebugInfo) -> Self {
         let state = info.get_bp_state();
-        Self { info, state }
+        let types = Rc::from(TypeGraph::new(&info.dwarf));
+        Self { info, state, types }
     }
 
     fn read_wasm_value(
@@ -124,9 +130,7 @@ impl Debugger {
 
         let (view, _, _) = self.stack_view();
         let var_dies = dwarf_get_variables(&die, pc);
-        /// TODO: Jacob needs to implement this
-        let type_graph = self.info.dwarf.type_graph();
-        let encoding = die.ctx().unit.unit().encoding();
+        let encoding: gimli::Encoding = die.ctx().unit.unit().encoding();
         let mut variables = Vec::new();
 
         for var_die in &var_dies {
@@ -171,7 +175,7 @@ impl Debugger {
             };
             variables.push(Variable {
                 name,
-                value: Value::new(pieces, Type::new(type_id, type_graph.clone())),
+                value: Value::new(pieces, Type::new(type_id, self.types.clone())),
             });
         }
         variables

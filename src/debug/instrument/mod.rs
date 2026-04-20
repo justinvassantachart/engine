@@ -54,7 +54,7 @@ fn parse_debug_functions(dwarf: &Dwarf) -> Vec<DebugFunction> {
         .units()
         .iter()
         .flat_map(|unit| {
-            let Some(root) = weak_error!(unit.root(dwarf)) else {
+            let Some(root) = unit.root(dwarf) else {
                 return Vec::new();
             };
 
