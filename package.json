@@ -27,6 +27,7 @@
   "scripts": {
     "dev": "wasm-pack build --target web --debug && vite build",
     "build": "wasm-pack build --target web && vite build",
+    "prepublishOnly": "npm run build",
     "prepare": "husky"
   },
   "lint-staged": {
