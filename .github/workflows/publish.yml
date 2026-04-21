@@ -1,4 +1,4 @@
-name: Publish @rustydwarf/runtime
+name: Publish to npm
 
 on:
   push:
