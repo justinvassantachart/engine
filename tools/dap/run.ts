@@ -5,7 +5,9 @@ import { existsSync } from 'node:fs';
 import { readdir, readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 import process from 'node:process';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
+
+import { assertMatch, substitutePlaceholders } from './matcher';
 
 type Json = null | boolean | number | string | Json[] | { [k: string]: Json };
 type CaptureMap = Record<string, Json>;
@@ -32,9 +34,10 @@ type Step = RequestStep | ResponseStep | EventStep;
 type TestFile = { steps: Step[] };
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-let ROOT = path.resolve(HERE, '../..');
-let TESTS_DIR = path.join(ROOT, 'tools/dap/tests');
-let DIST_ENTRY = path.join(ROOT, 'dist/runtime.js');
+const ROOT = path.resolve(HERE, '../..');
+const DAP_PROJECT_DIR = path.join(ROOT, 'tools/dap');
+const TESTS_DIR = path.join(ROOT, 'tools/dap/tests');
+const DIST_ENTRY = path.join(ROOT, 'dist/runtime.js');
 const DAP_TIMEOUT_MS = 1000;
 
 const INIT_STEPS: Step[] = [
@@ -89,13 +92,10 @@ function parseCli(argv: string[]) {
   return { tests, build };
 }
 
-async function resolveRootWithNpmPrefix() {
-  const out = await $`npm prefix`.cwd(HERE).quiet();
-  const root = out.stdout.toString().trim();
-  if (!root) die('npm prefix returned empty project root');
-  ROOT = path.resolve(root);
-  TESTS_DIR = path.join(ROOT, 'tools/dap/tests');
-  DIST_ENTRY = path.join(ROOT, 'dist/runtime.js');
+async function ensureRuntimeLinked() {
+  logInfo('installing runtime library...');
+  await $`npm link`.cwd(ROOT).quiet();
+  await $`npm link @jtrb/runtime`.cwd(DAP_PROJECT_DIR).quiet();
 }
 
 async function listTestNames(): Promise<string[]> {
@@ -106,9 +106,40 @@ async function listTestNames(): Promise<string[]> {
     .sort();
 }
 
+async function newestSrcMtimeMs(srcDir: string): Promise<number> {
+  async function walk(currentDir: string): Promise<number> {
+    let newest = 0;
+    const entries = await readdir(currentDir, { withFileTypes: true });
+
+    for (const entry of entries) {
+      const absPath = path.join(currentDir, entry.name);
+      if (entry.isDirectory()) {
+        const childNewest = await walk(absPath);
+        if (childNewest > newest) newest = childNewest;
+        continue;
+      }
+      if (!entry.isFile()) continue;
+      const fileStat = await stat(absPath);
+      if (fileStat.mtimeMs > newest) newest = fileStat.mtimeMs;
+    }
+
+    return newest;
+  }
+
+  return walk(srcDir);
+}
+
 async function buildIfNeeded(force: boolean) {
   const distMissing = !existsSync(DIST_ENTRY);
-  if (!force && !distMissing) return;
+  if (!force && !distMissing) {
+    const srcDir = path.join(ROOT, 'src');
+    if (!existsSync(srcDir)) return;
+    const [distStat, srcNewestMtimeMs] = await Promise.all([
+      stat(DIST_ENTRY),
+      newestSrcMtimeMs(srcDir),
+    ]);
+    if (srcNewestMtimeMs <= distStat.mtimeMs) return;
+  }
   logInfo(`building runtime...`);
 
   await new Promise<void>((resolve) => {
@@ -163,105 +194,11 @@ async function collectFsNode(dirPath: string): Promise<Record<string, Json>> {
   return walk(dirPath);
 }
 
-function isPlaceholderString(value: unknown): value is string {
-  return typeof value === 'string' && /^\{\{[a-zA-Z_]\w*\}\}$/.test(value);
-}
-
-function placeholderName(value: string): string {
-  return value.slice(2, -2);
-}
-
-function substitutePlaceholders(input: Json, captures: CaptureMap): Json {
-  if (isPlaceholderString(input)) {
-    const name = placeholderName(input);
-    if (!(name in captures)) throw new Error(`unbound placeholder ${input}`);
-    return captures[name];
-  }
-  if (Array.isArray(input)) return input.map((v) => substitutePlaceholders(v, captures));
-  if (input && typeof input === 'object') {
-    const out: Record<string, Json> = {};
-    for (const [k, v] of Object.entries(input)) {
-      out[k] = substitutePlaceholders(v as Json, captures);
-    }
-    return out;
-  }
-  return input;
-}
-
-function isObject(v: Json): v is Record<string, Json> {
-  return typeof v === 'object' && v !== null && !Array.isArray(v);
-}
-
 function fmtJson(v: unknown): string {
   try {
     return JSON.stringify(v, null, 2);
   } catch {
     return String(v);
-  }
-}
-
-function assertMatch(expected: Json, actual: Json, captures: CaptureMap, at = '$'): void {
-  if (isPlaceholderString(expected)) {
-    captures[placeholderName(expected)] = actual;
-    return;
-  }
-
-  if (Array.isArray(expected)) {
-    if (!Array.isArray(actual)) throw new Error(`${at}: expected array, got ${typeof actual}`);
-    if (expected.length !== actual.length) {
-      throw new Error(`${at}: expected array length ${expected.length}, got ${actual.length}`);
-    }
-    for (let i = 0; i < expected.length; i++) {
-      assertMatch(expected[i], actual[i], captures, `${at}[${i}]`);
-    }
-    return;
-  }
-
-  if (isObject(expected)) {
-    if (!isObject(actual)) throw new Error(`${at}: expected object, got ${typeof actual}`);
-    for (const [key, expectedValue] of Object.entries(expected)) {
-      if (key === '$array.contains') {
-        if (!Array.isArray(actual)) throw new Error(`${at}: $array.contains requires actual array`);
-        const templates = expectedValue;
-        if (!Array.isArray(templates))
-          throw new Error(`${at}: $array.contains value must be array`);
-        for (let i = 0; i < templates.length; i++) {
-          const template = templates[i] as Json;
-          let matched = false;
-          let lastErr = '';
-          for (let j = 0; j < actual.length; j++) {
-            const localCaps: CaptureMap = { ...captures };
-            try {
-              assertMatch(template, actual[j] as Json, localCaps, `${at}[$array.contains][${i}]`);
-              Object.assign(captures, localCaps);
-              matched = true;
-              break;
-            } catch (err) {
-              lastErr = String(err);
-            }
-          }
-          if (!matched) {
-            throw new Error(
-              `${at}: no array element matched $array.contains template index ${i}. Last mismatch: ${lastErr}`
-            );
-          }
-        }
-        continue;
-      }
-
-      if (!(key in actual)) throw new Error(`${at}.${key}: missing key in actual object`);
-      assertMatch(
-        expectedValue as Json,
-        (actual as Record<string, Json>)[key],
-        captures,
-        `${at}.${key}`
-      );
-    }
-    return;
-  }
-
-  if (!Object.is(expected, actual)) {
-    throw new Error(`${at}: expected ${fmtJson(expected)}, got ${fmtJson(actual)}`);
   }
 }
 
@@ -275,7 +212,13 @@ async function waitForEvent(
   while (Date.now() < endAt) {
     for (let i = 0; i < queue.length; i++) {
       const event = queue[i];
-      if (isObject(event) && event.type === 'event' && event.event === eventName) {
+      if (
+        event &&
+        typeof event === 'object' &&
+        !Array.isArray(event) &&
+        event.type === 'event' &&
+        event.event === eventName
+      ) {
         queue.splice(i, 1);
         return event;
       }
@@ -303,20 +246,11 @@ async function runTest(testName: string): Promise<void> {
   if (!Array.isArray(file.steps)) throw new Error(`${dapPath}: expected top-level steps[]`);
 
   const fsNode = await collectFsNode(testDir);
-  const { Runtime } = (await import(pathToFileURL(DIST_ENTRY).href)) as {
-    Runtime: {
-      create(lang: 'c'): Promise<{
-        fs: Json;
-        stdout: ReadableStream<Uint8Array>;
-        stderr: ReadableStream<Uint8Array>;
-        run(): Promise<void>;
-        debugger: { send(msg: Json): Json; on(name: 'event', cb: (m: Json) => void): void };
-      }>;
-    };
-  };
+  const { Runtime } = await import('@jtrb/runtime');
 
   const runtime = await Runtime.create('c');
-  runtime.fs = fsNode;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  runtime.fs = fsNode as unknown as any;
 
   const decoder = new TextDecoder();
   runtime.stdout.pipeTo(
@@ -335,12 +269,12 @@ async function runTest(testName: string): Promise<void> {
   );
   const eventQueue: Json[] = [];
   let resolveEventWaiter: ((v: Json) => void) | null = null;
-  runtime.debugger.on('event', (msg: Json) => {
-    eventQueue.push(msg);
+  runtime.debugger.on('event', (msg: unknown) => {
+    eventQueue.push(msg as Json);
     if (resolveEventWaiter) {
       const fn = resolveEventWaiter;
       resolveEventWaiter = null;
-      fn(msg);
+      fn(msg as Json);
     }
   });
   const waitForNextEvent = () =>
@@ -365,7 +299,12 @@ async function runTest(testName: string): Promise<void> {
         captures
       ) as Json;
       lastResponse = runtime.debugger.send(reqObj) as Json;
-      if (isObject(lastResponse) && lastResponse.success === false) {
+      if (
+        lastResponse &&
+        typeof lastResponse === 'object' &&
+        !Array.isArray(lastResponse) &&
+        lastResponse.success === false
+      ) {
         throw new Error(
           `${label} command '${step.command}' returned success=false\nresponse:\n${fmtJson(lastResponse)}`
         );
@@ -419,9 +358,9 @@ async function runTest(testName: string): Promise<void> {
 }
 
 async function main() {
-  await resolveRootWithNpmPrefix();
   const { tests: requestedTests, build } = parseCli(process.argv.slice(2));
   await buildIfNeeded(build);
+  await ensureRuntimeLinked();
 
   const available = await listTestNames();
   const tests = requestedTests.length ? requestedTests : available;
