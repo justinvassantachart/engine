@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "tools"]
+members = [".", "tools/breakpoints"]
 
 [package]
 name = "runtime"
