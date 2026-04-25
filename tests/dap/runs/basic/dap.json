@@ -34,13 +34,14 @@
     {
       "type": "response",
       "body": {
-        "scopes": [
-          {
-            "name": "Locals",
-            "expensive": false,
-            "variablesReference": "{{localsRef}}"
-          }
-        ]
+        "scopes": {
+          "$array.contains": [
+            {
+              "name": "Locals",
+              "variablesReference": "{{localsRef}}"
+            }
+          ]
+        }
       }
     },
     {
