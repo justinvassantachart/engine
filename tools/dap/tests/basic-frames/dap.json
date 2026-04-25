@@ -1,0 +1,142 @@
+{
+  "steps": [
+    {
+      "type": "request",
+      "command": "setBreakpoints",
+      "arguments": {
+        "source": { "path": "/main.c" },
+        "breakpoints": [{ "line": 2 }]
+      }
+    },
+    {
+      "type": "response",
+      "body": {
+        "breakpoints": {
+          "$array.contains": [{ "line": 2, "verified": true }]
+        }
+      }
+    },
+    {
+      "type": "request",
+      "command": "configurationDone",
+      "arguments": {}
+    },
+    {
+      "type": "event",
+      "event": "stopped",
+      "body": {
+        "reason": "breakpoint",
+        "threadId": 1
+      }
+    },
+    {
+      "type": "request",
+      "command": "stackTrace",
+      "arguments": { "threadId": 1 }
+    },
+    {
+      "type": "response",
+      "body": {
+        "stackFrames": {
+          "$array.contains": [
+            { "name": "level3", "id": "{{frame3}}" },
+            { "name": "level2", "id": "{{frame2}}" },
+            { "name": "level1", "id": "{{frame1}}" }
+          ]
+        }
+      }
+    },
+    {
+      "type": "request",
+      "command": "scopes",
+      "arguments": { "frameId": "{{frame3}}" }
+    },
+    {
+      "type": "response",
+      "body": {
+        "scopes": {
+          "$array.contains": [
+            {
+              "name": "Arguments",
+              "variablesReference": "{{args3}}"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "type": "request",
+      "command": "variables",
+      "arguments": { "variablesReference": "{{args3}}" }
+    },
+    {
+      "type": "response",
+      "body": {
+        "variables": [{ "name": "c", "value": "3", "type": "int" }]
+      }
+    },
+    {
+      "type": "request",
+      "command": "scopes",
+      "arguments": { "frameId": "{{frame2}}" }
+    },
+    {
+      "type": "response",
+      "body": {
+        "scopes": {
+          "$array.contains": [
+            {
+              "name": "Arguments",
+              "variablesReference": "{{args2}}"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "type": "request",
+      "command": "variables",
+      "arguments": { "variablesReference": "{{args2}}" }
+    },
+    {
+      "type": "response",
+      "body": {
+        "variables": [{ "name": "b", "value": "2", "type": "int" }]
+      }
+    },
+    {
+      "type": "request",
+      "command": "scopes",
+      "arguments": { "frameId": "{{frame1}}" }
+    },
+    {
+      "type": "response",
+      "body": {
+        "scopes": {
+          "$array.contains": [
+            {
+              "name": "Arguments",
+              "variablesReference": "{{args1}}"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "type": "request",
+      "command": "variables",
+      "arguments": { "variablesReference": "{{args1}}" }
+    },
+    {
+      "type": "response",
+      "body": {
+        "variables": [{ "name": "a", "value": "1", "type": "int" }]
+      }
+    },
+    {
+      "type": "request",
+      "command": "continue",
+      "arguments": { "threadId": 1 }
+    }
+  ]
+}

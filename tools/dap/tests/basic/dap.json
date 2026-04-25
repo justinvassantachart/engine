@@ -9,6 +9,14 @@
       }
     },
     {
+      "type": "response",
+      "body": {
+        "breakpoints": {
+          "$array.contains": [{ "line": 3, "verified": true }]
+        }
+      }
+    },
+    {
       "type": "request",
       "command": "configurationDone",
       "arguments": {}
@@ -24,7 +32,7 @@
     {
       "type": "request",
       "command": "stackTrace",
-      "arguments": { "threadId": 1, "startFrame": 0, "levels": 20 }
+      "arguments": { "threadId": 1 }
     },
     {
       "type": "response",

@@ -8,5 +8,5 @@ name = "breakpoints"
 path = "breakpoints.rs"
 
 [dependencies]
-runtime = { path = ".." }
+runtime = { path = "../.." }
 wasmparser = "0.245"
