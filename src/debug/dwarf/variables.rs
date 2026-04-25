@@ -27,16 +27,10 @@ pub fn get_variables<'a>(die: &Die<'a>, pc: GlobalAddress) -> Vec<Die<'a>> {
             }
 
             _ => {
-                if let Some(low) = child.address(gimli::DW_AT_low_pc)
-                    && pc < low
-                {
-                    return Visit::SkipChildren;
-                }
-
-                if let Some(high) = child.address(gimli::DW_AT_high_pc)
-                    && pc >= high
-                {
-                    return Visit::SkipChildren;
+                if let Some((low, high)) = child.addr_range() {
+                    if pc < low || pc >= high {
+                        return Visit::SkipChildren;
+                    }
                 }
             }
         }

@@ -193,16 +193,16 @@ async function writeDerivedArtifacts(
 ) {
   const sh = (cmd: string) => $`sh -lc ${cmd}`.quiet().nothrow();
 
+  if (prefix === 'pre')
+    await sh(
+      `which llvm-dwarfdump >/dev/null 2>&1 && llvm-dwarfdump "${wasmPath}" > "${path.join(testOutputDir, 'pre.dwarf')}"`
+    );
+
   const watPath = path.join(testOutputDir, `${prefix}.wat`);
   await sh(`which wasm-tools >/dev/null 2>&1 && wasm-tools print "${wasmPath}" > "${watPath}"`);
 
   if (!existsSync(watPath))
     await sh(`which wasm2wat >/dev/null 2>&1 && wasm2wat "${wasmPath}" > "${watPath}"`);
-
-  if (prefix === 'pre')
-    await sh(
-      `which llvm-dwarfdump >/dev/null 2>&1 && llvm-dwarfdump "${wasmPath}" > "${path.join(testOutputDir, 'pre.dwarf')}"`
-    );
 }
 
 async function handleArtifactOutput(testOutputDir: string, artifact: Artifact) {

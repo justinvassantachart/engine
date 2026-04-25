@@ -84,14 +84,19 @@ impl<'a> Die<'a> {
         }
     }
 
-    pub fn address(&self, attr: gimli::DwAt) -> Option<GlobalAddress> {
-        let attr = self.attr(attr)?;
-        weak_error!(
-            self.ctx().unit_ref().attr_address(attr.value()),
-            "Could not parse attribute address"
-        )
-        .flatten()
-        .map(GlobalAddress)
+    pub fn addr_range(&self) -> Option<(GlobalAddress, GlobalAddress)> {
+        let low_pc = self.attr(gimli::DW_AT_low_pc)?;
+        let low_pc = weak_error!(self.ctx().unit_ref().attr_address(low_pc.value())).flatten()?;
+        let low_pc = GlobalAddress(low_pc);
+
+        let high_pc = self.attr(gimli::DW_AT_high_pc)?;
+        if let Some(offset) = high_pc.sdata_value() {
+            return Some((low_pc, GlobalAddress(low_pc.0 + offset as u64)));
+        }
+
+        let high_pc = weak_error!(self.ctx().unit_ref().attr_address(high_pc.value())).flatten()?;
+        let high_pc = GlobalAddress(high_pc);
+        return Some((low_pc, high_pc));
     }
 
     pub fn expression(&self, attr: gimli::DwAt, pc: GlobalAddress) -> Option<gimli::Expression<R>> {
@@ -192,7 +197,7 @@ impl<'a> Die<'a> {
             while let Some(Some(child)) = weak_error!(children.next()) {
                 let die = Die::new(self.ctx.clone(), child.entry().clone());
                 match f(die) {
-                    Visit::Continue => queue.push_back(offset),
+                    Visit::Continue => queue.push_back(child.entry().offset()),
                     Visit::SkipChildren => {}
                     Visit::Break => return,
                 }
