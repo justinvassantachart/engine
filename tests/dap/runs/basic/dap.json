@@ -1,0 +1,71 @@
+{
+  "steps": [
+    {
+      "type": "request",
+      "command": "setBreakpoints",
+      "arguments": {
+        "source": { "path": "/main.c" },
+        "breakpoints": [{ "line": 3 }]
+      }
+    },
+    {
+      "type": "request",
+      "command": "configurationDone",
+      "arguments": {}
+    },
+    {
+      "type": "event",
+      "event": "stopped",
+      "body": {
+        "reason": "breakpoint",
+        "threadId": 1
+      }
+    },
+    {
+      "type": "request",
+      "command": "stackTrace",
+      "arguments": { "threadId": 1, "startFrame": 0, "levels": 20 }
+    },
+    {
+      "type": "request",
+      "command": "scopes",
+      "arguments": { "frameId": 0 }
+    },
+    {
+      "type": "response",
+      "body": {
+        "scopes": [
+          {
+            "name": "Locals",
+            "expensive": false,
+            "variablesReference": "{{localsRef}}"
+          }
+        ]
+      }
+    },
+    {
+      "type": "request",
+      "command": "variables",
+      "arguments": {
+        "variablesReference": "{{localsRef}}"
+      }
+    },
+    {
+      "type": "response",
+      "body": {
+        "variables": [
+          {
+            "name": "x",
+            "value": "1",
+            "type": "int"
+          }
+        ]
+      }
+    },
+    {
+      "type": "request",
+      "command": "continue",
+      "arguments": { "threadId": 1 }
+    }
+  ]
+}
