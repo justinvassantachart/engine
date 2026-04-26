@@ -27,14 +27,19 @@ function wasm(): PluginOption {
   };
   const packageName = packageJson.name;
   const packageVersion = packageJson.version;
-  const npmWasmUrl = `https://cdn.jsdelivr.net/npm/${packageName}@${packageVersion}/dist/runtime_bg.wasm`;
+  const npmDistUrl = `https://cdn.jsdelivr.net/npm/${packageName}@${packageVersion}/dist`;
 
   return {
     name: 'fix-wasm-import',
     async closeBundle() {
-      const wasmSrc = path.join('pkg', 'runtime_bg.wasm');
-      const wasmDist = path.join(outDir, 'runtime_bg.wasm');
-      if (fs.existsSync(wasmSrc)) fs.copyFileSync(wasmSrc, wasmDist);
+      const pkgDir = 'pkg';
+      if (fs.existsSync(pkgDir)) {
+        const wasmFiles = fs.readdirSync(pkgDir).filter((file) => file.endsWith('.wasm'));
+        fs.mkdirSync(outDir, { recursive: true });
+        for (const wasmFile of wasmFiles) {
+          fs.copyFileSync(path.join(pkgDir, wasmFile), path.join(outDir, wasmFile));
+        }
+      }
 
       const file = path.join(outDir, 'runtime.js');
       if (!fs.existsSync(file)) return; // in worker builds this file doesn't exist yet
@@ -54,9 +59,7 @@ function wasm(): PluginOption {
       if (devPort) {
         return `export default new URL("http://localhost:${devPort}/${wasmFile}");`;
       }
-      if (wasmFile === 'runtime_bg.wasm')
-        return `export default new URL(${JSON.stringify(npmWasmUrl)});`;
-      return `export default new URL(${JSON.stringify(`./${wasmFile}`)}, import.meta.url);`;
+      return `export default new URL(${JSON.stringify(`${npmDistUrl}/${wasmFile}`)});`;
     },
   };
 }
