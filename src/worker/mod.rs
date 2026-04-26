@@ -177,16 +177,6 @@ async fn start(msg: WorkerStart) {
         .await
         .expect("Running succeeded");
 
-    // Print out the filesystem toplevel for debugging
-    let root = exec
-        .fs
-        .read_dir(PathBuf::from("/").as_path())
-        .expect("Read root dir");
-
-    for entry in root {
-        web_sys::console::log_1(&format!("FS Entry: {:?}", entry).into());
-    }
-
     // Send Stop message on successful completion
     WorkerOut::Stop.send();
 }
