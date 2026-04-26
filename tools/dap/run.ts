@@ -348,14 +348,17 @@ async function runTest(testName: string): Promise<void> {
     })
   );
   const eventQueue: Json[] = [];
+  const rawDapLog: Json[] = [];
   const artifactTasks: Promise<void>[] = [];
   let resolveEventWaiter: ((v: Json) => void) | null = null;
   runtime.debugger.on('event', (msg: unknown) => {
-    eventQueue.push(msg as Json);
+    const event = msg as Json;
+    rawDapLog.push(event);
+    eventQueue.push(event);
     if (resolveEventWaiter) {
       const fn = resolveEventWaiter;
       resolveEventWaiter = null;
-      fn(msg as Json);
+      fn(event);
     }
   });
   runtime.debugger.on('artifact', async (artifact) => {
@@ -386,7 +389,9 @@ async function runTest(testName: string): Promise<void> {
         },
         captures
       ) as Json;
+      rawDapLog.push(reqObj);
       lastResponse = runtime.debugger.send(reqObj) as Json;
+      rawDapLog.push(lastResponse);
       if (
         lastResponse &&
         typeof lastResponse === 'object' &&
@@ -443,6 +448,7 @@ async function runTest(testName: string): Promise<void> {
     }
   );
   await Promise.all(artifactTasks);
+  await writeFile(path.join(testOutputDir, 'log.json'), JSON.stringify(rawDapLog, null, 2));
   if (failure) throw failure;
   logOk(`${testName} passed`);
 }
