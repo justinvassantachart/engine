@@ -8,7 +8,7 @@ import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 
-import { assertMatch, CaptureMap, substitutePlaceholders } from './matcher';
+import { CaptureMap, match, MatchResult, substitutePlaceholders } from './matcher';
 
 type Json = null | boolean | number | string | Json[] | { [k: string]: Json };
 
@@ -68,7 +68,7 @@ function logInfo(msg: string) {
 }
 
 function logStep(msg: string) {
-  console.log(`${chalk.blue('->')} ${msg}`);
+  console.log(` ${chalk.blue('└─')} ${chalk.dim(msg)}`);
 }
 
 function logOk(msg: string) {
@@ -249,6 +249,36 @@ function fmtJson(v: unknown): string {
   }
 }
 
+function formatMismatch(
+  expected: Json,
+  received: Json,
+  result: Extract<MatchResult, { success: false }>
+): string {
+  const bar = ` |`;
+  const gbar = chalk.green(bar);
+  const rbar = chalk.red(bar);
+
+  const expectedLines = fmtJson(expected).split('\n');
+  const receivedLines = fmtJson(received).split('\n');
+  return [
+    '',
+    `${gbar} ${chalk.bold(chalk.green('Expected:'))}`,
+    gbar,
+    ...expectedLines.map((line) => `${gbar} ${line}`),
+    gbar,
+    `${rbar} ${chalk.bold(chalk.red('Received:'))}`,
+    rbar,
+    ...receivedLines.map((line) => `${rbar} ${line}`),
+    rbar,
+    chalk.red(`${bar} at ${chalk.underline(result.at)}: ${result.reason}`),
+    '',
+  ].join('\n');
+}
+
+function asError(err: unknown): Error {
+  return err instanceof Error ? err : new Error(String(err));
+}
+
 async function waitForEvent(
   queue: Json[],
   waitForNext: () => Promise<Json>,
@@ -374,13 +404,9 @@ async function runTest(testName: string): Promise<void> {
       if (!lastResponse) throw new Error(`${label}: no prior request response available`);
       if (visible) logStep(label);
       const expected = substitutePlaceholders(step as unknown as Json, captures);
-      try {
-        assertMatch(expected, lastResponse, captures);
-      } catch (err) {
-        throw new Error(
-          `${label} mismatch\nexpected:\n${fmtJson(expected)}\nreceived:\n${fmtJson(lastResponse)}\nreason: ${String(err)}`
-        );
-      }
+      const result = match(expected, lastResponse, 'response');
+      if (!result.success) throw new Error(formatMismatch(expected, lastResponse, result));
+      Object.assign(captures, result.captures);
       return;
     }
 
@@ -389,29 +415,35 @@ async function runTest(testName: string): Promise<void> {
     const actualEvent = await waitForEvent(eventQueue, waitForNextEvent, step.event, timeout);
     const { $timeout: _ignored, ...expectedStep } = step;
     const expected = substitutePlaceholders(expectedStep as unknown as Json, captures);
-    try {
-      assertMatch(expected, actualEvent, captures);
-    } catch (err) {
-      throw new Error(
-        `${label} mismatch\nexpected:\n${fmtJson(expected)}\nreceived:\n${fmtJson(actualEvent)}\nreason: ${String(err)}`
-      );
-    }
+    const result = match(expected, actualEvent, 'event');
+    if (!result.success) throw new Error(formatMismatch(expected, actualEvent, result));
+    Object.assign(captures, result.captures);
   };
 
   logInfo(`${chalk.bold(testName)} (${file.steps.length} steps)`);
-  logStep(`[0/${file.steps.length}] setup debugger session`);
-  for (const step of INIT_STEPS) {
-    await executeStep(step, '[init]', false);
+  let failure: Error | null = null;
+  try {
+    logStep(`[0/${file.steps.length}] setup debugger session`);
+    for (const step of INIT_STEPS) {
+      await executeStep(step, '[init]', false);
+    }
+
+    for (let i = 0; i < file.steps.length; i++) {
+      const step = file.steps[i];
+      const label = `[${i + 1}/${file.steps.length}] ${step.type}`;
+      await executeStep(step, label, true);
+    }
+  } catch (err) {
+    failure = asError(err);
   }
 
-  for (let i = 0; i < file.steps.length; i++) {
-    const step = file.steps[i];
-    const label = `[${i + 1}/${file.steps.length}] ${step.type}`;
-    await executeStep(step, label, true);
-  }
-
-  await Promise.race([runPromise, new Promise((resolve) => setTimeout(resolve, 1500))]);
+  await Promise.race([runPromise, new Promise((resolve) => setTimeout(resolve, 1500))]).catch(
+    (err) => {
+      if (!failure) failure = asError(err);
+    }
+  );
   await Promise.all(artifactTasks);
+  if (failure) throw failure;
   logOk(`${testName} passed`);
 }
 
@@ -438,7 +470,7 @@ async function main() {
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       failed.push({ name: test, error: message });
-      console.error(`${chalk.red('FAIL')} ${chalk.bold(test)}\n${chalk.dim(message)}`);
+      console.error(` ${chalk.red('└─')} ${chalk.red('fail')} \n${chalk.dim(message)}`);
     }
   }
 
