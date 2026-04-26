@@ -37,6 +37,12 @@ impl From<usize> for GlobalAddress {
     }
 }
 
+impl std::fmt::Display for GlobalAddress {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "0x{:x}", self.0)
+    }
+}
+
 #[derive(Debug, Tsify, Deserialize)]
 #[serde(untagged)]
 pub enum FsNode {

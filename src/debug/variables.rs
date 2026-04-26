@@ -78,6 +78,14 @@ impl Variable {
         &self.ty
     }
 
+    pub fn address(&self) -> Option<GlobalAddress> {
+        let piece = self.pieces.first()?;
+        match &piece.location {
+            gimli::Location::Address { address } => Some(GlobalAddress(*address)),
+            _ => None,
+        }
+    }
+
     /// Human-readable type name (e.g. `int`, `Point`, `int*`).
     pub fn type_name(&self) -> String {
         self.ty.name()
@@ -110,8 +118,8 @@ impl Variable {
                 let label = name.as_deref().unwrap_or("");
                 format!("{label} {{ ... }}")
             }
-            Some(TypeDeclaration::Referential { .. }) => match read_address(&self.pieces) {
-                Some(addr) => format!("0x{:x}", addr),
+            Some(TypeDeclaration::Referential { .. }) => match self.address() {
+                Some(addr) => addr.to_string(),
                 None => "<unavailable>".into(),
             },
             _ => "<unavailable>".into(),
@@ -126,7 +134,7 @@ impl Variable {
             return Vec::new();
         };
 
-        let Some(base) = read_address(&self.pieces) else {
+        let Some(base) = self.address() else {
             return Vec::new();
         };
 
@@ -142,7 +150,7 @@ impl Variable {
                 // Expression-based offsets aren't supported yet
                 Some(super::MemberLocation::Expr(_)) => continue,
             };
-            let addr = (base as i64).wrapping_add(offset) as u64;
+            let addr = (base.0 as i64).wrapping_add(offset) as u64;
             let piece = gimli::Piece {
                 size_in_bits: None,
                 bit_offset: None,
@@ -167,15 +175,6 @@ fn read_value_bytes(info: &DebugInfo, pieces: &[gimli::Piece<R>], len: usize) ->
             buf.resize(len, 0);
             Some(buf)
         }
-        _ => None,
-    }
-}
-
-/// Returns the address pointed to by the first piece, if any.
-fn read_address(pieces: &[gimli::Piece<R>]) -> Option<u64> {
-    let piece = pieces.first()?;
-    match &piece.location {
-        gimli::Location::Address { address } => Some(*address),
         _ => None,
     }
 }
