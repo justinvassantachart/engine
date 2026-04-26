@@ -1,4 +1,6 @@
-export type Json = null | boolean | number | string | Json[] | { [k: string]: Json };
+export type Json = null | boolean | number | string | JsonArray | JsonObject;
+export type JsonArray = Json[];
+export type JsonObject = { [k: string]: Json };
 export type CaptureMap = Record<string, Json>;
 
 const PLACEHOLDER_RE = /^\{\{[a-zA-Z_]\w*\}\}$/;
@@ -20,66 +22,81 @@ export function substitutePlaceholders(input: Json, captures: CaptureMap): Json 
   return input;
 }
 
-export function assertMatch(expected: Json, actual: Json, captures: CaptureMap, at = '$'): void {
-  const isObj = (v: Json): v is Record<string, Json> =>
-    typeof v === 'object' && v !== null && !Array.isArray(v);
-  const isPlaceholder = (v: Json): v is string => typeof v === 'string' && PLACEHOLDER_RE.test(v);
-  const fmt = (v: unknown) => {
-    try {
-      return JSON.stringify(v, null, 2);
-    } catch {
-      return String(v);
+export type MatchResult =
+  | {
+      success: true;
+      captures: CaptureMap;
     }
-  };
+  | {
+      success: false;
+      at: string;
+      reason: string;
+    };
 
-  if (isPlaceholder(expected)) {
-    captures[expected.slice(2, -2)] = actual;
-    return;
-  }
+export function match(expected: Json, actual: Json, at = ''): MatchResult {
+  const succeed = (captures: CaptureMap = {}): MatchResult => ({ success: true, captures });
+  const fail = (reason: string): MatchResult => ({ success: false, at, reason });
+
+  if (isPlaceholder(expected)) return succeed({ [expected.slice(2, -2)]: actual });
 
   if (Array.isArray(expected)) {
-    if (!Array.isArray(actual)) throw new Error(`${at}: expected array, got ${typeof actual}`);
-    if (actual.length !== expected.length) {
-      throw new Error(`${at}: expected array length ${expected.length}, got ${actual.length}`);
-    }
-    expected.forEach((v, i) => assertMatch(v, actual[i] as Json, captures, `${at}[${i}]`));
-    return;
+    if (!Array.isArray(actual)) return fail(`expected array, got ${tn(actual)}`);
+    if (actual.length !== expected.length)
+      return fail(`expected array of size ${expected.length}, got ${actual.length}`);
+    return allOf(expected.map((e, i) => match(e, actual[i], `${at}[${i}]`)));
   }
 
-  if (isObj(expected)) {
-    if (!isObj(actual)) throw new Error(`${at}: expected object, got ${typeof actual}`);
+  function tryCompareSpecial(expected: JsonObject, actual: Json): MatchResult | null {
+    const contains = expected['$array.contains'];
+    if (contains) {
+      if (!Array.isArray(contains)) return fail('array.contains requires array value');
+      if (!Array.isArray(actual)) return fail(`expected array, got ${tn(actual)}`);
 
-    for (const [key, expectedValue] of Object.entries(expected)) {
-      if (key === '$array.contains') {
-        if (!Array.isArray(actual)) throw new Error(`${at}: array expected`);
-        if (!Array.isArray(expectedValue))
-          throw new Error(`${at}: $array.contains value must be array`);
-
-        expectedValue.forEach((template, i) => {
-          let matched = false;
-          for (const candidate of actual) {
-            const local = { ...captures };
-            try {
-              assertMatch(template as Json, candidate as Json, local, `${at}[${i}]`);
-              Object.assign(captures, local);
-              matched = true;
-              break;
-            } catch {}
+      return allOf(
+        contains.map((e, ei) => {
+          for (let i = 0; i < actual.length; i++) {
+            const result = match(e, actual[i], `${at}[${i}]`);
+            if (result.success) return result;
           }
-          if (!matched) {
-            throw new Error(`${at}: $array.contains: element ${i} not found`);
-          }
-        });
-        continue;
-      }
-
-      if (!(key in actual)) throw new Error(`${at}.${key}: missing key in actual object`);
-      assertMatch(expectedValue as Json, actual[key] as Json, captures, `${at}.${key}`);
+          return fail(`item ${ei} not found: ${JSON.stringify(e)}`);
+        })
+      );
     }
-    return;
+
+    return null;
   }
 
-  if (!Object.is(expected, actual)) {
-    throw new Error(`${at}: expected ${fmt(expected)}, got ${fmt(actual)}`);
+  if (typeof expected === 'object' && expected !== null) {
+    const special = tryCompareSpecial(expected, actual);
+    if (special) return special;
+
+    if (typeof actual !== 'object' || actual === null)
+      return fail(`expected object, got ${tn(actual)}`);
+    return allOf(
+      Object.keys(expected).map((key) => match(expected[key], actual[key], `${at}.${key}`))
+    );
   }
+
+  if (!Object.is(expected, actual))
+    return fail(`expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`);
+  return succeed();
+}
+
+function isPlaceholder(value: Json): value is string {
+  return typeof value === 'string' && PLACEHOLDER_RE.test(value);
+}
+
+function tn(value: Json) {
+  if (Array.isArray(value)) return 'array';
+  if (value === null) return 'null';
+  return typeof value;
+}
+
+function allOf(matches: MatchResult[]) {
+  const success: MatchResult = { success: true, captures: {} };
+  for (const match of matches) {
+    if (!match.success) return match;
+    Object.assign(success.captures, match.captures);
+  }
+  return success;
 }
