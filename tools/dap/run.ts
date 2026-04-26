@@ -38,6 +38,7 @@ const DAP_PROJECT_DIR = path.join(ROOT, 'tools/dap');
 const TESTS_DIR = path.join(ROOT, 'tools/dap/tests');
 const OUTPUT_DIR = path.join(ROOT, 'tools/dap/output');
 const DAP_TIMEOUT_MS = 1000;
+const DEV_BUILD_MARKER = path.join(ROOT, 'node_modules/build.lock');
 
 const INIT_STEPS: Step[] = [
   {
@@ -94,6 +95,14 @@ async function listTestNames(): Promise<string[]> {
     .filter((e) => e.isDirectory())
     .map((e) => e.name)
     .sort();
+}
+
+async function waitForDevBuild() {
+  if (!existsSync(DEV_BUILD_MARKER)) return;
+  logInfo('waiting for build to finish...');
+  while (existsSync(DEV_BUILD_MARKER)) {
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
 }
 
 async function readJsonFile<T>(filePath: string): Promise<T> {
@@ -381,6 +390,7 @@ async function main() {
   const { tests: requestedTests } = parseCli(process.argv.slice(2));
   if (!existsSync(path.join(ROOT, 'dist/runtime.js')))
     die(`missing dist/runtime.js. Run 'npm run build' first.`);
+  await waitForDevBuild();
   await ensureRuntimeLinked();
 
   const available = await listTestNames();

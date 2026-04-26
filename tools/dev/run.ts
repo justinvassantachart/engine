@@ -2,7 +2,7 @@ import { serve } from 'bun';
 import chalk from 'chalk';
 import { type ChildProcess, spawn } from 'node:child_process';
 import { watch } from 'node:fs';
-import { readFile } from 'node:fs/promises';
+import { readFile, rm, writeFile } from 'node:fs/promises';
 import net from 'node:net';
 import path from 'node:path';
 import process from 'node:process';
@@ -15,6 +15,7 @@ const SRC = path.join(ROOT, 'src');
 const SRC_TS = path.join(SRC, 'ts');
 const PKG = path.join(ROOT, 'pkg');
 const START_PORT = 8000;
+const BUILD_MARKER = path.join(ROOT, 'node_modules/build.lock');
 
 const spinner = yoctoSpinner();
 
@@ -23,6 +24,7 @@ let pendingRs = true;
 let port = 0;
 let activeProcess: ChildProcess | null = null;
 let isInitializing = true;
+let isDraining = false;
 
 function writeBuildOutput(output: string, message?: string) {
   output = output.trim();
@@ -85,15 +87,23 @@ function queueBuild(kind: 'ts' | 'rs') {
 }
 
 async function drainBuildQueue() {
-  while (pendingRs || pendingTs) {
-    if (pendingRs) {
-      pendingRs = false;
-      await run('rust', 'npm', ['run', 'build:rs', '--', '--dev']);
+  if (isDraining) return;
+  isDraining = true;
+  await writeFile(BUILD_MARKER, 'building\n', 'utf8');
+  try {
+    while (pendingRs || pendingTs) {
+      if (pendingRs) {
+        pendingRs = false;
+        await run('rust', 'npm', ['run', 'build:rs', '--', '--dev']);
+      }
+      if (pendingTs) {
+        pendingTs = false;
+        await run('typescript', 'npm', ['run', 'build:ts'], { WASM_DEV_PORT: String(port) });
+      }
     }
-    if (pendingTs) {
-      pendingTs = false;
-      await run('typescript', 'npm', ['run', 'build:ts'], { WASM_DEV_PORT: String(port) });
-    }
+  } finally {
+    isDraining = false;
+    await rm(BUILD_MARKER, { force: true });
   }
 }
 
