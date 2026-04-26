@@ -60,13 +60,18 @@ pub fn get_location(die: &Die<'_>, pc: GlobalAddress) -> Option<Expression<R>> {
 /// register, …); `ty` describes how to interpret them.
 #[derive(Clone)]
 pub struct Value {
+    name: String,
     pieces: Vec<gimli::Piece<R>>,
     ty: Type,
 }
 
 impl Value {
-    pub fn new(pieces: Vec<gimli::Piece<R>>, ty: Type) -> Self {
-        Self { pieces, ty }
+    pub fn new(name: String, pieces: Vec<gimli::Piece<R>>, ty: Type) -> Self {
+        Self { name, pieces, ty }
+    }
+
+    pub fn name(&self) -> &str {
+        &self.name
     }
 
     pub fn ty(&self) -> &Type {
@@ -116,7 +121,7 @@ impl Value {
     /// Expands a compound value into named child variables.
     ///
     /// Returns an empty vector for scalars / unsupported aggregates.
-    pub fn children(&self, _info: &DebugInfo) -> Vec<super::Variable> {
+    pub fn children(&self, _info: &DebugInfo) -> Vec<Value> {
         let Some(TypeDeclaration::Structure { members, .. }) = self.ty.resolved() else {
             return Vec::new();
         };
@@ -143,8 +148,7 @@ impl Value {
                 bit_offset: None,
                 location: gimli::Location::Address { address: addr },
             };
-            let value = Value::new(vec![piece], self.ty.child(member.ty));
-            out.push(super::Variable { name, value });
+            out.push(Value::new(name, vec![piece], self.ty.child(member.ty)));
         }
         out
     }

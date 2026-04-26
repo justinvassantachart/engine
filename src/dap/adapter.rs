@@ -159,10 +159,10 @@ impl DapState {
 
         let mut variables: Vec<Value> = Vec::with_capacity(entries.len());
         for var in &entries {
-            let display = var.value.display(&info);
-            let type_name = var.value.type_name();
-            let sub_ref = if var.value.has_children() {
-                let children = var.value.children(&info);
+            let display = var.display(&info);
+            let type_name = var.type_name();
+            let sub_ref = if var.has_children() {
+                let children = var.children(&info);
                 if children.is_empty() {
                     0
                 } else {
@@ -172,7 +172,7 @@ impl DapState {
                 0
             };
             variables.push(json!({
-                "name": var.name,
+                "name": var.name(),
                 "value": display,
                 "type": type_name,
                 "variablesReference": sub_ref,

@@ -14,12 +14,6 @@ pub struct StackFrame {
     pub source: Option<String>,
 }
 
-#[derive(Clone)]
-pub struct Variable {
-    pub name: String,
-    pub value: Value,
-}
-
 // ---------------------------------------------------------------------------
 // Main-thread Debugger
 // ---------------------------------------------------------------------------
@@ -239,7 +233,7 @@ impl Debugger {
     /// `DW_TAG_variable` (the modern tag) or `DW_TAG_local_variable`. Variables
     /// whose location expression cannot be resolved (e.g. optimized out /
     /// require unsupported opcodes) are dropped.
-    pub fn get_variables(&self, frame_id: u32) -> (Vec<Variable>, Vec<Variable>) {
+    pub fn get_variables(&self, frame_id: u32) -> (Vec<Value>, Vec<Value>) {
         let Some((pos, pc, func)) = self.frame_at(frame_id) else {
             return (Vec::new(), Vec::new());
         };
@@ -267,10 +261,7 @@ impl Debugger {
             let Some(type_id) = var_die.type_ref() else {
                 continue;
             };
-            let variable = Variable {
-                name,
-                value: Value::new(pieces, Type::new(type_id, self.types.clone())),
-            };
+            let variable = Value::new(name, pieces, Type::new(type_id, self.types.clone()));
             match var_die.tag() {
                 gimli::DW_TAG_formal_parameter => arguments.push(variable),
                 gimli::DW_TAG_variable | gimli::DW_TAG_local_variable => {

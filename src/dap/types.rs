@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-use crate::debug::Variable;
+use crate::debug::Value;
 
 /// Tracks variable handles handed out via DAP `variablesReference` IDs.
 ///
@@ -12,12 +12,12 @@ use crate::debug::Variable;
 #[derive(Default)]
 pub struct VariablesMap {
     next_ref: i64,
-    entries: HashMap<i64, Vec<Variable>>,
+    entries: HashMap<i64, Vec<Value>>,
 }
 
 impl VariablesMap {
     /// Stores `vars` and returns a fresh non-zero `variablesReference`.
-    pub fn allocate(&mut self, vars: Vec<Variable>) -> i64 {
+    pub fn allocate(&mut self, vars: Vec<Value>) -> i64 {
         self.next_ref += 1;
         let id = self.next_ref;
         self.entries.insert(id, vars);
@@ -25,7 +25,7 @@ impl VariablesMap {
     }
 
     /// Returns the variables previously registered under `reference`, if any.
-    pub fn get(&self, reference: i64) -> Option<&Vec<Variable>> {
+    pub fn get(&self, reference: i64) -> Option<&Vec<Value>> {
         self.entries.get(&reference)
     }
 
