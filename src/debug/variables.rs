@@ -1,10 +1,11 @@
 use crate::{
-    debug::dwarf::{Die, Visit},
-    types::GlobalAddress,
+    debug::{
+        Type,
+        dwarf::{Die, R, Visit},
+    },
+    types::{DebugInfo, GlobalAddress},
 };
 use gimli::read::Expression;
-
-use super::R;
 
 /// Gets all live variables at the given PC.
 ///
@@ -44,4 +45,34 @@ pub fn get_variables<'a>(die: &Die<'a>, pc: GlobalAddress) -> Vec<Die<'a>> {
 /// Gets the location expression for a variable at the given PC
 pub fn get_location(die: &Die<'_>, pc: GlobalAddress) -> Option<Expression<R>> {
     die.expression(gimli::DW_AT_location, pc)
+}
+
+pub struct Value {
+    name: Option<String>,
+    inner: Vec<gimli::Piece<R>>,
+    ty: Type,
+}
+
+impl Value {
+    pub fn new(pieces: Vec<gimli::Piece<R>>, ty: Type) -> Self {
+        Self {
+            name: None,
+            inner: pieces,
+            ty,
+        }
+    }
+
+    pub fn name(&self) -> &Option<String> {
+        &self.name
+    }
+
+    /// initial idea: look at the pieces
+    pub fn address(&self) -> Option<u64> {
+        None
+    }
+
+    /// Need the info to inspect the wasm locactions
+    pub fn children(&self, _info: &DebugInfo) -> Vec<Value> {
+        Vec::default()
+    }
 }

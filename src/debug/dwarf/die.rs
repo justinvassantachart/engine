@@ -9,7 +9,7 @@ use crate::util::weak_error;
 use super::{Dwarf, R, Unit};
 use gimli::Reader;
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Hash, PartialEq, Eq)]
 pub struct DieReference {
     unit_index: usize,
     #[serde(with = "crate::debug::dwarf::serde::unit_offset")]
@@ -97,6 +97,17 @@ impl<'a> Die<'a> {
         let high_pc = weak_error!(self.ctx().unit_ref().attr_address(high_pc.value())).flatten()?;
         let high_pc = GlobalAddress(high_pc);
         return Some((low_pc, high_pc));
+    }
+
+    pub fn type_ref(&self) -> Option<DieReference> {
+        let attr = self.attr(gimli::DW_AT_type)?;
+        match attr.value() {
+            gimli::AttributeValue::UnitRef(offset) => Some(DieReference {
+                unit_index: self.ctx.unit.index(),
+                unit_ofs: offset,
+            }),
+            _ => None,
+        }
     }
 
     pub fn expression(&self, attr: gimli::DwAt, pc: GlobalAddress) -> Option<gimli::Expression<R>> {

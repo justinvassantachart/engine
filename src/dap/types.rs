@@ -1,4 +1,11 @@
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+
+#[derive(Default)]
+pub struct VariablesMap {
+    pub next_ref: i64,
+    pub entries: HashMap<i64, Vec<crate::debug::Value>>,
+}
 
 // ---------------------------------------------------------------------------
 // Base Protocol

@@ -6,7 +6,6 @@ pub use function::*;
 
 use crate::debug::dwarf::Dwarf;
 use crate::types::{BP_PREFIX_BYTES, DebugFunction, DebugInfo, MemoryDescriptor};
-use crate::util::weak_error;
 use anyhow::Result;
 use std::collections::HashMap;
 use wasm_encoder::reencode;
@@ -54,7 +53,7 @@ fn parse_debug_functions(dwarf: &Dwarf) -> Vec<DebugFunction> {
         .units()
         .iter()
         .flat_map(|unit| {
-            let Some(root) = weak_error!(unit.root(dwarf)) else {
+            let Some(root) = unit.root(dwarf) else {
                 return Vec::new();
             };
 

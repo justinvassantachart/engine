@@ -101,14 +101,11 @@ impl Unit {
     }
 
     /// Gets the root DIE for this unit
-    pub fn root<'a>(&'a self, dwarf: &'a Dwarf) -> gimli::Result<Die<'a>> {
+    pub fn root<'a>(&'a self, dwarf: &'a Dwarf) -> Option<Die<'a>> {
         let mut entries = self.unit.entries();
-        entries.next_entry()?;
-        let die = entries
-            .current()
-            .ok_or(gimli::Error::MissingUnitDie)?
-            .clone();
-        Ok(Die::new(DerefContext::new(dwarf, self), die))
+        weak_error!(entries.next_entry())?;
+        let die = weak_error!(entries.current().ok_or(gimli::Error::MissingUnitDie))?.clone();
+        Some(Die::new(DerefContext::new(dwarf, self), die))
     }
 
     pub fn unit(&self) -> &gimli::Unit<R> {

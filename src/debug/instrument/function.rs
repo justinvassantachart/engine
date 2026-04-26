@@ -1,6 +1,7 @@
 use super::{InstrResult, Instrumenter};
-use crate::debug::dwarf::{R, get_location, get_variables};
+use crate::debug::dwarf::R;
 use crate::debug::instrument::InstrError;
+use crate::debug::{get_location, get_variables};
 use crate::types::{DebugFunction, GlobalAddress, WasmLocation};
 use std::collections::{BTreeSet, HashMap, HashSet};
 use wasm_encoder::reencode::Reencode;
