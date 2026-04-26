@@ -197,6 +197,12 @@ npm install
 npm run build   # wasm-pack build --target web && vite build
 ```
 
+For local development, use:
+
+```bash
+npm run dev
+```
+
 To run the built-in demo:
 
 ```bash

@@ -1,8 +1,8 @@
 ## Developing and Building
 
+- `npm run dev` to run the local runtime dev loop. Changes to project files will trigger automatic rebuild
 - `npm run build` to build the project.
   - This command builds the Rust components to WASM and then bundles everything into the npm library.
-  - It is optimized for quick build times. To build for release, use `npm run build:release`.
 - `npm run tools:dap` to run a suite of integration tests against the Debugger Adapter Protocol (DAP).
 - `npm run tools:dap -- {test}` to run a specific integration test.
 - Don't use `web_sys::console`, instead use the provided `util::log!` and `util::warn!` macros which provide native Rust formatting.
