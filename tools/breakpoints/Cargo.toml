@@ -2,6 +2,9 @@
 name = "breakpoints"
 version = "0.1.0"
 edition = "2024"
+description = "Breakpoint utility binary for runtime debugging workflows."
+repository = "https://github.com/jacob/runtime"
+license = "MIT"
 
 [[bin]]
 name = "breakpoints"

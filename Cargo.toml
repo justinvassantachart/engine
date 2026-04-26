@@ -5,6 +5,9 @@ members = [".", "tools/breakpoints"]
 name = "runtime"
 version = "0.1.0"
 edition = "2024"
+description = "WebAssembly runtime and debugger"
+repository = "https://github.com/jacobrobertsbaca/runtime"
+license = "MIT"
 
 [lib]
 crate-type = ["cdylib", "rlib"]
