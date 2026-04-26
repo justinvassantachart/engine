@@ -11,12 +11,6 @@ use crate::dap::types::{ProtocolMessage, VariablesMap};
 use crate::debug::Debugger;
 use crate::types::DebugInfo;
 
-impl VariablesMap {
-    fn get(&self, reference: i64) -> Option<&Vec<crate::debug::Value>> {
-        self.entries.get(&reference)
-    }
-}
-
 struct DapState {
     seq_counter: i64,
     debugger: Option<Debugger>,
@@ -49,7 +43,8 @@ impl DapState {
     }
 
     // interacts with wait_for_resume in the worker to unblock after config is done.
-    fn handle_configuration_done(&self) -> Result<Value> {
+    fn handle_configuration_done(&mut self) -> Result<Value> {
+        self.vars.clear();
         self.debugger()
             .context("configurationDone: debugger not ready")?
             .continue_();
@@ -119,41 +114,75 @@ impl DapState {
     }
 
     fn handle_scopes(&mut self, args: &Value) -> Result<Value> {
-        let _frame_id = args.get("frameId").and_then(|v| v.as_i64()).unwrap_or(0) as u32;
-        Ok(json!({
-            "scopes": [{
-                "name": "Locals",
-                "variablesReference": 0,
+        let frame_id = args.get("frameId").and_then(|v| v.as_i64()).unwrap_or(0) as u32;
+        let dbg = self.debugger().context("No debugger attached")?;
+        let (arguments, locals) = dbg.get_variables(frame_id);
+
+        let mut scopes: Vec<Value> = Vec::new();
+        if !arguments.is_empty() {
+            let reference = self.vars.allocate(arguments);
+            scopes.push(json!({
+                "name": "Arguments",
+                "variablesReference": reference,
                 "expensive": false,
-            }]
-        }))
+            }));
+        }
+        if !locals.is_empty() {
+            let reference = self.vars.allocate(locals);
+            scopes.push(json!({
+                "name": "Locals",
+                "variablesReference": reference,
+                "expensive": false,
+            }));
+        }
+        Ok(json!({ "scopes": scopes }))
     }
 
-    fn handle_variables(&self, args: &Value) -> Result<Value> {
+    fn handle_variables(&mut self, args: &Value) -> Result<Value> {
         let reference = args
             .get("variablesReference")
             .and_then(|v| v.as_i64())
             .unwrap_or(0);
 
-        let vars = self
+        // Snapshot the entries (and a borrow-free DebugInfo handle) before we
+        // mutate `self.vars` to allocate sub-references.
+        let entries = self
             .vars
             .get(reference)
-            .context("Unknown variablesReference")?;
+            .context("Unknown variablesReference")?
+            .clone();
+        let info = self
+            .debugger()
+            .context("No debugger attached")?
+            .info()
+            .clone();
 
-        let vars: Vec<_> = vars
-            .iter()
-            .map(|v| {
-                json!({
-                    "name": v.name(),
-                    "value": "todo",
-                    "variablesReference": 0,
-                })
-            })
-            .collect();
-        Ok(json!({ "variables": vars }))
+        let mut variables: Vec<Value> = Vec::with_capacity(entries.len());
+        for var in &entries {
+            let display = var.value.display(&info);
+            let type_name = var.value.type_name();
+            let sub_ref = if var.value.has_children() {
+                let children = var.value.children(&info);
+                if children.is_empty() {
+                    0
+                } else {
+                    self.vars.allocate(children)
+                }
+            } else {
+                0
+            };
+            variables.push(json!({
+                "name": var.name,
+                "value": display,
+                "type": type_name,
+                "variablesReference": sub_ref,
+            }));
+        }
+        Ok(json!({ "variables": variables }))
     }
 
-    fn handle_continue(&self) -> Result<Value> {
+    fn handle_continue(&mut self) -> Result<Value> {
+        self.vars.clear();
         if let Some(dbg) = self.debugger() {
             dbg.continue_();
         }
@@ -162,21 +191,24 @@ impl DapState {
 
     // TODO: need to agree with Fabio on how to expose step(mode) on Debugger to set sentinel[1] before resuming.
     // For now these fall through to a plain continue so the program doesn't hang.
-    fn handle_next(&self) -> Result<Value> {
+    fn handle_next(&mut self) -> Result<Value> {
+        self.vars.clear();
         if let Some(dbg) = self.debugger() {
             dbg.continue_();
         }
         Ok(json!({}))
     }
 
-    fn handle_step_in(&self) -> Result<Value> {
+    fn handle_step_in(&mut self) -> Result<Value> {
+        self.vars.clear();
         if let Some(dbg) = self.debugger() {
             dbg.continue_();
         }
         Ok(json!({}))
     }
 
-    fn handle_step_out(&self) -> Result<Value> {
+    fn handle_step_out(&mut self) -> Result<Value> {
+        self.vars.clear();
         if let Some(dbg) = self.debugger() {
             dbg.continue_();
         }

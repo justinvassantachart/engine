@@ -3,8 +3,9 @@ use ::std::rc::Rc;
 
 use std::collections::HashMap;
 
-type TypeId = DieReference;
+pub type TypeId = DieReference;
 
+#[derive(Clone)]
 pub struct Type {
     root: TypeId,
     graph: Rc<TypeGraph>,
@@ -85,6 +86,90 @@ impl Type {
 
     pub fn declaration(&self) -> Option<&TypeDeclaration> {
         self.graph.get(self.root)
+    }
+
+    /// Returns a [`Type`] over the same graph, rooted at `id`.
+    pub fn child(&self, id: TypeId) -> Type {
+        Type {
+            root: id,
+            graph: self.graph.clone(),
+        }
+    }
+
+    /// Walks past `typedef`/cv-qualifier modifiers and returns the underlying declaration.
+    pub fn resolved(&self) -> Option<&TypeDeclaration> {
+        let mut current = self.declaration()?;
+        loop {
+            match current {
+                TypeDeclaration::ModifiedType { inner, .. } => {
+                    current = self.graph.get(*inner)?;
+                }
+                _ => return Some(current),
+            }
+        }
+    }
+
+    /// Human-readable name of this type (e.g. `int`, `Point`, `int*`).
+    pub fn name(&self) -> String {
+        decl_name(self.declaration(), &self.graph)
+    }
+
+    /// Size in bytes of this type, or `None` if unknown.
+    pub fn byte_size(&self) -> Option<u64> {
+        match self.resolved()? {
+            TypeDeclaration::Scalar { byte_size, .. } => Some(*byte_size),
+            TypeDeclaration::Structure { byte_size, .. } => Some(*byte_size),
+            TypeDeclaration::Array { byte_size, .. } => *byte_size,
+            // Pointers/references are wasm32 — 4 bytes
+            TypeDeclaration::Referential { .. } => Some(4),
+            _ => None,
+        }
+    }
+}
+
+fn decl_name(decl: Option<&TypeDeclaration>, graph: &TypeGraph) -> String {
+    let Some(decl) = decl else {
+        return "<unknown>".to_string();
+    };
+    match decl {
+        TypeDeclaration::Scalar { name, .. } => name.clone(),
+        TypeDeclaration::Structure { name, .. } => {
+            name.clone().unwrap_or_else(|| "<anonymous>".to_string())
+        }
+        TypeDeclaration::Referential { target, kind } => {
+            let inner = decl_name(graph.get(*target), graph);
+            match kind {
+                ReferenceKind::Pointer => format!("{inner}*"),
+                ReferenceKind::Reference => format!("{inner}&"),
+                ReferenceKind::Temporary => format!("{inner}&&"),
+            }
+        }
+        TypeDeclaration::Array {
+            element_type,
+            lower_bound,
+            upper_bound,
+            ..
+        } => {
+            let elem = decl_name(graph.get(*element_type), graph);
+            let count = match (lower_bound, upper_bound) {
+                (ArrayBound::Count(lo), Some(ArrayBound::Count(hi))) => Some(hi - lo + 1),
+                _ => None,
+            };
+            match count {
+                Some(c) => format!("{elem}[{c}]"),
+                None => format!("{elem}[]"),
+            }
+        }
+        TypeDeclaration::ModifiedType { modifier, inner } => {
+            let inner_name = decl_name(graph.get(*inner), graph);
+            match modifier {
+                Modifier::TypeDef => inner_name,
+                Modifier::Const => format!("const {inner_name}"),
+                Modifier::Volatile => format!("volatile {inner_name}"),
+                Modifier::Atomic => format!("_Atomic {inner_name}"),
+                Modifier::Restrict => format!("restrict {inner_name}"),
+            }
+        }
     }
 }
 
