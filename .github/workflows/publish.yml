@@ -1,4 +1,4 @@
-name: Publish to npm
+name: Publish to NPM
 
 on:
   push:
@@ -32,6 +32,8 @@ jobs:
           cache: npm
           registry-url: 'https://registry.npmjs.org'
 
+      # Ensure npm 11.5.1 or later for trusted publishing
+      - run: npm install -g npm@latest
       - run: npm ci
       - run: echo "cur_version=$(jq -r .version package.json)" >> $GITHUB_ENV
       - run: echo "prev_version=$(npm view . version 2>/dev/null || echo '0.0.0')" >> $GITHUB_ENV
