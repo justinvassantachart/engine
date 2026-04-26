@@ -1,6 +1,6 @@
 use std::rc::Rc;
 
-use crate::debug::{Type, TypeGraph, Value, get_location, get_variables as debug_get_variables};
+use crate::debug::{Type, TypeGraph, Variable, get_location, get_variables as debug_get_variables};
 use crate::types::{DebugFunction, DebugInfo, GlobalAddress, WasmLocation};
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::JsCast;
@@ -233,7 +233,7 @@ impl Debugger {
     /// `DW_TAG_variable` (the modern tag) or `DW_TAG_local_variable`. Variables
     /// whose location expression cannot be resolved (e.g. optimized out /
     /// require unsupported opcodes) are dropped.
-    pub fn get_variables(&self, frame_id: u32) -> (Vec<Value>, Vec<Value>) {
+    pub fn get_variables(&self, frame_id: u32) -> (Vec<Variable>, Vec<Variable>) {
         let Some((pos, pc, func)) = self.frame_at(frame_id) else {
             return (Vec::new(), Vec::new());
         };
@@ -261,7 +261,7 @@ impl Debugger {
             let Some(type_id) = var_die.type_ref() else {
                 continue;
             };
-            let variable = Value::new(name, pieces, Type::new(type_id, self.types.clone()));
+            let variable = Variable::new(name, pieces, Type::new(type_id, self.types.clone()));
             match var_die.tag() {
                 gimli::DW_TAG_formal_parameter => arguments.push(variable),
                 gimli::DW_TAG_variable | gimli::DW_TAG_local_variable => {

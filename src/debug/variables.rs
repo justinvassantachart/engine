@@ -59,13 +59,13 @@ pub fn get_location(die: &Die<'_>, pc: GlobalAddress) -> Option<Expression<R>> {
 /// `pieces` describes where the bytes live (memory address, embedded value,
 /// register, …); `ty` describes how to interpret them.
 #[derive(Clone)]
-pub struct Value {
+pub struct Variable {
     name: String,
     pieces: Vec<gimli::Piece<R>>,
     ty: Type,
 }
 
-impl Value {
+impl Variable {
     pub fn new(name: String, pieces: Vec<gimli::Piece<R>>, ty: Type) -> Self {
         Self { name, pieces, ty }
     }
@@ -121,7 +121,7 @@ impl Value {
     /// Expands a compound value into named child variables.
     ///
     /// Returns an empty vector for scalars / unsupported aggregates.
-    pub fn children(&self, _info: &DebugInfo) -> Vec<Value> {
+    pub fn children(&self, _info: &DebugInfo) -> Vec<Variable> {
         let Some(TypeDeclaration::Structure { members, .. }) = self.ty.resolved() else {
             return Vec::new();
         };
@@ -148,7 +148,7 @@ impl Value {
                 bit_offset: None,
                 location: gimli::Location::Address { address: addr },
             };
-            out.push(Value::new(name, vec![piece], self.ty.child(member.ty)));
+            out.push(Variable::new(name, vec![piece], self.ty.child(member.ty)));
         }
         out
     }
@@ -157,11 +157,7 @@ impl Value {
 /// Reads `len` bytes addressed by the first piece (memory or immediate).
 ///
 /// Returns `None` if the location is empty or unsupported.
-fn read_value_bytes(
-    info: &DebugInfo,
-    pieces: &[gimli::Piece<R>],
-    len: usize,
-) -> Option<Vec<u8>> {
+fn read_value_bytes(info: &DebugInfo, pieces: &[gimli::Piece<R>], len: usize) -> Option<Vec<u8>> {
     let piece = pieces.first()?;
     match &piece.location {
         gimli::Location::Address { address } => Some(read_main_memory(info, *address, len)),
