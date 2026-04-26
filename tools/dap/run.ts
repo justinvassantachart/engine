@@ -2,7 +2,6 @@ import type { Artifact } from '@jtrb/runtime';
 import { $ } from 'bun';
 import chalk from 'chalk';
 import { spawn } from 'node:child_process';
-import type { EventEmitter } from 'node:events';
 import { existsSync } from 'node:fs';
 import { mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -145,21 +144,14 @@ async function buildIfNeeded(force: boolean) {
   logInfo(`building runtime...`);
 
   await new Promise<void>((resolve) => {
-    const proc = spawn('npm', ['run', 'build'], { cwd: ROOT, shell: true }) as ReturnType<
-      typeof spawn
-    > &
-      EventEmitter;
+    const proc = spawn('npm', ['run', 'build'], { cwd: ROOT, shell: true });
 
-    if (proc.stdout) {
-      proc.stdout.on('data', (chunk: Buffer) => {
-        process.stdout.write(chalk.gray(chunk.toString()));
-      });
-    }
-    if (proc.stderr) {
-      proc.stderr.on('data', (chunk: Buffer) => {
-        process.stdout.write(chalk.gray(chunk.toString()));
-      });
-    }
+    proc.stdout.on('data', (chunk: Buffer) => {
+      process.stdout.write(chalk.gray(chunk.toString()));
+    });
+    proc.stderr.on('data', (chunk: Buffer) => {
+      process.stdout.write(chalk.gray(chunk.toString()));
+    });
 
     proc.on('close', (code) => {
       if (code === 0) return resolve();
