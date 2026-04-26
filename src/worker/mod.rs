@@ -177,6 +177,8 @@ async fn start(msg: WorkerStart) {
         .await
         .expect("Running succeeded");
 
+    // s as dasdadsaadsadsa asadsdsa
+
     // Send Stop message on successful completion
     WorkerOut::Stop.send();
 }

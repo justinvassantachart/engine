@@ -1,7 +1,6 @@
 import type { Artifact } from '@jtrb/runtime';
 import { $ } from 'bun';
 import chalk from 'chalk';
-import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -38,7 +37,6 @@ const ROOT = path.resolve(HERE, '../..');
 const DAP_PROJECT_DIR = path.join(ROOT, 'tools/dap');
 const TESTS_DIR = path.join(ROOT, 'tools/dap/tests');
 const OUTPUT_DIR = path.join(ROOT, 'tools/dap/output');
-const DIST_ENTRY = path.join(ROOT, 'dist/runtime.js');
 const DAP_TIMEOUT_MS = 1000;
 
 const INIT_STEPS: Step[] = [
@@ -81,16 +79,7 @@ function die(msg: string): never {
 }
 
 function parseCli(argv: string[]) {
-  const tests: string[] = [];
-  let build = false;
-  for (const arg of argv) {
-    if (arg === '--build') {
-      build = true;
-      continue;
-    }
-    tests.push(arg);
-  }
-  return { tests, build };
+  return { tests: argv };
 }
 
 async function ensureRuntimeLinked() {
@@ -105,65 +94,6 @@ async function listTestNames(): Promise<string[]> {
     .filter((e) => e.isDirectory())
     .map((e) => e.name)
     .sort();
-}
-
-async function newestSrcMtimeMs(srcDir: string): Promise<number> {
-  async function walk(currentDir: string): Promise<number> {
-    let newest = 0;
-    const entries = await readdir(currentDir, { withFileTypes: true });
-
-    for (const entry of entries) {
-      const absPath = path.join(currentDir, entry.name);
-      if (entry.isDirectory()) {
-        const childNewest = await walk(absPath);
-        if (childNewest > newest) newest = childNewest;
-        continue;
-      }
-      if (!entry.isFile()) continue;
-      const fileStat = await stat(absPath);
-      if (fileStat.mtimeMs > newest) newest = fileStat.mtimeMs;
-    }
-
-    return newest;
-  }
-
-  return walk(srcDir);
-}
-
-async function buildIfNeeded(force: boolean) {
-  const distMissing = !existsSync(DIST_ENTRY);
-  if (!force && !distMissing) {
-    const srcDir = path.join(ROOT, 'src');
-    if (!existsSync(srcDir)) return;
-    const [distStat, srcNewestMtimeMs] = await Promise.all([
-      stat(DIST_ENTRY),
-      newestSrcMtimeMs(srcDir),
-    ]);
-    if (srcNewestMtimeMs <= distStat.mtimeMs) return;
-  }
-  logInfo(`building runtime...`);
-
-  await new Promise<void>((resolve) => {
-    const proc = spawn('npm', ['run', 'build'], { cwd: ROOT, shell: true });
-
-    proc.stdout.on('data', (chunk: Buffer) => {
-      process.stdout.write(chalk.gray(chunk.toString()));
-    });
-    proc.stderr.on('data', (chunk: Buffer) => {
-      process.stdout.write(chalk.gray(chunk.toString()));
-    });
-
-    proc.on('close', (code) => {
-      if (code === 0) return resolve();
-      die('build failed');
-    });
-
-    proc.on('error', (err) => {
-      die(`build error: ${err instanceof Error ? err.message : String(err)}`);
-    });
-  });
-
-  console.log();
 }
 
 async function readJsonFile<T>(filePath: string): Promise<T> {
@@ -448,8 +378,9 @@ async function runTest(testName: string): Promise<void> {
 }
 
 async function main() {
-  const { tests: requestedTests, build } = parseCli(process.argv.slice(2));
-  await buildIfNeeded(build);
+  const { tests: requestedTests } = parseCli(process.argv.slice(2));
+  if (!existsSync(path.join(ROOT, 'dist/runtime.js')))
+    die(`missing dist/runtime.js. Run 'npm run build' first.`);
   await ensureRuntimeLinked();
 
   const available = await listTestNames();

@@ -37,6 +37,11 @@ function wasm(): PluginOption {
      */
     async load(id) {
       if (!id.endsWith('.wasm')) return;
+      const devPort = process.env.WASM_DEV_PORT;
+      if (devPort) {
+        const wasmFile = path.basename(id);
+        return `export default new URL("http://localhost:${devPort}/${wasmFile}");`;
+      }
       const binary = await fs.readFileSync(id);
       const base64 = binary.toString('base64');
       return `

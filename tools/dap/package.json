@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "npm install --silent && npx bun run.ts"
+    "test": "npm install --silent && npx -y bun run.ts"
   },
   "dependencies": {
     "@jtrb/runtime": "file:../..",
