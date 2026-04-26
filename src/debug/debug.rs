@@ -264,9 +264,7 @@ impl Debugger {
             let variable = Variable::new(name, pieces, Type::new(type_id, self.types.clone()));
             match var_die.tag() {
                 gimli::DW_TAG_formal_parameter => arguments.push(variable),
-                gimli::DW_TAG_variable | gimli::DW_TAG_local_variable => {
-                    locals.push(variable)
-                }
+                gimli::DW_TAG_variable | gimli::DW_TAG_local_variable => locals.push(variable),
                 _ => {}
             }
         }
