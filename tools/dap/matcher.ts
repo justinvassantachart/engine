@@ -4,6 +4,7 @@ export type JsonObject = { [k: string]: Json };
 export type CaptureMap = Record<string, Json>;
 
 const HANDLEBARS_RE = /^\{\{([\s\S]+)\}\}$/;
+const CAPTURE_RE = /^\$\{\{([\s\S]+)\}\}$/;
 const IDENTIFIER_RE = /^[a-zA-Z_]\w*$/;
 
 export function substitutePlaceholders(input: Json, captures: CaptureMap): Json {
@@ -37,7 +38,8 @@ export function match(expected: Json, actual: Json, at = ''): MatchResult {
   const succeed = (captures: CaptureMap = {}): MatchResult => ({ success: true, captures });
   const fail = (reason: string): MatchResult => ({ success: false, at, reason });
 
-  if (isPlaceholder(expected)) return succeed({ [expected.slice(2, -2)]: actual });
+  const captureName = getCaptureName(expected);
+  if (captureName !== null) return succeed({ [captureName]: actual });
 
   if (Array.isArray(expected)) {
     if (!Array.isArray(actual)) return fail(`expected array, got ${tn(actual)}`);
@@ -82,10 +84,12 @@ export function match(expected: Json, actual: Json, at = ''): MatchResult {
   return succeed();
 }
 
-function isPlaceholder(value: Json): value is string {
-  if (typeof value !== 'string') return false;
-  const expression = parseHandlebarsExpression(value);
-  return expression !== null && IDENTIFIER_RE.test(expression);
+function getCaptureName(value: Json): string | null {
+  if (typeof value !== 'string') return null;
+  const match = value.match(CAPTURE_RE);
+  if (!match) return null;
+  const expression = match[1].trim();
+  return IDENTIFIER_RE.test(expression) ? expression : null;
 }
 
 function tn(value: Json) {

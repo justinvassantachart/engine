@@ -54,7 +54,7 @@
           "$array.contains": [
             {
               "name": "Locals",
-              "variablesReference": "{{locals}}"
+              "variablesReference": "${{locals}}"
             }
           ]
         }
@@ -74,7 +74,7 @@
           {
             "name": "p",
             "type": "Point",
-            "variablesReference": "{{point}}"
+            "variablesReference": "${{point}}"
           }
         ]
       }

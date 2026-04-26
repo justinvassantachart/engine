@@ -39,9 +39,9 @@
       "body": {
         "stackFrames": {
           "$array.contains": [
-            { "name": "level3", "id": "{{frame3}}" },
-            { "name": "level2", "id": "{{frame2}}" },
-            { "name": "level1", "id": "{{frame1}}" }
+            { "name": "level3", "id": "${{frame3}}" },
+            { "name": "level2", "id": "${{frame2}}" },
+            { "name": "level1", "id": "${{frame1}}" }
           ]
         }
       }
@@ -58,7 +58,7 @@
           "$array.contains": [
             {
               "name": "Arguments",
-              "variablesReference": "{{args3}}"
+              "variablesReference": "${{args3}}"
             }
           ]
         }
@@ -87,7 +87,7 @@
           "$array.contains": [
             {
               "name": "Arguments",
-              "variablesReference": "{{args2}}"
+              "variablesReference": "${{args2}}"
             }
           ]
         }
@@ -116,7 +116,7 @@
           "$array.contains": [
             {
               "name": "Arguments",
-              "variablesReference": "{{args1}}"
+              "variablesReference": "${{args1}}"
             }
           ]
         }

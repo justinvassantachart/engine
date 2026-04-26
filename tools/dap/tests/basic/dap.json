@@ -54,7 +54,7 @@
           "$array.contains": [
             {
               "name": "Locals",
-              "variablesReference": "{{locals}}"
+              "variablesReference": "${{locals}}"
             }
           ]
         }

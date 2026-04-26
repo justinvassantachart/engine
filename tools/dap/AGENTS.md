@@ -27,12 +27,12 @@ Each test is a directory under `tools/dap/tests/<test-name>/` with a required `d
 - `event`: waits for a DAP event name (`event` required, optional `body`, optional `$timeout` in ms; default is 1000ms).
 - The harness already performs debugger session setup (`initialize` + `initialized`) before your test `steps`; your `dap.json` should only describe scenario-specific behavior.
 
-### Handlebars Expressions (`{{...}}`)
+### Placeholder Notation
 
 `{{...}}` is treated as a JavaScript expression and evaluated against captured values.
 
-- Use `{{var}}` notation in a response/event to capture information received in that response/event.
-- Use simple value references like `{{var}}` or expressions like `{{var + 1}}`.
+- Use `${{var}}` in `response`/`event` expectations to capture values from actual messages.
+- Use `{{var}}` for substitution/reference, and expressions like `{{var + 1}}` where needed.
 - Expression variable names come from previously captured fields.
 - If an expression references an unknown variable, evaluation fails.
 

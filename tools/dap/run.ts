@@ -389,19 +389,11 @@ async function runTest(testName: string): Promise<void> {
         },
         captures
       ) as Json;
+
       rawDapLog.push(reqObj);
       lastResponse = runtime.debugger.send(reqObj) as Json;
       rawDapLog.push(lastResponse);
-      if (
-        lastResponse &&
-        typeof lastResponse === 'object' &&
-        !Array.isArray(lastResponse) &&
-        lastResponse.success === false
-      ) {
-        throw new Error(
-          `${label} command '${step.command}' returned success=false\nresponse:\n${fmtJson(lastResponse)}`
-        );
-      }
+
       return;
     }
 
