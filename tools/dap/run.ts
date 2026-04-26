@@ -2,6 +2,7 @@ import type { Artifact } from '@jtrb/runtime';
 import { $ } from 'bun';
 import chalk from 'chalk';
 import { spawn } from 'node:child_process';
+import type { EventEmitter } from 'node:events';
 import { existsSync } from 'node:fs';
 import { mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -144,14 +145,21 @@ async function buildIfNeeded(force: boolean) {
   logInfo(`building runtime...`);
 
   await new Promise<void>((resolve) => {
-    const proc = spawn('npm', ['run', 'build'], { cwd: ROOT, shell: true });
+    const proc = spawn('npm', ['run', 'build'], { cwd: ROOT, shell: true }) as ReturnType<
+      typeof spawn
+    > &
+      EventEmitter;
 
-    proc.stdout.on('data', (chunk: Buffer) => {
-      process.stdout.write(chalk.gray(chunk.toString()));
-    });
-    proc.stderr.on('data', (chunk: Buffer) => {
-      process.stdout.write(chalk.gray(chunk.toString()));
-    });
+    if (proc.stdout) {
+      proc.stdout.on('data', (chunk: Buffer) => {
+        process.stdout.write(chalk.gray(chunk.toString()));
+      });
+    }
+    if (proc.stderr) {
+      proc.stderr.on('data', (chunk: Buffer) => {
+        process.stdout.write(chalk.gray(chunk.toString()));
+      });
+    }
 
     proc.on('close', (code) => {
       if (code === 0) return resolve();
@@ -407,14 +415,16 @@ async function runTest(testName: string): Promise<void> {
       return;
     }
 
-    if (visible) logStep(`${label} ${step.event}`);
-    const timeout = step.$timeout ?? DAP_TIMEOUT_MS;
-    const actualEvent = await waitForEvent(eventQueue, waitForNextEvent, step.event, timeout);
-    const { $timeout: _ignored, ...expectedStep } = step;
-    const expected = substitutePlaceholders(expectedStep as unknown as Json, captures);
-    const result = match(expected, actualEvent, 'event');
-    if (!result.success) throw new Error(formatMismatch(expected, actualEvent, result));
-    Object.assign(captures, result.captures);
+    if (step.type === 'event') {
+      if (visible) logStep(`${label} ${step.event}`);
+      const timeout = step.$timeout ?? DAP_TIMEOUT_MS;
+      const actualEvent = await waitForEvent(eventQueue, waitForNextEvent, step.event, timeout);
+      const { $timeout: _ignored, ...expectedStep } = step;
+      const expected = substitutePlaceholders(expectedStep as unknown as Json, captures);
+      const result = match(expected, actualEvent, 'event');
+      if (!result.success) throw new Error(formatMismatch(expected, actualEvent, result));
+      Object.assign(captures, result.captures);
+    }
   };
 
   logInfo(`${chalk.bold(testName)} (${file.steps.length} steps)`);
