@@ -202,6 +202,6 @@ To run the built-in demo:
 ```bash
 npm link
 cd demo
-npm link runtime
+npm link @jtrb/runtime
 npm run dev
 ```

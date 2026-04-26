@@ -2,13 +2,13 @@
 
 import { cpp } from '@codemirror/lang-cpp';
 import { oneDark } from '@codemirror/theme-one-dark';
+import { Runtime } from '@jtrb/runtime';
 import FlashOnIcon from '@mui/icons-material/FlashOn';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import StopIcon from '@mui/icons-material/Stop';
 import { Box, Button, FormControl, InputLabel, MenuItem, Select, Typography } from '@mui/material';
 import CodeMirror from '@uiw/react-codemirror';
 import React, { useEffect, useRef, useState } from 'react';
-import { LocationInfo, Runtime } from 'runtime';
 
 import Terminal, { TerminalHandle } from '@/components/Terminal';
 
@@ -30,7 +30,6 @@ export default function CodeEditor() {
   const [code, setCode] = useState<string>(defaultCode);
   const [isRunning, setIsRunning] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
-  const [pausedLocation, setPausedLocation] = useState<LocationInfo | null>(null);
   const [language, setLanguage] = useState<Language>('C++');
   const [terminalHeight, setTerminalHeight] = useState<number>(170);
   const terminalRef = useRef<TerminalHandle | null>(null);
@@ -69,7 +68,6 @@ export default function CodeEditor() {
   const handleContinue = () => {
     // runtimeRef.current?.debugger.resume();
     setIsPaused(false);
-    setPausedLocation(null);
   };
 
   const writeDemoLog = (message: string) => {
@@ -105,7 +103,6 @@ export default function CodeEditor() {
     terminalRef.current?.disableInput();
     setIsRunning(false);
     setIsPaused(false);
-    setPausedLocation(null);
     setDemoStep('idle');
   };
 
@@ -212,13 +209,6 @@ export default function CodeEditor() {
     rt.stdout.pipeTo(terminal, { signal }).catch(() => {});
     rt.stderr.pipeTo(stderrStream, { signal }).catch(() => {});
     rt.fs = { 'main.c': code };
-
-    const dbg = rt.debugger;
-    dbg.on('breakpoint', (hit) => {
-      setIsPaused(true);
-      setPausedLocation(hit.location);
-      terminalRef.current?.writeln(`\r\nPaused at ${hit.location.file}:${hit.location.line}`);
-    });
 
     const term = terminalRef.current?.getTerminal();
     if (!term) {
@@ -738,18 +728,6 @@ export default function CodeEditor() {
                 }}
               >
                 Output
-              </Typography>
-              <Typography
-                variant="caption"
-                sx={{
-                  color: isPaused ? '#22c55e' : isRunning ? '#fbbf24' : 'rgba(255, 255, 255, 0.4)',
-                }}
-              >
-                {isPaused
-                  ? `Paused at ${pausedLocation?.file}:${pausedLocation?.line}`
-                  : isRunning
-                    ? 'Running'
-                    : 'Ready'}
               </Typography>
             </Box>
 

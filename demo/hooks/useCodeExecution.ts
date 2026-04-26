@@ -1,7 +1,7 @@
 'use client';
 
+import { Runtime } from '@jtrb/runtime';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Runtime } from 'runtime';
 
 import type { TerminalHandle } from '@/components/Terminal';
 
@@ -119,7 +119,7 @@ export function useCodeExecution({
       // Clear terminal for fresh output
       terminalRef.current?.clear();
 
-      const rt = Runtime.create('c');
+      const rt = await Runtime.create('c');
       runtimeRef.current = rt;
       rt.fs = { 'main.c': code };
 
