@@ -184,7 +184,10 @@ impl<'a> Die<'a> {
 
     /// Recursively traverses the tree, including this node.
     ///
-    /// Accepts a callback `f` whose return value will control traversal
+    /// Accepts a callback `f` whose return value will control traversal.
+    /// Each DIE is passed to `f` exactly once: returning [`Visit::Continue`]
+    /// queues the node's children for traversal, [`Visit::SkipChildren`]
+    /// drops them, and [`Visit::Break`] aborts the walk entirely.
     pub fn traverse(&self, mut f: impl FnMut(Die<'a>) -> Visit) {
         let mut queue = VecDeque::from([self.die.offset()]);
 
@@ -206,12 +209,7 @@ impl<'a> Die<'a> {
 
             let mut children = root.children();
             while let Some(Some(child)) = weak_error!(children.next()) {
-                let die = Die::new(self.ctx.clone(), child.entry().clone());
-                match f(die) {
-                    Visit::Continue => queue.push_back(child.entry().offset()),
-                    Visit::SkipChildren => {}
-                    Visit::Break => return,
-                }
+                queue.push_back(child.entry().offset());
             }
         }
     }

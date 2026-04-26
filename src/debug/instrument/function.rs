@@ -173,7 +173,7 @@ impl<'a, 'b, 'c> FnInstrumenter<'a, 'b, 'c> {
             }
         }
 
-        Ok(WasmLocations::default())
+        Ok(locs)
     }
 
     fn emit_bkpt(&mut self, bkpt_idx: usize, pc: GlobalAddress) -> InstrResult {
