@@ -3,13 +3,13 @@ export type JsonArray = Json[];
 export type JsonObject = { [k: string]: Json };
 export type CaptureMap = Record<string, Json>;
 
-const PLACEHOLDER_RE = /^\{\{[a-zA-Z_]\w*\}\}$/;
+const HANDLEBARS_RE = /^\{\{([\s\S]+)\}\}$/;
+const IDENTIFIER_RE = /^[a-zA-Z_]\w*$/;
 
 export function substitutePlaceholders(input: Json, captures: CaptureMap): Json {
-  if (typeof input === 'string' && PLACEHOLDER_RE.test(input)) {
-    const name = input.slice(2, -2);
-    if (!(name in captures)) throw new Error(`unbound placeholder ${input}`);
-    return captures[name];
+  if (typeof input === 'string') {
+    const expression = parseHandlebarsExpression(input);
+    if (expression !== null) return evaluateExpression(expression, captures, input);
   }
 
   if (Array.isArray(input)) return input.map((v) => substitutePlaceholders(v, captures));
@@ -83,7 +83,9 @@ export function match(expected: Json, actual: Json, at = ''): MatchResult {
 }
 
 function isPlaceholder(value: Json): value is string {
-  return typeof value === 'string' && PLACEHOLDER_RE.test(value);
+  if (typeof value !== 'string') return false;
+  const expression = parseHandlebarsExpression(value);
+  return expression !== null && IDENTIFIER_RE.test(expression);
 }
 
 function tn(value: Json) {
@@ -99,4 +101,24 @@ function allOf(matches: MatchResult[]) {
     Object.assign(success.captures, match.captures);
   }
   return success;
+}
+
+function parseHandlebarsExpression(value: string): string | null {
+  const match = value.match(HANDLEBARS_RE);
+  if (!match) return null;
+  return match[1].trim();
+}
+
+function evaluateExpression(expression: string, captures: CaptureMap, original: string): Json {
+  try {
+    const names = Object.keys(captures);
+    const values = Object.values(captures);
+    const fn = new Function(...names, `return (${expression});`);
+    const result = fn(...values);
+    if (result === undefined) throw new Error('expression returned undefined');
+    return result as Json;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`failed evaluating placeholder ${original}: ${message}`);
+  }
 }
