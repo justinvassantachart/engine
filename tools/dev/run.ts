@@ -138,17 +138,25 @@ function startWasmServer() {
   serve({
     port,
     fetch: async (req) => {
+      const corsHeaders = {
+        'access-control-allow-origin': '*',
+        'access-control-allow-methods': 'GET,OPTIONS',
+        'access-control-allow-headers': '*',
+      };
+      if (req.method === 'OPTIONS')
+        return new Response(null, { status: 204, headers: corsHeaders });
+
       const url = new URL(req.url);
       const match = /^\/([^/]+)\.wasm$/.exec(url.pathname);
-      if (!match) return new Response('Not found', { status: 404 });
+      if (!match) return new Response('Not found', { status: 404, headers: corsHeaders });
       const file = path.join(PKG, `${match[1]}.wasm`);
       try {
         const body = await readFile(file);
         return new Response(new Uint8Array(body), {
-          headers: { 'content-type': 'application/wasm' },
+          headers: { ...corsHeaders, 'content-type': 'application/wasm' },
         });
       } catch {
-        return new Response('Not found', { status: 404 });
+        return new Response('Not found', { status: 404, headers: corsHeaders });
       }
     },
   });
