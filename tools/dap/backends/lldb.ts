@@ -6,19 +6,12 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
 
-import type { Backend, BackendOptions, Json, Step } from './run';
+import type { Backend, BackendOptions, Json } from '../run';
 
 const SOURCE_EXTENSIONS = new Set(['c', 'cc', 'cp', 'cpp', 'cxx', 'c++']);
 
-export type LldbOptions = {
-  lldbPath?: string;
-};
-
-export async function createLldbBackend(
-  opts: BackendOptions,
-  lldbOpts: LldbOptions = {}
-): Promise<Backend> {
-  const lldbPath = await detectLldbDap(lldbOpts.lldbPath);
+export async function createLldbBackend(opts: BackendOptions): Promise<Backend> {
+  const lldbPath = await detectLldbDap();
   const { progAbs } = await compileTest(opts.testDir);
 
   const proc = Bun.spawn({
@@ -60,7 +53,15 @@ export async function createLldbBackend(
     if (!req || typeof req !== 'object' || Array.isArray(req)) {
       return Promise.reject(new Error('lldb backend send: not an object'));
     }
-    const seq = (req as { seq?: number }).seq;
+    const msg = req as { seq?: number; type?: string; command?: string; arguments?: Json };
+    if (msg.type === 'request' && msg.command === 'launch') {
+      msg.arguments = {
+        program: progAbs,
+        cwd: path.dirname(progAbs),
+        stopOnEntry: false,
+      };
+    }
+    const seq = msg.seq;
     if (typeof seq !== 'number') {
       return Promise.reject(new Error('lldb backend send: missing seq'));
     }
@@ -75,45 +76,11 @@ export async function createLldbBackend(
     });
   }
 
-  function initSteps(): Step[] {
-    return [
-      {
-        type: 'request',
-        command: 'initialize',
-        arguments: {
-          clientID: 'dap-harness',
-          clientName: 'dap-harness',
-          adapterID: 'lldb-dap',
-          pathFormat: 'path',
-          linesStartAt1: true,
-          columnsStartAt1: true,
-        },
-      },
-      {
-        type: 'response',
-        success: true,
-        command: 'initialize',
-      },
-      {
-        type: 'request',
-        command: 'launch',
-        arguments: {
-          program: progAbs,
-          cwd: path.dirname(progAbs),
-          stopOnEntry: false,
-        },
-        $fireAndForget: true,
-      },
-      { type: 'event', event: 'initialized', $timeout: 10000 },
-    ];
-  }
-
   return {
     send,
     onEvent(cb) {
       eventListeners.push(cb);
     },
-    initSteps,
     async shutdown() {
       try {
         await Promise.race([
@@ -137,7 +104,7 @@ export async function createLldbBackend(
   };
 }
 
-async function detectLldbDap(override?: string): Promise<string> {
+async function detectLldbDap(): Promise<string> {
   const tried: string[] = [];
 
   const check = async (label: string, candidate: string | undefined): Promise<string | null> => {
@@ -149,9 +116,6 @@ async function detectLldbDap(override?: string): Promise<string> {
     tried.push(`${label} (${candidate})`);
     return null;
   };
-
-  const overrideHit = await check('--lldb-path', override);
-  if (overrideHit) return overrideHit;
 
   const envHit = await check('LLDB_DAP_PATH', process.env.LLDB_DAP_PATH);
   if (envHit) return envHit;
@@ -171,7 +135,7 @@ async function detectLldbDap(override?: string): Promise<string> {
       'lldb-dap not found.',
       `tried: ${tried.join(', ')}`,
       'install via Xcode (lldb-dap ships with the developer toolchain) or `brew install llvm`.',
-      'override with --lldb-path=/abs/path/to/lldb-dap or env LLDB_DAP_PATH=/abs/path.',
+      'override with env LLDB_DAP_PATH=/abs/path.',
     ].join('\n  ')
   );
 }
