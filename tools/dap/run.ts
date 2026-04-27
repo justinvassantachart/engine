@@ -36,7 +36,6 @@ type TestFile = { steps: Step[] };
 
 export type BackendOptions = {
   testDir: string;
-  testOutputDir: string;
   fsNode: Record<string, Json>;
 };
 
@@ -45,7 +44,6 @@ export interface Backend {
   onEvent(cb: (e: Json) => void): void;
   onArtifact?(cb: (a: Artifact) => void): void;
   initSteps(): Step[];
-  rewriteOutgoing(req: Json): Json;
   shutdown(): Promise<void>;
 }
 
@@ -335,7 +333,6 @@ async function createRuntimeBackend(opts: BackendOptions): Promise<Backend> {
       artifactCbs.push(cb);
     },
     initSteps: () => RUNTIME_INIT_STEPS,
-    rewriteOutgoing: (req) => req,
     async shutdown() {
       await Promise.race([runPromise, new Promise((resolve) => setTimeout(resolve, 1500))]).catch(
         () => {
@@ -359,7 +356,7 @@ async function runTest(testName: string, opts: CliOpts): Promise<void> {
   await mkdir(testOutputDir, { recursive: true });
 
   const fsNode = await collectFsNode(testDir);
-  const backendOpts: BackendOptions = { testDir, testOutputDir, fsNode };
+  const backendOpts: BackendOptions = { testDir, fsNode };
   const backend = opts.lldb
     ? await createLldbBackend(backendOpts, { lldbPath: opts.lldbPath })
     : await createRuntimeBackend(backendOpts);
@@ -409,11 +406,10 @@ async function runTest(testName: string, opts: CliOpts): Promise<void> {
         },
         captures
       ) as Json;
-      const finalReq = backend.rewriteOutgoing(reqObj);
-      rawDapLog.push(finalReq);
+      rawDapLog.push(reqObj);
 
       if (step.$fireAndForget) {
-        backend.send(finalReq).then(
+        backend.send(reqObj).then(
           (resp) => {
             rawDapLog.push(resp);
           },
@@ -425,7 +421,7 @@ async function runTest(testName: string, opts: CliOpts): Promise<void> {
         return;
       }
 
-      lastResponse = await backend.send(finalReq);
+      lastResponse = await backend.send(reqObj);
       rawDapLog.push(lastResponse);
       return;
     }
@@ -518,14 +514,6 @@ async function main() {
     console.error(`\n${chalk.red(`${failed.length}/${tests.length} test(s) failed`)}`);
     for (const f of failed) {
       console.error(`${chalk.red('-')} ${f.name}`);
-    }
-    if (opts.lldb) {
-      console.error(
-        chalk.dim(
-          `(--lldb is exploratory; exiting 0. inspect ${path.relative(ROOT, OUTPUT_DIR)}/<name>/log.json for actual lldb-dap traffic.)`
-        )
-      );
-      return;
     }
     process.exit(1);
   }

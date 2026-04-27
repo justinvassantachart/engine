@@ -4,7 +4,7 @@
       "type": "request",
       "command": "setBreakpoints",
       "arguments": {
-        "source": { "path": "/main.cpp" },
+        "source": { "path": "main.cpp" },
         "breakpoints": [{ "line": 2 }]
       }
     },
@@ -26,13 +26,13 @@
       "event": "stopped",
       "body": {
         "reason": "breakpoint",
-        "threadId": 1
+        "threadId": "${{thread}}"
       }
     },
     {
       "type": "request",
       "command": "stackTrace",
-      "arguments": { "threadId": 1 }
+      "arguments": { "threadId": "{{thread}}" }
     },
     {
       "type": "response",
@@ -136,7 +136,7 @@
     {
       "type": "request",
       "command": "continue",
-      "arguments": { "threadId": 1 }
+      "arguments": { "threadId": "{{thread}}" }
     }
   ]
 }

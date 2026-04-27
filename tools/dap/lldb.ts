@@ -1,13 +1,14 @@
 import { $ } from 'bun';
 import chalk from 'chalk';
 import { existsSync } from 'node:fs';
-import { copyFile, mkdir } from 'node:fs/promises';
+import { cp, mkdtemp, readdir } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
 
 import type { Backend, BackendOptions, Json, Step } from './run';
 
-const SOURCE_NAMES = ['main.cpp', 'main.cc', 'main.c'];
+const SOURCE_EXTENSIONS = new Set(['c', 'cc', 'cp', 'cpp', 'cxx', 'c++']);
 
 export type LldbOptions = {
   lldbPath?: string;
@@ -18,7 +19,7 @@ export async function createLldbBackend(
   lldbOpts: LldbOptions = {}
 ): Promise<Backend> {
   const lldbPath = await detectLldbDap(lldbOpts.lldbPath);
-  const { srcAbs, progAbs, srcBasename } = await compileTest(opts.testDir, opts.testOutputDir);
+  const { progAbs } = await compileTest(opts.testDir);
 
   const proc = Bun.spawn({
     cmd: [lldbPath],
@@ -74,10 +75,6 @@ export async function createLldbBackend(
     });
   }
 
-  function rewriteOutgoing(req: Json): Json {
-    return rewriteSourcePath(req, '/' + srcBasename, srcAbs);
-  }
-
   function initSteps(): Step[] {
     return [
       {
@@ -117,7 +114,6 @@ export async function createLldbBackend(
       eventListeners.push(cb);
     },
     initSteps,
-    rewriteOutgoing,
     async shutdown() {
       try {
         await Promise.race([
@@ -180,42 +176,29 @@ async function detectLldbDap(override?: string): Promise<string> {
   );
 }
 
-async function compileTest(
-  testDir: string,
-  testOutputDir: string
-): Promise<{ srcAbs: string; progAbs: string; srcBasename: string }> {
-  let srcName: string | null = null;
-  for (const name of SOURCE_NAMES) {
-    if (existsSync(path.join(testDir, name))) {
-      srcName = name;
-      break;
-    }
-  }
-  if (!srcName) {
-    throw new Error(`no source file found in ${testDir} (looked for ${SOURCE_NAMES.join(', ')})`);
-  }
+async function compileTest(testDir: string): Promise<{ progAbs: string }> {
+  // Keep lldb-dap activity out of protected folders (e.g. ~/Documents),
+  // otherwise OS privacy prompts can interrupt the debug session.
+  const lldbDir = await mkdtemp(path.join(tmpdir(), 'runtime-dap-lldb-'));
+  await cp(testDir, lldbDir, { recursive: true });
 
-  const lldbDir = path.join(testOutputDir, 'lldb');
-  await mkdir(lldbDir, { recursive: true });
-
-  const srcAbs = path.join(lldbDir, srcName);
-  await copyFile(path.join(testDir, srcName), srcAbs);
+  const sourceRels = (await collectSourceFiles(lldbDir)).sort();
+  if (sourceRels.length === 0) {
+    throw new Error(`no C/C++ source files found in ${testDir}`);
+  }
 
   const progAbs = path.join(lldbDir, 'prog');
-  const isCpp = srcName.endsWith('.cpp') || srcName.endsWith('.cc');
-  const compiler = isCpp ? 'clang++' : 'clang';
+  const sourceAbs = sourceRels.map((rel) => path.join(lldbDir, rel));
 
   const result =
-    await $`xcrun ${compiler} -g -O0 -fno-inline -fstandalone-debug -o ${progAbs} ${srcAbs}`
+    await $`xcrun clang++ -g -O0 -fno-inline -fstandalone-debug -std=c++23 -o ${progAbs} ${sourceAbs}`
       .quiet()
       .nothrow();
   if (result.exitCode !== 0) {
-    throw new Error(
-      `lldb backend compile failed (xcrun ${compiler}):\n${result.stderr.toString()}`
-    );
+    throw new Error(`lldb backend compile failed (xcrun clang++):\n${result.stderr.toString()}`);
   }
 
-  return { srcAbs, progAbs, srcBasename: srcName };
+  return { progAbs };
 }
 
 function writeFrame(stdin: { write(data: string): unknown; flush(): unknown }, msg: Json) {
@@ -299,20 +282,24 @@ function findCrlfCrlf(buf: Uint8Array): number {
   return -1;
 }
 
-function rewriteSourcePath(req: Json, virtualPath: string, absolutePath: string): Json {
-  const walk = (v: Json): Json => {
-    if (Array.isArray(v)) return v.map(walk);
-    if (v && typeof v === 'object') {
-      const out: Record<string, Json> = {};
-      for (const [k, val] of Object.entries(v)) {
-        out[k] = walk(val as Json);
+async function collectSourceFiles(rootDir: string): Promise<string[]> {
+  const out: string[] = [];
+
+  const walk = async (dirAbs: string, relDir: string) => {
+    const entries = await readdir(dirAbs, { withFileTypes: true });
+    for (const entry of entries) {
+      const nextRel = relDir ? path.join(relDir, entry.name) : entry.name;
+      const nextAbs = path.join(dirAbs, entry.name);
+      if (entry.isDirectory()) {
+        await walk(nextAbs, nextRel);
+        continue;
       }
-      if (typeof out.path === 'string' && out.path === virtualPath) {
-        out.path = absolutePath;
-      }
-      return out;
+      if (!entry.isFile()) continue;
+      const ext = path.extname(entry.name).slice(1).toLowerCase();
+      if (SOURCE_EXTENSIONS.has(ext)) out.push(nextRel);
     }
-    return v;
   };
-  return walk(req);
+
+  await walk(rootDir, '');
+  return out;
 }
