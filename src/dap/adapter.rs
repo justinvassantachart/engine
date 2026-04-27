@@ -81,10 +81,12 @@ impl DapState {
 
         let dbg = self.debugger().context("No debugger attached")?;
         // TODO: set_breakpoints. once implemented, verify this handler does the right thing with the results (e.g. line numbers, verified status)
-        let results = dbg.set_breakpoints(source, &lines);
-        let bps: Vec<_> = results
+        let bps: Vec<_> = lines
             .iter()
-            .map(|(line, verified)| json!({ "verified": verified, "line": line }))
+            .map(|line| {
+                let verified = dbg.set_breakpoint(source, *line);
+                json!({ "verified": verified, "line": line })
+            })
             .collect();
         Ok(json!({ "breakpoints": bps }))
     }

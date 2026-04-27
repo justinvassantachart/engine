@@ -481,11 +481,7 @@ async function main() {
     await waitForDevBuild();
     await ensureRuntimeLinked();
   } else {
-    logInfo(
-      `${chalk.bold('--lldb')}: running against ${chalk.bold(
-        'lldb-dap'
-      )} as a golden reference (mismatches are informational)`
-    );
+    logInfo(`${chalk.bold('--lldb')}: running against ${chalk.bold('lldb-dap')}`);
   }
 
   const available = await listTestNames();

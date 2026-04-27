@@ -88,36 +88,30 @@ impl Debugger {
         Ok(frames)
     }
 
-    /// Replaces breakpoints for the given source file.
-    /// Returns a list of `(line, verified)` pairs, one per requested line.
-    ///
-    /// Walks the DWARF line table once and, for every location that belongs to
-    /// `file`, sets the corresponding flag in the shared breakpoint array to 1
-    /// if the line is requested and 0 otherwise. Locations in other files are
-    /// left alone, so this implements DAP's per-source replace semantics.
-    pub fn set_breakpoints(&self, file: &str, lines: &[i64]) -> Vec<(i64, bool)> {
+    /// Sets one breakpoint for one `(file, line)` pair.
+    pub fn set_breakpoint(&self, file: &str, line: i64) -> bool {
         let flags = self.info.get_bp_flags();
+
         let target = std::path::Path::new(file);
-        let requested: std::collections::HashSet<i64> = lines.iter().copied().collect();
-        let mut verified: std::collections::HashSet<i64> = std::collections::HashSet::new();
+        let target = if target.is_absolute() {
+            target.to_path_buf()
+        } else {
+            std::path::Path::new("/").join(target)
+        };
+        let mut verified = false;
 
         for (idx, loc) in self.info.dwarf.locations().enumerate() {
             if loc.file != target {
                 continue;
             }
-            let line = loc.line() as i64;
-            if requested.contains(&line) {
+            let loc_line = loc.line() as i64;
+            if loc_line == line {
                 flags.set_index(idx as u32, 1);
-                verified.insert(line);
-            } else {
-                flags.set_index(idx as u32, 0);
+                verified = true;
             }
         }
 
-        lines
-            .iter()
-            .map(|&line| (line, verified.contains(&line)))
-            .collect()
+        verified
     }
 
     /// Walks the debug stack to the Nth frame and returns (position, pc, func).
