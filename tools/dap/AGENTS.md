@@ -2,7 +2,7 @@
 
 Use this tool to run end-to-end Debugger Adapter Protocol (DAP) integration tests.
 
-- Run all tests with `npm run tools:dap` (from repo root), or one test with `npm run tools:dap -- <test-name>`.
+- Run all tests with `npm run tools:dap` (from repo root), or one test with `npm run tools:dap <test-name>`.
 - It is safe (and encouraged) to run this alongside `npm run dev`. This tool will wait for any in-progress builds initiated by `npm run dev` to complete before starting the tests.
 - The harness links the local package into `tools/dap` before running tests.
 - It executes scripted DAP request/response/event flows from `tools/dap/tests/*/dap.json` against a real runtime session.

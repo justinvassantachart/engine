@@ -91,12 +91,6 @@ impl Variable {
         self.ty.name()
     }
 
-    /// Returns `true` if this value should be expandable into child variables
-    /// (currently: structs/unions/classes, after peeling typedefs/cv-quals).
-    pub fn has_children(&self) -> bool {
-        matches!(self.ty.resolved(), Some(TypeDeclaration::Structure { .. }))
-    }
-
     /// Renders this value for the DAP `value` field.
     ///
     /// - Scalars are decoded according to their DWARF encoding.

@@ -163,15 +163,11 @@ impl DapState {
         for var in &entries {
             let display = var.display(&info);
             let type_name = var.type_name();
-            let sub_ref = if var.has_children() {
-                let children = var.children(&info);
-                if children.is_empty() {
-                    0
-                } else {
-                    self.vars.allocate(children)
-                }
-            } else {
+            let children = var.children(&info);
+            let sub_ref = if children.is_empty() {
                 0
+            } else {
+                self.vars.allocate(children)
             };
             variables.push(json!({
                 "name": var.name(),
