@@ -10,7 +10,7 @@ const IDENTIFIER_RE = /^[a-zA-Z_]\w*$/;
 export function substitutePlaceholders(input: Json, captures: CaptureMap): Json {
   if (typeof input === 'string') {
     const expression = parseHandlebarsExpression(input);
-    if (expression !== null) return evaluateExpression(expression, captures, input);
+    if (expression !== null) return executeSnippet(expression, captures);
   }
 
   if (Array.isArray(input)) return input.map((v) => substitutePlaceholders(v, captures));
@@ -113,16 +113,49 @@ function parseHandlebarsExpression(value: string): string | null {
   return match[1].trim();
 }
 
-function evaluateExpression(expression: string, captures: CaptureMap, original: string): Json {
+/** Bidirectional hex: hex strings (0x…) ↔ number; numbers ↔ 0x strings; decimal strings ↔ 0x strings. */
+export function hex(value: unknown): Json {
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value) || Number.isNaN(value))
+      throw new Error('hex: number must be finite');
+    const neg = value < 0;
+    const abs = Math.floor(Math.abs(value));
+    const h = abs.toString(16);
+    return (neg ? '-0x' : '0x') + h;
+  }
+  if (typeof value === 'string') {
+    const s = value.trim();
+    if (/^0x[0-9a-fA-F]+$/.test(s)) {
+      const n = parseInt(s.slice(2), 16);
+      if (!Number.isFinite(n)) throw new Error(`hex: invalid literal ${JSON.stringify(value)}`);
+      return n;
+    }
+    if (/^-0x[0-9a-fA-F]+$/.test(s)) {
+      const n = parseInt(s.slice(1), 16);
+      if (!Number.isFinite(n)) throw new Error(`hex: invalid literal ${JSON.stringify(value)}`);
+      return n;
+    }
+    if (/^-?[0-9]+$/.test(s)) {
+      const n = parseInt(s, 10);
+      if (!Number.isFinite(n)) throw new Error(`hex: invalid literal ${JSON.stringify(value)}`);
+      return hex(n);
+    }
+    throw new Error(`hex: unrecognised string ${JSON.stringify(value)}`);
+  }
+  throw new Error(`hex: expected number or string, got ${typeof value}`);
+}
+
+export function executeSnippet(code: string, captures: CaptureMap): Json {
+  const t = code.trim();
+  const body = /^\s*return\b/.test(t) || /;/.test(t) || /\n/.test(t) ? t : `return (${t});`;
   try {
-    const names = Object.keys(captures);
-    const values = Object.values(captures);
-    const fn = new Function(...names, `return (${expression});`);
-    const result = fn(...values);
-    if (result === undefined) throw new Error('expression returned undefined');
+    const keys = Object.keys(captures);
+    const fn = new Function(...keys, 'hex', body);
+    const result = fn(...Object.values(captures), hex);
+    if (result === undefined) throw new Error('returned undefined');
     return result as Json;
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    throw new Error(`failed evaluating placeholder ${original}: ${message}`);
+  } catch (e) {
+    const m = e instanceof Error ? e.message : String(e);
+    throw new Error(`evaluation error: ${m}\n\n${code}`);
   }
 }

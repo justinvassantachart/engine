@@ -26,16 +26,21 @@ Each test is a directory under `tools/dap/tests/<test-name>/` with a required `d
 - `request`: sends a DAP request (`command` required, optional `arguments`).
 - `response`: matches the previous request response (partial structural match is allowed; include only fields you care about).
 - `event`: waits for a DAP event name (`event` required, optional `body`, optional `$timeout` in ms; default is 1000ms).
+- `expect`: evaluates JavaScript (`run`, required) with prior captures in scope and built-in functions (see below). If `expect` is present, the return value is matched like a `response` body (partial structure, `${{…}}` captures). If `expect` is omitted, only failure is a thrown error or an undefined result.
 - The harness already performs debugger session setup (`initialize` + `initialized`) before your test `steps`; your `dap.json` should only describe scenario-specific behavior.
 
 ### Placeholder Notation
 
-`{{...}}` is treated as a JavaScript expression and evaluated against captured values.
+`{{...}}` is treated as a JavaScript expression and evaluated against captured values (same evaluation environment as `expect` steps).
 
 - Use `${{var}}` in `response`/`event` expectations to capture values from actual messages.
 - Use `{{var}}` for substitution/reference, and expressions like `{{var + 1}}` where needed.
 - Expression variable names come from previously captured fields.
 - If an expression references an unknown variable, evaluation fails.
+
+#### Helper Functions
+
+- `hex` is a small helper for tests: numbers become strings like `0xff`; strings that look like hex (`0x…`) become integers; strings of decimal digits become a hex string via that integer. Errors from `hex` surface like other script errors.
 
 ## Adding New Tests
 

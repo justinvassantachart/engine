@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 
 import { createLldbBackend } from './backends/lldb.ts';
 import { createRuntimeBackend } from './backends/runtime.ts';
-import { CaptureMap, match, MatchResult, substitutePlaceholders } from './matcher';
+import { CaptureMap, executeSnippet, match, MatchResult, substitutePlaceholders } from './matcher';
 
 export type Json = null | boolean | number | string | Json[] | { [k: string]: Json };
 
@@ -29,7 +29,12 @@ export type EventStep = {
   body?: Json;
   $timeout?: number;
 };
-export type Step = RequestStep | ResponseStep | EventStep;
+export type ExpectStep = {
+  type: 'expect';
+  run: string;
+  expect?: Json;
+};
+export type Step = RequestStep | ResponseStep | EventStep | ExpectStep;
 
 type TestFile = { steps: Step[] };
 
@@ -317,6 +322,21 @@ async function runTest(testName: string, opts: CliOpts): Promise<void> {
       const result = match(expected, actualEvent, 'event');
       if (!result.success) throw new Error(formatMismatch(expected, actualEvent, result));
       Object.assign(captures, result.captures);
+      return;
+    }
+
+    if (step.type === 'expect') {
+      if (visible) logStep(`${label}`);
+      const resolvedRun = substitutePlaceholders(step.run as Json, captures);
+      if (typeof resolvedRun !== 'string')
+        throw new Error(`${label}: expect run must be a string after placeholder substitution`);
+      const actual = executeSnippet(resolvedRun, captures);
+      if (step.expect !== undefined) {
+        const expected = substitutePlaceholders(step.expect, captures);
+        const result = match(expected, actual, 'expect');
+        if (!result.success) throw new Error(formatMismatch(expected, actual, result));
+        Object.assign(captures, result.captures);
+      }
     }
   };
 
