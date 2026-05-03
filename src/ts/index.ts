@@ -2,10 +2,19 @@ import { StdoutMode, WorkerOut, WorkerStart } from '../../pkg/runtime';
 import init from '../../pkg/runtime';
 import wasmBinary from '../../pkg/runtime_bg.wasm';
 import { Debugger } from './debugger';
-import { Internals } from './internals';
+import { errorResult, Internals } from './util';
 import RustWorker from './worker?worker&inline';
 
 export type Lang = 'c';
+
+/** The runtime ran to completion with the provided `exitCode`. */
+export type CompletedResult = { type: 'completed'; exitCode: number };
+/** The runtime was stopped by calling `stop`. */
+export type StoppedResult = { type: 'stopped' };
+/** The runtime had an error. This is an error with the runtime itself, and not the user's code. */
+export type ErrorResult = { type: 'error'; error: { type: string; message: string } };
+/** The result of calling {@link Runtime.run} */
+export type RunResult = CompletedResult | StoppedResult | ErrorResult;
 
 // TODO: Find a way to re-use the generated types in `pkg/runtime.d.ts`
 export type FsNode = string | DirNode;
@@ -21,7 +30,7 @@ export class Runtime {
   private rejector?: () => void;
 
   /** The ongoing `run` promise, if any */
-  private promise?: Promise<void>;
+  private promise?: Promise<RunResult>;
 
   /**
    * The programming language of this runtime.
@@ -83,22 +92,21 @@ export class Runtime {
   }
 
   /**
-   * Stops the currently running execution by terminating the worker.
-   * Safe to call even if no execution is running.
-   * This will cause the run() promise to resolve immediately.
+   * Stops the currently running execution.
    */
   public stop(): void {
     this.rejector?.();
   }
 
-  public async run() {
+  public async run(): Promise<RunResult> {
     if (this.promise) return this.promise;
     this.promise = this.execute();
-    await this.promise;
+    const result = await this.promise;
     this.promise = undefined;
+    return result;
   }
 
-  private async execute() {
+  private async execute(): Promise<RunResult> {
     const worker = new RustWorker();
 
     /* Set up handling for stdout/stderr */
@@ -107,36 +115,37 @@ export class Runtime {
     this.debugger[Internals].attach(worker);
 
     try {
-      await new Promise<void>(async (resolve, reject) => {
-        this.rejector = () => reject('stopped worker');
+      return await new Promise<RunResult>(async (resolve, reject) => {
+        this.rejector = () => reject('stopped');
 
         /** If the worker ever errors, we crash this promise */
         worker.addEventListener('error', (evt) => reject(evt.error));
 
         /* Wait for the worker to send us a Ready message */
-        await new Promise<void>((resolve) => {
+        await new Promise<void>((resolveReady) => {
           const callback = (message: MessageEvent<WorkerOut>) => {
             if (message.data.type === 'ready') {
               worker.removeEventListener('message', callback);
-              resolve();
+              resolveReady();
             }
           };
           worker.addEventListener('message', callback);
         });
 
         worker.addEventListener('message', (message: MessageEvent<WorkerOut>) => {
-          if (message.data.type === 'stop') resolve();
+          if (message.data.type === 'stop') resolve(message.data.result);
         });
 
         const message: WorkerStart = {
           fs: this.fs,
           stdin_buffer: this.in.buffer,
-          is_debug: true,
+          is_debug: true
         };
         worker.postMessage(message);
       });
     } catch (err: unknown) {
-      console.log(`Unexpected error: ${err}`);
+      if (err === 'stopped') return { type: 'stopped' };
+      return errorResult(err);
     } finally {
       this.rejector = undefined;
       this.out.removeWorker(worker);
@@ -154,7 +163,7 @@ class StdoutStream {
 
   constructor(public readonly mode: StdoutMode) {
     this.stream = new ReadableStream({
-      start: (controller) => (this.controller = controller),
+      start: (controller) => (this.controller = controller)
     });
 
     this.callback = ((event: MessageEvent<WorkerOut>) => {
@@ -197,7 +206,7 @@ class StdinStream {
 
   constructor() {
     this.stream = new WritableStream({
-      write: (chunk) => this.write(chunk),
+      write: (chunk) => this.write(chunk)
     });
     this.indices = new Int32Array(this.buffer, 0, 2);
     this.data = new Int8Array(this.buffer, StdinStream.HEADER_SIZE);

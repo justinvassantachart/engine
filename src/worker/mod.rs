@@ -4,7 +4,7 @@ use wasm_bindgen::prelude::*;
 use wasmer_wasix::virtual_fs::{AsyncWriteExt, FileSystem, create_dir_all, mem_fs};
 use web_sys::{DedicatedWorkerGlobalScope, MessageEvent};
 
-use crate::types::{FsNode, WorkerOut, WorkerStart};
+use crate::types::{FsNode, RunResult, WorkerOut, WorkerStart};
 
 mod debuggee;
 mod execution;
@@ -177,10 +177,8 @@ async fn start(msg: WorkerStart) {
         .await
         .expect("Running succeeded");
 
-    // s as dasdadsaadsadsa asadsdsa
-
     // Send Stop message on successful completion
-    WorkerOut::Stop.send();
+    WorkerOut::Stop { exit_code: 0 }.send();
 }
 
 #[wasm_bindgen]

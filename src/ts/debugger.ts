@@ -1,7 +1,7 @@
 import EventEmitter from 'events';
 
 import { DapAdapter, WorkerOut } from '../../pkg/runtime';
-import { Internals } from './internals';
+import { Internals } from './util';
 
 type DebuggerEventMap = {
   event: [unknown];
@@ -46,7 +46,7 @@ export class Debugger extends EventEmitter<DebuggerEventMap> {
   constructor() {
     super();
     this[Internals] = {
-      attach: this.attach.bind(this),
+      attach: this.attach.bind(this)
     };
 
     this.onMessage = this.onMessage.bind(this);

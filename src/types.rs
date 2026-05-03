@@ -87,7 +87,7 @@ pub enum WorkerOut<'a> {
     Artifact {
         #[tsify(type = "Uint8Array")]
         #[serde(with = "serde_bytes")]
-        data: Vec<u8>,
+        data: &'a [u8],
         name: String,
     },
 
@@ -95,7 +95,7 @@ pub enum WorkerOut<'a> {
     #[serde(rename = "breakpoint")]
     Breakpoint,
     #[serde(rename = "stop")]
-    Stop,
+    Stop { exit_code: u32 },
 }
 
 impl<'a> WorkerOut<'a> {
