@@ -61,7 +61,7 @@ export class Runtime {
   }
 
   private constructor(lang: Lang) {
-    this.debugger = new Debugger(this);
+    this.debugger = new Debugger();
     this.lang = lang;
   }
 
