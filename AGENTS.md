@@ -8,6 +8,8 @@
 - Don't use `web_sys::console`, instead use the provided `util::log!` and `util::warn!` macros which provide native Rust formatting.
 - Use `util::weak_error!` to dilute a `Result` into an `Option` (logging the error) for exceptional behaviour that doesn't need to panic, and especially in core interfaces.
 
+You can assume that the dev server is always running. You do not need to manually rebuild the project. Instead, just use `npm run tools:dap` to test the code which will wait for in-progress builds to complete.
+
 ## Contribution Standards
 
 - Keep all contributions as simple and elegant as possible.
