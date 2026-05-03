@@ -121,6 +121,7 @@ impl Type {
             TypeDeclaration::Structure { byte_size, .. } => Some(*byte_size),
             TypeDeclaration::Array { byte_size, .. } => *byte_size,
             // Pointers/references are wasm32 — 4 bytes
+            // TODO: Use the unit address size
             TypeDeclaration::Referential { .. } => Some(4),
             _ => None,
         }

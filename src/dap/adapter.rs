@@ -169,12 +169,24 @@ impl DapState {
             } else {
                 self.vars.allocate(children)
             };
-            variables.push(json!({
+
+            let mut v = json!({
                 "name": var.name(),
                 "value": display,
                 "type": type_name,
                 "variablesReference": sub_ref,
-            }));
+            });
+
+            if let Some(map) = v.as_object_mut() {
+                if let Some(addr) = var.address() {
+                    map.insert("memoryReference".into(), addr.to_string().into());
+                }
+                if let Some(bs) = var.ty().byte_size() {
+                    map.insert("presentationHint".into(), json!({ "byteSize": bs }));
+                }
+            }
+
+            variables.push(v);
         }
         Ok(json!({ "variables": variables }))
     }
