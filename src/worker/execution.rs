@@ -7,6 +7,7 @@ use tar::Archive;
 use wasm_bindgen::{JsCast, JsValue};
 use wasm_bindgen_futures::JsFuture;
 use wasmer::{Module, RuntimeError, Store};
+use wasmer_wasix::types::wasi::ExitCode;
 use wasmer_wasix::virtual_fs::AsyncReadExt;
 use wasmer_wasix::{
     WasiEnv, WasiEnvBuilder, WasiError, WasiFunctionEnv,
@@ -121,7 +122,8 @@ impl<'a> Step<'a> {
         self
     }
 
-    pub async fn run(self) -> Result<(), RuntimeError> {
+    /// Runs this step to completion
+    pub async fn run(self) -> Result<ExitCode, RuntimeError> {
         /* Download the binary from the URL / filesystem */
         let Some(binary_loc) = &self.binary else {
             return Err(RuntimeError::new("No binary specified"));
@@ -241,12 +243,10 @@ impl<'a> Step<'a> {
                 return Err(err);
             };
 
-            if !code.is_success() {
-                return Err(err);
-            }
+            return Ok(*code);
         }
 
-        Ok(())
+        Ok(0.into())
     }
 }
 

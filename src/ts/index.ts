@@ -127,7 +127,8 @@ export class Runtime {
         });
 
         worker.addEventListener('message', (message: MessageEvent<WorkerOut>) => {
-          if (message.data.type === 'stop') resolve(message.data.result);
+          if (message.data.type === 'stop')
+            resolve({ type: 'completed', exitCode: message.data.exit_code });
         });
 
         const message: WorkerStart = {

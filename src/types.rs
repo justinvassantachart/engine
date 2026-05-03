@@ -95,7 +95,7 @@ pub enum WorkerOut<'a> {
     #[serde(rename = "breakpoint")]
     Breakpoint,
     #[serde(rename = "stop")]
-    Stop { exit_code: u32 },
+    Stop { exit_code: i32 },
 }
 
 impl<'a> WorkerOut<'a> {

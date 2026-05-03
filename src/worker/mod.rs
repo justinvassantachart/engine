@@ -4,7 +4,7 @@ use wasm_bindgen::prelude::*;
 use wasmer_wasix::virtual_fs::{AsyncWriteExt, FileSystem, create_dir_all, mem_fs};
 use web_sys::{DedicatedWorkerGlobalScope, MessageEvent};
 
-use crate::types::{FsNode, RunResult, WorkerOut, WorkerStart};
+use crate::types::{FsNode, WorkerOut, WorkerStart};
 
 mod debuggee;
 mod execution;
@@ -140,7 +140,8 @@ async fn start(msg: WorkerStart) {
         clang_args.push(source);
     }
 
-    exec.step("clang")
+    let exit = exec
+        .step("clang")
         // from @yowasp
         .binary("https://fabioibanez.github.io/website/llvm.core.wasm")
         .sysroot("https://fabioibanez.github.io/website/llvm-resources.tar.gz")
@@ -150,7 +151,15 @@ async fn start(msg: WorkerStart) {
         .await
         .expect("Compilation succeeded");
 
-    exec.step("wasm-ld")
+    if !exit.is_success() {
+        return WorkerOut::Stop {
+            exit_code: exit.raw(),
+        }
+        .send();
+    }
+
+    let exit = exec
+        .step("wasm-ld")
         .binary("https://fabioibanez.github.io/website/llvm.core.wasm")
         .args(&[
             "--export-dynamic",
@@ -170,15 +179,25 @@ async fn start(msg: WorkerStart) {
         .await
         .expect("Linking succeeded");
 
-    exec.step("main")
+    if !exit.is_success() {
+        return WorkerOut::Stop {
+            exit_code: exit.raw(),
+        }
+        .send();
+    }
+
+    let exit = exec
+        .step("main")
         .binary("/main.wasm")
         .debug(msg.is_debug)
         .run()
         .await
         .expect("Running succeeded");
 
-    // Send Stop message on successful completion
-    WorkerOut::Stop { exit_code: 0 }.send();
+    WorkerOut::Stop {
+        exit_code: exit.raw(),
+    }
+    .send();
 }
 
 #[wasm_bindgen]
