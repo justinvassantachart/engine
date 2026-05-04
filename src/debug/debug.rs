@@ -1,7 +1,10 @@
 use std::rc::Rc;
 
 use crate::debug::{Type, TypeGraph, Variable, get_location, get_variables as debug_get_variables};
-use crate::types::{DebugFunction, DebugInfo, GlobalAddress, WasmLocation};
+use crate::types::{
+    BKPT_MODE_NORMAL, BKPT_MODE_STEP_INTO, BKPT_MODE_STEP_OUT, BKPT_MODE_STEP_OVER,
+    DebugFunction, DebugInfo, GlobalAddress, WasmLocation,
+};
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::JsCast;
 
@@ -277,10 +280,33 @@ impl Debugger {
         &self.info
     }
 
-    /// Resumes the worker by signaling through the SAB.
-    pub fn continue_(&self) {
+    fn notify_resume(&self) {
         js_sys::Atomics::store(&self.state, 0, 0).unwrap();
         js_sys::Atomics::notify(&self.state, 0).unwrap();
+    }
+
+    /// Resumes the worker by signaling through the SAB (normal execution: breakpoints only).
+    pub fn continue_(&self) {
+        js_sys::Atomics::store(&self.state, 1, BKPT_MODE_NORMAL).unwrap();
+        self.notify_resume();
+    }
+
+    /// Resume with step-into semantics (stop at the next instrumented breakpoint site).
+    pub fn step_into(&self) {
+        js_sys::Atomics::store(&self.state, 1, BKPT_MODE_STEP_INTO).unwrap();
+        self.notify_resume();
+    }
+
+    /// Resume with step-over semantics (same or outer frame versus `last_sp`).
+    pub fn step_over(&self) {
+        js_sys::Atomics::store(&self.state, 1, BKPT_MODE_STEP_OVER).unwrap();
+        self.notify_resume();
+    }
+
+    /// Resume with step-out semantics (outer frame only versus `last_sp`).
+    pub fn step_out(&self) {
+        js_sys::Atomics::store(&self.state, 1, BKPT_MODE_STEP_OUT).unwrap();
+        self.notify_resume();
     }
 }
 

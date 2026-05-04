@@ -2,15 +2,23 @@
 
 import { cpp } from '@codemirror/lang-cpp';
 import { oneDark } from '@codemirror/theme-one-dark';
+import { EditorView, gutter, GutterMarker } from '@codemirror/view';
 import { Runtime } from '@jtrb/runtime';
-import FlashOnIcon from '@mui/icons-material/FlashOn';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
+import SkipNextIcon from '@mui/icons-material/SkipNext';
 import StopIcon from '@mui/icons-material/Stop';
+import SubdirectoryArrowLeftIcon from '@mui/icons-material/SubdirectoryArrowLeft';
+import SubdirectoryArrowRightIcon from '@mui/icons-material/SubdirectoryArrowRight';
 import { Box, Button, FormControl, InputLabel, MenuItem, Select, Typography } from '@mui/material';
 import CodeMirror from '@uiw/react-codemirror';
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import Terminal, { TerminalHandle } from '@/components/Terminal';
+import VariablesPanel, {
+  type ScopeBlock,
+  type StackFrameRow,
+  type VarNode
+} from '@/components/VariablesPanel';
 
 const defaultCode = `#include <iostream>
 
@@ -23,8 +31,90 @@ int main() {
 
 type Language = 'C' | 'C++';
 
-/** Which step of the manual API walkthrough the user has reached (resets when the run completes). */
-type DemoStep = 'idle' | 'runtime' | 'wired' | 'init_sent';
+/** Left gutter: click to toggle a DAP line breakpoint (1-based line numbers). */
+function breakpointGutterExtension(
+  lines: readonly number[],
+  gutterDisabled: boolean,
+  onToggle: (line: number) => void
+) {
+  const lineSet = new Set(lines);
+
+  class BreakpointDot extends GutterMarker {
+    elementClass = 'cm-demo-bp-marker';
+
+    eq(other: GutterMarker): boolean {
+      return other instanceof BreakpointDot;
+    }
+
+    toDOM(): Node {
+      const el = document.createElement('div');
+      el.textContent = '●';
+      el.setAttribute('aria-label', 'Remove breakpoint');
+      return el;
+    }
+  }
+
+  return [
+    gutter({
+      class: 'cm-demo-bp-gutter',
+      renderEmptyElements: true,
+      lineMarker(view, block) {
+        const lineNo = view.state.doc.lineAt(block.from).number;
+        return lineSet.has(lineNo) ? new BreakpointDot() : null;
+      },
+      domEventHandlers: {
+        mousedown(view, block, event) {
+          if (gutterDisabled) return false;
+          const e = event as MouseEvent;
+          if (e.button !== 0) return false;
+          const lineNo = view.state.doc.lineAt(block.from).number;
+          onToggle(lineNo);
+          return true;
+        }
+      }
+    }),
+    EditorView.baseTheme({
+      '.cm-demo-bp-gutter': {
+        width: '16px',
+        minWidth: '16px',
+        cursor: gutterDisabled ? 'default' : 'pointer'
+      },
+      '.cm-demo-bp-gutter .cm-gutterElement': {
+        display: 'flex',
+        alignItems: 'flex-start',
+        justifyContent: 'center',
+        padding: '1px 2px 0',
+        color: '#f87171',
+        fontSize: '9px',
+        lineHeight: '1.45'
+      },
+      '.cm-demo-bp-gutter .cm-gutterElement:hover': {
+        backgroundColor: gutterDisabled ? 'transparent' : 'rgba(248, 113, 113, 0.12)'
+      }
+    })
+  ];
+}
+
+function unwrapDapBody<T>(response: unknown): T | null {
+  if (!response || typeof response !== 'object') return null;
+  const r = response as { success?: boolean; body?: T; message?: string };
+  if (!r.success) {
+    console.warn('DAP request failed:', r.message);
+    return null;
+  }
+  return r.body ?? null;
+}
+
+function parseVariable(v: unknown): VarNode {
+  const o = v as Record<string, unknown>;
+  const ref = o.variablesReference;
+  return {
+    name: String(o.name ?? ''),
+    value: String(o.value ?? ''),
+    type: o.type != null ? String(o.type) : undefined,
+    variablesReference: typeof ref === 'number' ? ref : 0
+  };
+}
 
 export default function CodeEditor() {
   const [code, setCode] = useState<string>(defaultCode);
@@ -46,10 +136,28 @@ export default function CodeEditor() {
   const onDataHandlerRef = useRef<{ dispose: () => void } | null>(null);
   /** Removes stdout/stderr listeners from the last wire call. */
   const ioCleanupRef = useRef<(() => void) | null>(null);
-  const [demoStep, setDemoStep] = useState<DemoStep>('idle');
   const dapSeqRef = useRef<number>(1);
-  /** Line for setBreakpoints on the next Run, after the `initialized` event (null = none). */
-  const pendingBreakpointLineRef = useRef<number | null>(null);
+  /** 1-based source lines with breakpoints; sent in `setBreakpoints` after `initialized`. */
+  const [breakpointLines, setBreakpointLines] = useState<number[]>([]);
+  const breakpointLinesRef = useRef<number[]>([]);
+  breakpointLinesRef.current = breakpointLines;
+
+  const [debugFrames, setDebugFrames] = useState<StackFrameRow[]>([]);
+  const [selectedFrameId, setSelectedFrameId] = useState(0);
+  const [scopeBlocks, setScopeBlocks] = useState<ScopeBlock[]>([]);
+  const [varChildMap, setVarChildMap] = useState<Record<number, VarNode[]>>({});
+  const varChildMapRef = useRef<Record<number, VarNode[]>>({});
+  varChildMapRef.current = varChildMap;
+  const [debugLoading, setDebugLoading] = useState(false);
+
+  const toggleBreakpointLine = useCallback((line: number) => {
+    setBreakpointLines((prev) => {
+      const next = new Set(prev);
+      if (next.has(line)) next.delete(line);
+      else next.add(line);
+      return [...next].sort((a, b) => a - b);
+    });
+  }, []);
 
   const handleLanguageChange = (newLanguage: Language) => {
     setLanguage(newLanguage);
@@ -66,17 +174,122 @@ export default function CodeEditor() {
     }
   };
 
+  const dapSend = useCallback((rt: Runtime, command: string, args: Record<string, unknown>) => {
+    const request = {
+      type: 'request' as const,
+      seq: dapSeqRef.current++,
+      command,
+      arguments: args
+    };
+    return rt.debugger.send(request);
+  }, []);
+
+  const loadScopesForFrame = useCallback(
+    async (rt: Runtime, frameId: number) => {
+      const scBody = unwrapDapBody<{ scopes: { name: string; variablesReference: number }[] }>(
+        dapSend(rt, 'scopes', { frameId })
+      );
+      const scopesMeta = scBody?.scopes ?? [];
+      const blocks: ScopeBlock[] = [];
+      for (const s of scopesMeta) {
+        const vBody = unwrapDapBody<{ variables: unknown[] }>(
+          dapSend(rt, 'variables', { variablesReference: s.variablesReference })
+        );
+        blocks.push({
+          name: s.name,
+          variables: (vBody?.variables ?? []).map(parseVariable)
+        });
+      }
+      setScopeBlocks(blocks);
+    },
+    [dapSend]
+  );
+
+  const refreshDebugSession = useCallback(
+    async (rt: Runtime) => {
+      setDebugLoading(true);
+      try {
+        const st = unwrapDapBody<{
+          stackFrames: {
+            id: number;
+            name: string;
+            line?: number;
+            source?: { path?: string };
+          }[];
+        }>(dapSend(rt, 'stackTrace', { threadId: 1 }));
+        const rawFrames = st?.stackFrames ?? [];
+        const mapped: StackFrameRow[] = rawFrames.map((f) => ({
+          id: f.id,
+          name: f.name,
+          line: f.line,
+          path: f.source?.path
+        }));
+        setDebugFrames(mapped);
+        const frameId = mapped[0]?.id ?? 0;
+        setSelectedFrameId(frameId);
+        setVarChildMap({});
+        await loadScopesForFrame(rt, frameId);
+      } finally {
+        setDebugLoading(false);
+      }
+    },
+    [loadScopesForFrame, dapSend]
+  );
+
+  const selectFrame = useCallback(
+    async (frameId: number) => {
+      const rt = runtimeRef.current;
+      if (!rt) return;
+      setSelectedFrameId(frameId);
+      setDebugLoading(true);
+      setVarChildMap({});
+      try {
+        await loadScopesForFrame(rt, frameId);
+      } finally {
+        setDebugLoading(false);
+      }
+    },
+    [loadScopesForFrame]
+  );
+
+  const handleExpandVariable = useCallback(
+    async (variablesReference: number) => {
+      const rt = runtimeRef.current;
+      if (!rt || variablesReference <= 0) return;
+      if (varChildMapRef.current[variablesReference] !== undefined) return;
+      const body = unwrapDapBody<{ variables: unknown[] }>(
+        dapSend(rt, 'variables', { variablesReference })
+      );
+      const next = (body?.variables ?? []).map(parseVariable);
+      setVarChildMap((m) => ({ ...m, [variablesReference]: next }));
+    },
+    [dapSend]
+  );
+
   const handleContinue = () => {
-    // runtimeRef.current?.debugger.resume();
+    const rt = runtimeRef.current;
+    if (!rt) return;
+    dapSend(rt, 'continue', { threadId: 1 });
     setIsPaused(false);
+    setDebugFrames([]);
+    setScopeBlocks([]);
+    setVarChildMap({});
   };
 
-  const writeDemoLog = (message: string) => {
-    terminalRef.current?.writeln(`[demo] ${message}`);
-    console.log(`[demo] ${message}`);
-  };
+  const dispatchStepCommand = useCallback(
+    (command: 'next' | 'stepIn' | 'stepOut') => {
+      const rt = runtimeRef.current;
+      if (!rt) return;
+      setDebugLoading(true);
+      setVarChildMap({});
+      setScopeBlocks([]);
+      setDebugFrames([]);
+      dapSend(rt, command, { threadId: 1 });
+    },
+    [dapSend]
+  );
 
-  /** Drop a partial walkthrough session so Quick run or step 1 can start clean. */
+  /** Drop I/O and runtime so a new run can start clean. */
   const teardownDemoSession = () => {
     if (onDataHandlerRef.current) {
       onDataHandlerRef.current.dispose();
@@ -87,7 +300,6 @@ export default function CodeEditor() {
       ioCleanupRef.current = null;
     }
     runtimeRef.current = null;
-    setDemoStep('idle');
   };
 
   const finalizeAfterRun = () => {
@@ -104,7 +316,10 @@ export default function CodeEditor() {
     terminalRef.current?.disableInput();
     setIsRunning(false);
     setIsPaused(false);
-    setDemoStep('idle');
+    setDebugFrames([]);
+    setScopeBlocks([]);
+    setVarChildMap({});
+    setDebugLoading(false);
   };
 
   /**
@@ -112,15 +327,16 @@ export default function CodeEditor() {
    * That request must run only once the debugger is attached — i.e. after the
    * `initialized` event. Sending configurationDone earlier is a no-op and the run hangs.
    */
-  const completeDapAfterInitialized = async () => {
-    const line = pendingBreakpointLineRef.current;
-    const breakpoints = line != null ? [{ line }] : [];
-    await sendDapRequest('setBreakpoints', {
+  const completeDapAfterInitialized = () => {
+    const rt = runtimeRef.current;
+    if (!rt) return;
+    const breakpoints = breakpointLinesRef.current.map((line) => ({ line }));
+    dapSend(rt, 'setBreakpoints', {
       source: { path: '/main.c' },
       breakpoints
     });
-    await sendDapRequest('setExceptionBreakpoints', { filters: [] });
-    await sendDapRequest('configurationDone', {});
+    dapSend(rt, 'setExceptionBreakpoints', { filters: [] });
+    dapSend(rt, 'configurationDone', {});
   };
 
   const setupRuntimeForDemo = async () => {
@@ -135,45 +351,36 @@ export default function CodeEditor() {
 
     rt.debugger.on('event', (msg: unknown) => {
       if (!msg || typeof msg !== 'object' || !('type' in msg)) {
-        console.log('DAP EVENT (unknown payload):', msg);
         return;
       }
-      const dapMsg = msg as { type: string; event?: string };
-      console.log(dapMsg.type === 'event' ? 'DAP EVENT:' : 'DAP RESPONSE:', dapMsg);
+      const dapMsg = msg as {
+        type: string;
+        event?: string;
+        body?: { reason?: string; threadId?: number };
+      };
       if (dapMsg.type === 'event' && dapMsg.event === 'initialized') {
-        writeDemoLog('received initialized event — sending breakpoints + configurationDone');
-        void completeDapAfterInitialized();
+        completeDapAfterInitialized();
+        return;
+      }
+      if (dapMsg.type === 'event' && dapMsg.event === 'stopped') {
+        setIsPaused(true);
+        void refreshDebugSession(rt);
+        return;
+      }
+      if (dapMsg.type === 'event' && dapMsg.event === 'terminated') {
+        setIsPaused(false);
+        setDebugFrames([]);
+        setScopeBlocks([]);
+        setVarChildMap({});
+        setDebugLoading(false);
       }
     });
 
-    writeDemoLog('runtime created and debugger ready');
     return rt;
   };
 
-  const sendDapRequest = async (command: string, args: Record<string, unknown>) => {
-    const rt = await setupRuntimeForDemo();
-    const request = {
-      type: 'request' as const,
-      seq: dapSeqRef.current++,
-      command,
-      arguments: args
-    };
-    console.log('DAP SEND:', request);
-    writeDemoLog(`send ${command}`);
-    const response = rt.debugger.send(request);
-    console.log('DAP SYNC RESPONSE:', response);
-    writeDemoLog(`response ${command}: ${JSON.stringify(response)}`);
-    return response;
-  };
-
-  const handleSetBreakpoint = () => {
-    pendingBreakpointLineRef.current = 4;
-    writeDemoLog('queued breakpoint at line 4 (applied when the initialized handler runs).');
-  };
-
   const handleClearBreakpoints = () => {
-    pendingBreakpointLineRef.current = null;
-    writeDemoLog('cleared queued breakpoints.');
+    setBreakpointLines([]);
   };
 
   /**
@@ -257,98 +464,27 @@ export default function CodeEditor() {
     onDataHandlerRef.current = onData;
   };
 
-  const handleStepCreateRuntime = async () => {
-    try {
-      terminalRef.current?.clear();
-      terminalRef.current?.writeln("[demo] Step 1: Runtime.create('c')");
-      dapSeqRef.current = 1;
-      await setupRuntimeForDemo();
-      setDemoStep('runtime');
-      writeDemoLog('runtime ready — next: wire I/O and filesystem (step 2).');
-    } catch (error) {
-      console.error('Failed to create runtime:', error);
-      writeDemoLog('failed to create runtime');
-    }
-  };
-
-  const handleStepWireIo = async () => {
-    const rt = runtimeRef.current;
-    if (!rt || demoStep !== 'runtime') return;
-    try {
-      terminalRef.current?.writeln('[demo] Step 2: rt.stdout/stderr, rt.fs, stdin');
-      await wireExecutionEnvironment(rt);
-      setDemoStep('wired');
-      writeDemoLog('I/O and fs wired — next: send initialize (step 3).');
-    } catch (error) {
-      console.error('Failed to wire I/O:', error);
-      writeDemoLog('failed to wire I/O');
-    }
-  };
-
-  const handleStepSendInitialize = async () => {
-    if (demoStep !== 'wired') return;
-    try {
-      terminalRef.current?.writeln('[demo] Step 3: dbg.send(initialize)');
-      await sendDapRequest('initialize', {});
-      setDemoStep('init_sent');
-      writeDemoLog('initialize OK — next: await rt.run() (step 4).');
-    } catch (error) {
-      console.error('Failed initialize:', error);
-      writeDemoLog('initialize failed');
-    }
-  };
-
-  const handleStepStartRun = async () => {
-    const rt = runtimeRef.current;
-    if (!rt || demoStep !== 'init_sent') return;
-
-    setIsRunning(true);
-    isRunningRef.current = true;
-    wasStoppedByUserRef.current = false;
-
-    try {
-      terminalRef.current?.writeln(
-        '[demo] Step 4: await rt.run() — worker starts; DAP completes on initialized'
-      );
-      terminalRef.current?.writeln('Running...');
-      rt.fs = { 'main.c': code };
-      await rt.run();
-    } catch (error) {
-      console.error('Failed to run code:', error);
-      if (wasStoppedByUserRef.current) {
-        return;
-      }
-      terminalRef.current?.writeln('Error: So much stuff will be here once the runtime is wired.');
-    } finally {
-      finalizeAfterRun();
-    }
-  };
-
-  /**
-   * One click: full pipeline so you can exercise stdout/stdin/etc. without stepping.
-   * Still sends minimal DAP (initialize + post-initialized handshake) because debug builds block until configurationDone.
-   */
-  const handleQuickRun = async () => {
-    if (isRunning || isPaused) return;
+  /** Create runtime, wire terminal/fs/stdin, DAP initialize, then run (debug build). */
+  const handleRun = async () => {
+    if (isRunning) return;
     teardownDemoSession();
     setIsRunning(true);
     isRunningRef.current = true;
     wasStoppedByUserRef.current = false;
     try {
       terminalRef.current?.clear();
-      terminalRef.current?.writeln('[demo] Quick run: create → wire → initialize → run()');
       dapSeqRef.current = 1;
       const rt = await setupRuntimeForDemo();
       await wireExecutionEnvironment(rt);
-      await sendDapRequest('initialize', {});
+      dapSend(rt, 'initialize', {});
       terminalRef.current?.writeln('Running...');
       rt.fs = { 'main.c': code };
       await rt.run();
     } catch (error) {
-      console.error('Quick run failed:', error);
+      console.error('Run failed:', error);
       if (!wasStoppedByUserRef.current) {
         terminalRef.current?.writeln(
-          'Error: So much stuff will be here once the runtime is wired.'
+          `Error: ${error instanceof Error ? error.message : String(error)}`
         );
       }
     } finally {
@@ -405,7 +541,13 @@ export default function CodeEditor() {
     document.body.style.userSelect = 'none';
   };
 
-  const extensions = [cpp()];
+  const extensions = useMemo(
+    () => [
+      breakpointGutterExtension(breakpointLines, isRunning && !isPaused, toggleBreakpointLine),
+      cpp()
+    ],
+    [breakpointLines, isRunning, isPaused, toggleBreakpointLine]
+  );
 
   return (
     <Box
@@ -459,7 +601,7 @@ export default function CodeEditor() {
               variant="caption"
               sx={{ color: 'rgba(255, 255, 255, 0.5)', fontSize: '0.7rem' }}
             >
-              Steps below · reference on the right
+              Editor · terminal · stack & variables
             </Typography>
           </Box>
           <FormControl size="small" sx={{ minWidth: 150 }}>
@@ -499,38 +641,88 @@ export default function CodeEditor() {
 
           <Button
             size="small"
-            variant="outlined"
-            startIcon={<FlashOnIcon sx={{ fontSize: 18 }} />}
-            onClick={handleQuickRun}
-            disabled={isRunning || isPaused}
+            variant="contained"
+            startIcon={<PlayArrowIcon sx={{ fontSize: 18 }} />}
+            onClick={handleRun}
+            disabled={isRunning}
             sx={{
               textTransform: 'none',
-              borderColor: 'rgba(250, 204, 21, 0.45)',
-              color: '#fcd34d'
+              background: 'linear-gradient(135deg, #6366f1 0%, #7c3aed 100%)',
+              '&:hover': { background: 'linear-gradient(135deg, #5855eb 0%, #6d28d9 100%)' }
             }}
           >
-            Quick run
+            Run
+          </Button>
+
+          <Button
+            size="small"
+            variant="outlined"
+            color="error"
+            startIcon={<StopIcon sx={{ fontSize: 16 }} />}
+            onClick={handleStop}
+            disabled={!isRunning}
+            sx={{ textTransform: 'none' }}
+          >
+            Stop
+          </Button>
+
+          <Button
+            size="small"
+            variant="text"
+            onClick={handleClearBreakpoints}
+            disabled={isRunning && !isPaused}
+            sx={{ fontSize: '0.75rem', textTransform: 'none' }}
+          >
+            Clear breakpoints
           </Button>
 
           {isPaused && (
-            <Button
-              variant="contained"
-              size="small"
-              startIcon={<PlayArrowIcon />}
-              onClick={handleContinue}
-              sx={{
-                minWidth: 100,
-                textTransform: 'none',
-                background: 'linear-gradient(135deg, #22c55e 0%, #16a34a 100%)',
-                border: '1px solid rgba(255, 255, 255, 0.12)',
-                boxShadow: '0 10px 25px rgba(34, 197, 94, 0.3)',
-                '&:hover': {
-                  background: 'linear-gradient(135deg, #16a34a 0%, #15803d 100%)'
-                }
-              }}
-            >
-              Continue
-            </Button>
+            <>
+              <Button
+                variant="contained"
+                size="small"
+                startIcon={<PlayArrowIcon />}
+                onClick={handleContinue}
+                sx={{
+                  minWidth: 96,
+                  textTransform: 'none',
+                  background: 'linear-gradient(135deg, #22c55e 0%, #16a34a 100%)',
+                  border: '1px solid rgba(255, 255, 255, 0.12)',
+                  '&:hover': {
+                    background: 'linear-gradient(135deg, #16a34a 0%, #15803d 100%)'
+                  }
+                }}
+              >
+                Continue
+              </Button>
+              <Button
+                variant="outlined"
+                size="small"
+                startIcon={<SkipNextIcon sx={{ fontSize: 16 }} />}
+                onClick={() => dispatchStepCommand('next')}
+                sx={{ textTransform: 'none', borderColor: 'rgba(148, 163, 184, 0.45)' }}
+              >
+                Step over
+              </Button>
+              <Button
+                variant="outlined"
+                size="small"
+                startIcon={<SubdirectoryArrowRightIcon sx={{ fontSize: 16 }} />}
+                onClick={() => dispatchStepCommand('stepIn')}
+                sx={{ textTransform: 'none', borderColor: 'rgba(148, 163, 184, 0.45)' }}
+              >
+                Step into
+              </Button>
+              <Button
+                variant="outlined"
+                size="small"
+                startIcon={<SubdirectoryArrowLeftIcon sx={{ fontSize: 16 }} />}
+                onClick={() => dispatchStepCommand('stepOut')}
+                sx={{ textTransform: 'none', borderColor: 'rgba(148, 163, 184, 0.45)' }}
+              >
+                Step out
+              </Button>
+            </>
           )}
         </Box>
       </Box>
@@ -545,94 +737,6 @@ export default function CodeEditor() {
             overflow: 'hidden'
           }}
         >
-          <Box
-            sx={{
-              px: 2,
-              py: 0.75,
-              borderBottom: '1px solid',
-              borderColor: 'rgba(148, 163, 184, 0.12)',
-              display: 'flex',
-              alignItems: 'center',
-              gap: 0.75,
-              flexWrap: 'wrap',
-              flexShrink: 0,
-              background: 'rgba(8, 10, 15, 0.35)'
-            }}
-          >
-            <Button
-              size="small"
-              variant="outlined"
-              onClick={handleStepCreateRuntime}
-              disabled={isRunning || isPaused || demoStep !== 'idle'}
-              sx={{ textTransform: 'none', fontSize: '0.7rem', py: 0.25, minWidth: 0 }}
-            >
-              1 Create
-            </Button>
-            <Button
-              size="small"
-              variant="outlined"
-              onClick={handleStepWireIo}
-              disabled={isRunning || isPaused || demoStep !== 'runtime'}
-              sx={{ textTransform: 'none', fontSize: '0.7rem', py: 0.25, minWidth: 0 }}
-            >
-              2 Wire
-            </Button>
-            <Button
-              size="small"
-              variant="outlined"
-              onClick={handleStepSendInitialize}
-              disabled={isRunning || isPaused || demoStep !== 'wired'}
-              sx={{ textTransform: 'none', fontSize: '0.7rem', py: 0.25, minWidth: 0 }}
-            >
-              3 Init
-            </Button>
-            <Button
-              size="small"
-              variant="contained"
-              startIcon={<PlayArrowIcon sx={{ fontSize: 16 }} />}
-              onClick={handleStepStartRun}
-              disabled={isRunning || isPaused || demoStep !== 'init_sent'}
-              sx={{
-                textTransform: 'none',
-                fontSize: '0.7rem',
-                py: 0.25,
-                minWidth: 0,
-                background: 'linear-gradient(135deg, #6366f1 0%, #7c3aed 100%)',
-                '&:hover': { background: 'linear-gradient(135deg, #5855eb 0%, #6d28d9 100%)' }
-              }}
-            >
-              4 Run
-            </Button>
-            <Button
-              size="small"
-              variant="outlined"
-              color="error"
-              startIcon={<StopIcon sx={{ fontSize: 16 }} />}
-              onClick={handleStop}
-              disabled={!isRunning}
-              sx={{ textTransform: 'none', fontSize: '0.7rem', py: 0.25, minWidth: 0 }}
-            >
-              Stop
-            </Button>
-            <Button
-              size="small"
-              variant="text"
-              onClick={handleSetBreakpoint}
-              disabled={isRunning}
-              sx={{ fontSize: '0.68rem' }}
-            >
-              BP@4
-            </Button>
-            <Button
-              size="small"
-              variant="text"
-              onClick={handleClearBreakpoints}
-              disabled={isRunning}
-              sx={{ fontSize: '0.68rem' }}
-            >
-              Clear BP
-            </Button>
-          </Box>
           <Box
             ref={containerRef}
             sx={{
@@ -720,73 +824,16 @@ export default function CodeEditor() {
             <Terminal ref={terminalRef} height={terminalHeight} />
           </Box>
         </Box>
-        <Box
-          sx={{
-            width: { xs: 0, sm: 200, md: 220 },
-            display: { xs: 'none', sm: 'flex' },
-            flexDirection: 'column',
-            flexShrink: 0,
-            borderLeft: '1px solid rgba(148, 163, 184, 0.12)',
-            background: 'rgba(6, 8, 12, 0.55)',
-            overflow: 'hidden'
-          }}
-        >
-          <Typography
-            sx={{
-              px: 1.25,
-              py: 0.75,
-              fontSize: '0.62rem',
-              fontWeight: 600,
-              letterSpacing: '0.06em',
-              textTransform: 'uppercase',
-              color: 'rgba(255,255,255,0.45)',
-              borderBottom: '1px solid rgba(148, 163, 184, 0.1)'
-            }}
-          >
-            API order
-          </Typography>
-          <Box
-            component="ol"
-            sx={{
-              m: 0,
-              py: 0.75,
-              px: 1.5,
-              pl: 2,
-              overflowY: 'auto',
-              flex: 1,
-              minHeight: 0,
-              color: 'rgba(255,255,255,0.42)',
-              fontSize: '0.62rem',
-              lineHeight: 1.45,
-              '& code': { fontSize: '0.58rem', color: '#a5b4fc' }
-            }}
-          >
-            <Box component="li" sx={{ mb: 0.5 }}>
-              <code>Runtime.create</code> — listener on <code>initialized</code> sends breakpoints +{' '}
-              <code>configurationDone</code>.
-            </Box>
-            <Box component="li" sx={{ mb: 0.5 }}>
-              Wire streams + <code>rt.fs</code> (<code>main.c</code>).
-            </Box>
-            <Box component="li" sx={{ mb: 0.5 }}>
-              <code>initialize</code> (capabilities).
-            </Box>
-            <Box component="li" sx={{ mb: 0.5 }}>
-              <code>await rt.run()</code> — worker blocks until DAP config completes.
-            </Box>
-          </Box>
-          <Typography
-            sx={{
-              px: 1.25,
-              py: 0.6,
-              fontSize: '0.58rem',
-              color: 'rgba(255,255,255,0.35)',
-              lineHeight: 1.35
-            }}
-          >
-            Quick run still does minimal DAP (debug build); use it to test I/O without clicking 1–4.
-          </Typography>
-        </Box>
+        <VariablesPanel
+          isPaused={isPaused}
+          debugLoading={debugLoading}
+          frames={debugFrames}
+          selectedFrameId={selectedFrameId}
+          onSelectFrame={(id) => void selectFrame(id)}
+          scopes={scopeBlocks}
+          varChildMap={varChildMap}
+          onExpandVariable={(ref) => void handleExpandVariable(ref)}
+        />
       </Box>
     </Box>
   );

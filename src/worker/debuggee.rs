@@ -1,4 +1,7 @@
-use crate::types::{DebugInfo, WorkerOut};
+use crate::types::{
+    BKPT_MODE_NORMAL, BKPT_MODE_STEP_INTO, BKPT_MODE_STEP_OUT, BKPT_MODE_STEP_OVER, DebugInfo,
+    WorkerOut,
+};
 use crate::util::{warning, weak_error};
 use js_sys::{Object, Reflect, WebAssembly};
 use wasm_bindgen::JsCast;
@@ -33,7 +36,8 @@ fn create_stack_pointer(
 
     let global = WebAssembly::Global::new(&global_desc, &size_bytes)?;
     state.set_index(0, size_bytes.as_f64().unwrap() as i32);
-    state.set_index(1, 0);
+    state.set_index(1, BKPT_MODE_NORMAL);
+    state.set_index(2, 0);
     Ok(global)
 }
 
@@ -127,15 +131,31 @@ impl Debuggee {
         weak_error!(js_sys::Atomics::wait(&self.state, 0, current));
     }
 
-    /// Check if breakpoint is enabled, and if so, wait for resume.
+    /// Decide whether execution should pause at this instrumented breakpoint.
     ///
     /// This is the main entry point called from instrumented WASM code.
     pub fn bkpt(&self, index: usize) -> bool {
-        if !self.bkpt_enabled(index) {
+        let mode = js_sys::Atomics::load(&self.state, 1).unwrap_or(BKPT_MODE_NORMAL);
+
+        if mode == BKPT_MODE_NORMAL && !self.bkpt_enabled(index) {
             return false;
         }
 
+        let last_sp = js_sys::Atomics::load(&self.state, 2).unwrap_or(0);
         let sp = self.stack_pointer.value().as_f64().unwrap() as i32;
+
+        let stop = match mode {
+            BKPT_MODE_NORMAL => true,
+            BKPT_MODE_STEP_INTO => true,
+            BKPT_MODE_STEP_OVER => sp >= last_sp,
+            BKPT_MODE_STEP_OUT => sp > last_sp,
+            _ => self.bkpt_enabled(index),
+        };
+
+        if !stop {
+            return false;
+        }
+
         let pc = self
             .info
             .dwarf
@@ -155,8 +175,19 @@ impl Debuggee {
         // and instead only do it when a breakpoint is actually hit
         self.stack.set_uint32_endian(sp as usize, pc.0 as u32, true);
 
+        js_sys::Atomics::store(&self.state, 1, BKPT_MODE_NORMAL).unwrap();
+        js_sys::Atomics::store(&self.state, 2, sp).unwrap();
         js_sys::Atomics::store(&self.state, 0, sp).unwrap();
-        WorkerOut::Breakpoint.send();
+
+        let stop_reason = match mode {
+            BKPT_MODE_NORMAL => "breakpoint",
+            BKPT_MODE_STEP_INTO | BKPT_MODE_STEP_OVER | BKPT_MODE_STEP_OUT => "step",
+            _ => "breakpoint",
+        };
+        WorkerOut::Breakpoint {
+            reason: stop_reason.to_string(),
+        }
+        .send();
         self.wait_for_resume();
         true
     }

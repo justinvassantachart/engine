@@ -91,9 +91,9 @@ pub enum WorkerOut<'a> {
         name: String,
     },
 
-    /// Sent when execution pauses
+    /// Sent when execution pauses (maps to DAP `stopped`; `reason` is the DAP `StoppedEvent.reason`).
     #[serde(rename = "breakpoint")]
-    Breakpoint,
+    Breakpoint { reason: String },
     #[serde(rename = "stop")]
     Stop { exit_code: i32 },
 }
@@ -167,7 +167,11 @@ pub struct DebugInfo {
     /// │        │              │     2 → Step over                            │
     /// │        │              │     3 → Step out                             │
     /// │        │              │                                              │
-    /// │ 8      │ u8[N]        │ Breakpoint Counts                            │
+    /// │ 8      │ u32          │ Last stack pointer (`last_sp`)               │
+    /// │        │              │   Saved stack pointer after the previous     │
+    /// │        │              │   stop; used for step-over / step-out.         │
+    /// │        │              │                                              │
+    /// │ 12     │ u8[N]        │ Breakpoint flags                             │
     /// │        │              │   One byte per breakpoint location.          │
     /// │        │              │   Each entry counts how many times the       │
     /// │        │              │   corresponding breakpoint has been set.     │
@@ -176,7 +180,7 @@ pub struct DebugInfo {
     ///
     /// Notes:
     /// - `N` is the number of breakpoint locations being tracked.
-    /// - The breakpoint array begins immediately at offset 8 and is densely packed.
+    /// - Breakpoint flags begin at offset [`BP_PREFIX_BYTES`] and are densely packed.
     ///
     #[serde(with = "serde_wasm_bindgen::preserve")]
     pub breakpoints: js_sys::SharedArrayBuffer,
@@ -192,8 +196,14 @@ pub struct DebugInfo {
     pub dwarf: Dwarf,
 }
 
-/// Size in bytes of the `breakpoints` buffer prefix.
-pub const BP_PREFIX_BYTES: usize = 8;
+/// Size in bytes of the `breakpoints` buffer prefix (SP + mode + last_sp).
+pub const BP_PREFIX_BYTES: usize = 12;
+
+/// Sentinel `mode` (`u32` at byte offset 4, shared as [`i32`] in [`DebugInfo::get_bp_state`] index 1).
+pub const BKPT_MODE_NORMAL: i32 = 0;
+pub const BKPT_MODE_STEP_INTO: i32 = 1;
+pub const BKPT_MODE_STEP_OVER: i32 = 2;
+pub const BKPT_MODE_STEP_OUT: i32 = 3;
 
 #[derive(Debug, Clone, Hash, Eq, PartialEq, Serialize, Deserialize)]
 pub enum WasmLocation {
@@ -238,7 +248,8 @@ impl DebugInfo {
     }
 
     pub fn get_bp_state(&self) -> js_sys::Int32Array {
-        js_sys::Int32Array::new_with_byte_offset_and_length(&self.breakpoints, 0, 2)
+        // Elements: `[0]` = paused SP / wait handshake, `[1]` = mode, `[2]` = last_sp (all i32 lanes).
+        js_sys::Int32Array::new_with_byte_offset_and_length(&self.breakpoints, 0, 3)
     }
 
     pub fn get_bp_flags(&self) -> js_sys::Uint8Array {

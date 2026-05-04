@@ -65,6 +65,25 @@ export function match(expected: Json, actual: Json, at = ''): MatchResult {
       );
     }
 
+    const notContains = expected['$array.not_contains'];
+    if (notContains !== undefined) {
+      if (!Array.isArray(notContains)) return fail('array.not_contains requires array value');
+      if (!Array.isArray(actual)) return fail(`expected array, got ${tn(actual)}`);
+
+      for (let fi = 0; fi < notContains.length; fi++) {
+        const forbidden = notContains[fi];
+        for (let i = 0; i < actual.length; i++) {
+          const result = match(forbidden, actual[i], `${at}[${i}]`);
+          if (result.success) {
+            return fail(
+              `array.not_contains[${fi}] matched actual[${i}]: ${JSON.stringify(forbidden)}`
+            );
+          }
+        }
+      }
+      return succeed();
+    }
+
     return null;
   }
 

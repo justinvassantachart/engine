@@ -199,12 +199,10 @@ impl DapState {
         Ok(json!({ "allThreadsContinued": true }))
     }
 
-    // TODO: need to agree with Fabio on how to expose step(mode) on Debugger to set sentinel[1] before resuming.
-    // For now these fall through to a plain continue so the program doesn't hang.
     fn handle_next(&mut self) -> Result<Value> {
         self.vars.clear();
         if let Some(dbg) = self.debugger() {
-            dbg.continue_();
+            dbg.step_over();
         }
         Ok(json!({}))
     }
@@ -212,7 +210,7 @@ impl DapState {
     fn handle_step_in(&mut self) -> Result<Value> {
         self.vars.clear();
         if let Some(dbg) = self.debugger() {
-            dbg.continue_();
+            dbg.step_into();
         }
         Ok(json!({}))
     }
@@ -220,7 +218,7 @@ impl DapState {
     fn handle_step_out(&mut self) -> Result<Value> {
         self.vars.clear();
         if let Some(dbg) = self.debugger() {
-            dbg.continue_();
+            dbg.step_out();
         }
         Ok(json!({}))
     }
@@ -349,11 +347,16 @@ impl DapAdapter {
                     try_emit_initialized(&state);
                 }
                 "breakpoint" => {
+                    let reason = js_sys::Reflect::get(&data, &"reason".into())
+                        .ok()
+                        .and_then(|v| v.as_string())
+                        .filter(|s| !s.is_empty())
+                        .unwrap_or_else(|| "breakpoint".into());
                     emit_event(
                         &state,
                         "stopped",
                         Some(json!({
-                            "reason": "breakpoint",
+                            "reason": reason,
                             "threadId": 1,
                             "allThreadsStopped": true,
                         })),
