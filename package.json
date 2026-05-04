@@ -1,6 +1,6 @@
 {
   "name": "@jtrb/runtime",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "A browser-based C runtime powered by WASM, with stdin/stdout/stderr I/O and a debugger",
   "keywords": [
     "wasm",
