@@ -145,12 +145,7 @@ impl Variable {
                 Some(super::MemberLocation::Expr(_)) => continue,
             };
             let addr = (base.0 as i64).wrapping_add(offset) as u64;
-            let piece = gimli::Piece {
-                size_in_bits: None,
-                bit_offset: None,
-                location: gimli::Location::Address { address: addr },
-            };
-            out.push(Variable::new(name, vec![piece], self.ty.child(member.ty)));
+            out.push(Variable::new(name, vec![addr_piece(addr)], self.ty.child(member.ty)));
         }
         out
     }
