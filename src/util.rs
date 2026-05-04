@@ -14,11 +14,13 @@ macro_rules! __out {
 pub(crate) use __out;
 
 /// Prints a formatted string to the JavaScript console.
+#[allow(unused)]
 macro_rules! log {
     ($($arg:tt)*) => {
         $crate::util::__out!(::web_sys::console::log_3, $($arg)*)
     };
 }
+#[allow(unused_imports)]
 pub(crate) use log;
 
 /// Prints a formatted warning to the JavaScript console.
