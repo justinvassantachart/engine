@@ -1,6 +1,6 @@
 use crate::{
     debug::{
-        Type, TypeDeclaration,
+        ReferenceKind, Type, TypeDeclaration,
         dwarf::{Die, R, Visit},
     },
     types::{DebugInfo, GlobalAddress},
@@ -112,9 +112,15 @@ impl Variable {
                 let label = name.as_deref().unwrap_or("");
                 format!("{label} {{ ... }}")
             }
-            Some(TypeDeclaration::Referential { .. }) => match self.address() {
-                Some(addr) => addr.to_string(),
-                None => "<unavailable>".into(),
+            Some(TypeDeclaration::Referential { target, kind }) => match kind {
+                ReferenceKind::Pointer => match self.address() {
+                    Some(addr) => addr.to_string(),
+                    None => "<unavailable>".into(),
+                },
+                ReferenceKind::Reference | ReferenceKind::Temporary => {
+                    let Some(addr) = self.address() else { return "<unavailable>".into() };
+                    Variable::new(self.name.clone(), vec![addr_piece(read_ptr(info, addr.0))], self.ty.child(*target)).display(info)
+                }
             },
             _ => "<unavailable>".into(),
         }
