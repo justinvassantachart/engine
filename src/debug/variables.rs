@@ -129,31 +129,37 @@ impl Variable {
     /// Expands a compound value into named child variables.
     ///
     /// Returns an empty vector for scalars / unsupported aggregates.
-    pub fn children(&self, _info: &DebugInfo) -> Vec<Variable> {
-        let Some(TypeDeclaration::Structure { members, .. }) = self.ty.resolved() else {
-            return Vec::new();
-        };
-
-        let Some(base) = self.address() else {
-            return Vec::new();
-        };
-
-        let mut out = Vec::with_capacity(members.len());
-        for member in members {
-            let Some(name) = member.name.clone() else {
-                continue;
-            };
-            let offset = match &member.location {
-                Some(super::MemberLocation::Offset(o)) => *o,
-                // Member at the start when no location is specified (common for unions)
-                None => 0,
-                // Expression-based offsets aren't supported yet
-                Some(super::MemberLocation::Expr(_)) => continue,
-            };
-            let addr = (base.0 as i64).wrapping_add(offset) as u64;
-            out.push(Variable::new(name, vec![addr_piece(addr)], self.ty.child(member.ty)));
+    pub fn children(&self, info: &DebugInfo) -> Vec<Variable> {
+        match self.ty.resolved() {
+            Some(TypeDeclaration::Structure { members, .. }) => {
+                let Some(base) = self.address() else { return Vec::new() };
+                let mut out = Vec::with_capacity(members.len());
+                for member in members {
+                    let Some(name) = member.name.clone() else { continue };
+                    let offset = match &member.location {
+                        Some(super::MemberLocation::Offset(o)) => *o,
+                        None => 0,
+                        Some(super::MemberLocation::Expr(_)) => continue,
+                    };
+                    let addr = (base.0 as i64).wrapping_add(offset) as u64;
+                    out.push(Variable::new(name, vec![addr_piece(addr)], self.ty.child(member.ty)));
+                }
+                out
+            }
+            Some(TypeDeclaration::Referential { target, kind }) => {
+                let is_ptr = matches!(kind, ReferenceKind::Pointer);
+                let Some(addr) = self.address() else { return Vec::new() };
+                let target_addr = read_ptr(info, addr.0);
+                if is_ptr && target_addr == 0 { return Vec::new(); }
+                let target_type = self.ty.child(*target);
+                let piece = addr_piece(target_addr);
+                if is_ptr && matches!(target_type.resolved(), Some(TypeDeclaration::Scalar { .. })) {
+                    return vec![Variable::new(format!("*{}", self.name), vec![piece], target_type)];
+                }
+                Variable::new(self.name.clone(), vec![piece], target_type).children(info)
+            }
+            _ => Vec::new(),
         }
-        out
     }
 }
 
