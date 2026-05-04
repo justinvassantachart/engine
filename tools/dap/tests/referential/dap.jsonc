@@ -72,12 +72,11 @@
       "body": {
         "variables": {
           "$array.contains": [
-            { "name": "c", "variablesReference": "${{compound}}" },
-            { "name": "cref", "type": "Compound&", "variablesReference": 0 },
-            { "name": "cptr", "type": "Compound*", "variablesReference": 0 },
+            { "name": "cref", "variablesReference": "${{cref}}" },
+            { "name": "cptr", "variablesReference": "${{cptr}}" },
             { "name": "null", "variablesReference": 0 },
-            { "name": "lref", "type": "long&", "variablesReference": 0 },
-            { "name": "lptr", "type": "long*", "variablesReference": 0 }
+            { "name": "lref", "value": "1", "variablesReference": 0 },
+            { "name": "lptr", "variablesReference": "${{lptr}}" }
           ]
         }
       }
@@ -86,7 +85,7 @@
       "type": "request",
       "command": "variables",
       "arguments": {
-        "variablesReference": "{{compound}}"
+        "variablesReference": "{{cref}}"
       }
     },
     {
@@ -97,6 +96,39 @@
             { "name": "a", "type": "long", "value": "1" },
             { "name": "b", "type": "long", "value": "2" }
           ]
+        }
+      }
+    },
+    {
+      "type": "request",
+      "command": "variables",
+      "arguments": {
+        "variablesReference": "{{cptr}}"
+      }
+    },
+    {
+      "type": "response",
+      "body": {
+        "variables": {
+          "$array.contains": [
+            { "name": "a", "type": "long", "value": "1" },
+            { "name": "b", "type": "long", "value": "2" }
+          ]
+        }
+      }
+    },
+    {
+      "type": "request",
+      "command": "variables",
+      "arguments": {
+        "variablesReference": "{{lptr}}"
+      }
+    },
+    {
+      "type": "response",
+      "body": {
+        "variables": {
+          "$array.contains": [{ "name": "*lptr", "type": "long", "value": "1" }]
         }
       }
     },
