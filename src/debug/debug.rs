@@ -69,12 +69,18 @@ impl Debugger {
             };
             let die = func.die_ref.deref(&self.info.dwarf)?;
 
+            let loc = self
+                .info
+                .dwarf
+                .locations()
+                .filter(|l| l.address() <= pc)
+                .max_by_key(|l| l.address());
             frames.push(StackFrame {
                 id: frames.len() as u32,
                 name: die.name().unwrap_or(String::new()),
-                line: 0,
-                column: 0,
-                source: None,
+                line: loc.as_ref().map_or(0, |l| l.line() as u32),
+                column: loc.as_ref().map_or(0, |l| l.column() as u32),
+                source: loc.as_ref().map(|l| l.file.to_string_lossy().into_owned()),
             });
             pos += func.size as u32;
         }
