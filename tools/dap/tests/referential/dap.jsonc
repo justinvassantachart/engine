@@ -75,7 +75,7 @@
             { "name": "cref", "variablesReference": "${{cref}}" },
             { "name": "cptr", "variablesReference": "${{cptr}}" },
             { "name": "null", "variablesReference": 0 },
-            { "name": "lref", "value": 1, "variablesReference": 0 },
+            { "name": "lref", "value": "1", "variablesReference": 0 },
             { "name": "lptr", "variablesReference": "${{lptr}}" }
           ]
         }
