@@ -121,35 +121,81 @@ dbg.send({ type: 'request', seq: seq++, command: 'initialize', arguments: {} });
 await rt.run();
 ```
 
-### Handling a Breakpoint Hit
+### Handling a pause (`stopped`)
 
-When the program hits a breakpoint, a `stopped` event is emitted:
+Whenever the debuggee stops—on a **line breakpoint** or after a **step** request—the adapter emits a `stopped` event. Use `body.reason` to tell them apart:
+
+- **`breakpoint`** — the worker paused in normal mode because execution reached a line where you set a breakpoint.
+- **`step`** — the worker paused while a step mode was active (`next`, `stepIn`, or `stepOut`). The next section describes how those modes work internally.
+
+`threadId` is always `1` (single-threaded runtime).
 
 ```ts
 if (msg.type === 'event' && msg.event === 'stopped') {
-  // inspect the stack
   const res = dbg.send({
     type: 'request',
     seq: n++,
     command: 'stackTrace',
     arguments: { threadId: 1 }
-  });
+  }) as { body?: { stackFrames?: { id: number }[] } };
+  const top = res.body?.stackFrames?.[0];
+  if (!top) return;
 
-  // get scopes for a frame
-  dbg.send({ type: 'request', seq: n++, command: 'scopes', arguments: { frameId: 0 } });
+  const scopesRes = dbg.send({
+    type: 'request',
+    seq: n++,
+    command: 'scopes',
+    arguments: { frameId: top.id }
+  }) as { body?: { scopes?: { variablesReference: number }[] } };
+  const localsRef = scopesRes.body?.scopes?.find((s) => s.name === 'Locals')?.variablesReference;
+  if (localsRef == null) return;
 
-  // get variables for a scope (variablesReference comes from scopes response)
   dbg.send({
     type: 'request',
     seq: n++,
     command: 'variables',
-    arguments: { variablesReference: 1 }
+    arguments: { variablesReference: localsRef }
   });
 
-  // resume
   dbg.send({ type: 'request', seq: n++, command: 'continue', arguments: { threadId: 1 } });
 }
 ```
+
+### Stepping
+
+Stepping does **not** use a separate single-stepping primitive in the CPU. The program is compiled with **instrumentation**: at each debuggable machine location there is a shared hook that can stop execution. The main thread and the worker coordinate through a small prefix on the **same `SharedArrayBuffer`** that also holds per-location breakpoint enable flags (see `DebugInfo` / `BP_PREFIX_BYTES` in the Rust sources).
+
+That prefix (exposed to JS as the first elements of `get_bp_state()`, an `Int32Array` view) is laid out conceptually as:
+
+| Index | Role                                                                                                                                                                                                |
+| ----- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `0`   | Stack pointer handshake: non-zero while paused, cleared to resume                                                                                                                                   |
+| `1`   | **Execution mode** — what to do at the next instrumented sites the worker reaches                                                                                                                   |
+| `2`   | **`last_sp`** — stack pointer saved when the _previous_ pause ended; used to implement step-over and step-out                                                                                       |
+| `3`   | **`last_stop_mode`** — mode that was active when the worker _decided_ to pause this time (written before mode is reset); the adapter uses this to set DAP `stopped.reason` (`breakpoint` vs `step`) |
+
+**Modes** (`1`, written by the main-thread `Debugger` before waking the worker):
+
+| Value | Name      | Meaning at instrumentation sites                                                                         |
+| ----- | --------- | -------------------------------------------------------------------------------------------------------- |
+| `0`   | Normal    | Stop only at locations where you have set a breakpoint (`setBreakpoints`).                               |
+| `1`   | Step into | Stop at the next instrumented site that runs (enters callees if the next site is there).                 |
+| `2`   | Step over | Stop only when the stack pointer is **≥ `last_sp`** (same or outer frame versus where you stepped from). |
+| `3`   | Step out  | Stop only when the stack pointer is **> `last_sp`** (strictly outer frame).                              |
+
+DAP wiring:
+
+- **`continue`** — set mode to normal and wake the worker; variable handles from the previous pause are cleared.
+- **`next`** — set mode to step-over, then wake.
+- **`stepIn`** — set mode to step-into, then wake.
+- **`stepOut`** — set mode to step-out, then wake.
+
+After each successful stop, the worker resets mode to **normal** and updates **`last_sp`** to the current stack pointer so the next `next` / `stepOut` is relative to the line you actually landed on. The worker posts a minimal `breakpoint` message to the main thread; **pause classification for DAP** (`stopped.reason`) comes from reading **`last_stop_mode`** on that shared buffer, not from fields on the worker message.
+
+**Caveats:**
+
+- Stepping is **line-oriented** over instrumented WASM PCs, not a hardware single-step.
+- Very dense control flow (e.g. multiple statements on one line) follows whatever the instrumentation map does—validate behavior with `npm run tools:dap` if you rely on edge cases.
 
 ### Supported Commands
 
@@ -187,3 +233,5 @@ if (msg.type === 'event' && msg.event === 'terminated') {
 - The runtime compiles C++ to WASM in-browser using clang — the first run may take a few seconds.
 - There is one thread (`id: 1`). Multi-threading is not supported.
 - `send()` returns the response synchronously. DAP traffic that is pushed from the adapter arrives asynchronously via `on('event', ...)`.
+- Variable handles (`variablesReference` from `scopes` / `variables`) are invalidated when you **`continue`** or issue a **step** request; always re-query after the next `stopped`.
+- Scripted DAP scenarios live under `tools/dap/tests/`. From the repository root, run **`npm run tools:dap`** to execute the suite (optionally `npm run tools:dap -- <test-name>` for a single case).

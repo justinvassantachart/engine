@@ -101,14 +101,13 @@ The runtime exposes a full DAP interface so that IDEs can add debugging features
 **What works today:**
 
 - `initialize` / `initialized` / `configurationDone` — required startup handshake
-- `setBreakpoints` — accepted (does nothing, support coming soon)
-- `setExceptionBreakpoints` — accepted (does nothing, might support later)
+- `setBreakpoints` — maps source lines to instrumented WASM locations (verified in the response)
+- `setExceptionBreakpoints` — accepted (no filters implemented yet)
+- Breakpoint hits and `stopped` events (`reason`: `breakpoint` or `step`; see [integration guide](./docs/integration.md#stepping))
+- `threads`, `stackTrace`, `scopes`, `variables` — inspect the stack and locals
+- `continue`, `next`, `stepIn`, `stepOut` — run, step over, step into, step out (all use the same instrumented breakpoint machinery)
 
-**Coming soon:**
-
-- Breakpoint hits (`stopped` event)
-- Variable inspection (`scopes`, `variables` requests)
-- Step over / step in / step out
+For a precise description of how stepping is implemented (shared execution state between the main thread and the worker), read [**Stepping**](./docs/integration.md#stepping) in the integration guide.
 
 ---
 
@@ -180,7 +179,7 @@ rt.debugger.on('event', handler); // receive async DAP events
 
 ## Example project
 
-See the [`ide/`](./ide) folder for a complete Next.js example that wires up CodeMirror 6, xterm.js, and `@jtrb/runtime` into a working in-browser IDE. The [`CodeEditor.tsx`](./ide/app/components/CodeEditor.tsx) component is heavily commented and walks through every step of the integration.
+See the [`demo/`](./demo) app for a Next.js + MUI example that wires up CodeMirror 6, xterm.js, and `@jtrb/runtime` into a working in-browser IDE. Start from [`demo/README.md`](./demo/README.md) and [`demo/components/CodeEditor.tsx`](./demo/components/CodeEditor.tsx).
 
 ---
 

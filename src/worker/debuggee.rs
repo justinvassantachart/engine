@@ -38,6 +38,7 @@ fn create_stack_pointer(
     state.set_index(0, size_bytes.as_f64().unwrap() as i32);
     state.set_index(1, BKPT_MODE_NORMAL);
     state.set_index(2, 0);
+    state.set_index(3, BKPT_MODE_NORMAL);
     Ok(global)
 }
 
@@ -175,19 +176,12 @@ impl Debuggee {
         // and instead only do it when a breakpoint is actually hit
         self.stack.set_uint32_endian(sp as usize, pc.0 as u32, true);
 
+        js_sys::Atomics::store(&self.state, 3, mode).unwrap();
         js_sys::Atomics::store(&self.state, 1, BKPT_MODE_NORMAL).unwrap();
         js_sys::Atomics::store(&self.state, 2, sp).unwrap();
         js_sys::Atomics::store(&self.state, 0, sp).unwrap();
 
-        let stop_reason = match mode {
-            BKPT_MODE_NORMAL => "breakpoint",
-            BKPT_MODE_STEP_INTO | BKPT_MODE_STEP_OVER | BKPT_MODE_STEP_OUT => "step",
-            _ => "breakpoint",
-        };
-        WorkerOut::Breakpoint {
-            reason: stop_reason.to_string(),
-        }
-        .send();
+        WorkerOut::Breakpoint.send();
         self.wait_for_resume();
         true
     }

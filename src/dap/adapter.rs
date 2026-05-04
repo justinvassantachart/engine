@@ -9,7 +9,9 @@ use wasm_bindgen::prelude::*;
 
 use crate::dap::types::{ProtocolMessage, VariablesMap};
 use crate::debug::Debugger;
-use crate::types::DebugInfo;
+use crate::types::{
+    BKPT_MODE_STEP_INTO, BKPT_MODE_STEP_OUT, BKPT_MODE_STEP_OVER, DebugInfo,
+};
 
 struct DapState {
     seq_counter: i64,
@@ -347,11 +349,17 @@ impl DapAdapter {
                     try_emit_initialized(&state);
                 }
                 "breakpoint" => {
-                    let reason = js_sys::Reflect::get(&data, &"reason".into())
-                        .ok()
-                        .and_then(|v| v.as_string())
-                        .filter(|s| !s.is_empty())
-                        .unwrap_or_else(|| "breakpoint".into());
+                    let reason = state
+                        .borrow()
+                        .debugger
+                        .as_ref()
+                        .map(|dbg| match dbg.last_pause_mode() {
+                            BKPT_MODE_STEP_INTO | BKPT_MODE_STEP_OVER | BKPT_MODE_STEP_OUT => {
+                                "step"
+                            }
+                            _ => "breakpoint",
+                        })
+                        .unwrap_or("breakpoint");
                     emit_event(
                         &state,
                         "stopped",

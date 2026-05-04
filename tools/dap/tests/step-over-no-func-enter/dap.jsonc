@@ -45,7 +45,7 @@
         "type": "response",
         "body": {
           "stackFrames": {
-            "$array.not_contains": [
+            "$array.excludes": [
               { "name": "bar" }
             ]
           }

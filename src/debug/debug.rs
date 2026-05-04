@@ -36,6 +36,11 @@ impl Debugger {
         Self { info, state, types }
     }
 
+    /// Breakpoint mode that was active when the worker last chose to pause (SAB index 3).
+    pub fn last_pause_mode(&self) -> i32 {
+        js_sys::Atomics::load(&self.state, 3).unwrap_or(BKPT_MODE_NORMAL)
+    }
+
     fn read_wasm_value(
         &self,
         view: &js_sys::DataView,
