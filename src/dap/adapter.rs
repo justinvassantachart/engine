@@ -9,7 +9,7 @@ use wasm_bindgen::prelude::*;
 
 use crate::dap::types::{ProtocolMessage, VariablesMap};
 use crate::debug::Debugger;
-use crate::types::DebugInfo;
+use crate::types::{PauseReason, WorkerOut};
 
 struct DapState {
     seq_counter: i64,
@@ -332,32 +332,30 @@ impl DapAdapter {
 
         let closure = Closure::wrap(Box::new(move |event: web_sys::MessageEvent| {
             let data = event.data();
-            let msg_type = js_sys::Reflect::get(&data, &"type".into())
-                .ok()
-                .and_then(|v| v.as_string())
-                .unwrap_or_default();
+            let Ok(msg) = serde_wasm_bindgen::from_value::<WorkerOut>(data) else {
+                return;
+            };
 
-            match msg_type.as_str() {
-                "debug" => {
-                    let info_val = js_sys::Reflect::get(&data, &"info".into())
-                        .expect("debug message has info field");
-                    let info: DebugInfo = serde_wasm_bindgen::from_value(info_val)
-                        .expect("DebugInfo deserialization");
+            match msg {
+                WorkerOut::Debug { info } => {
                     state.borrow_mut().debugger = Some(Debugger::new(info));
                     try_emit_initialized(&state);
                 }
-                "breakpoint" => {
+                WorkerOut::Paused { reason } => {
                     emit_event(
                         &state,
                         "stopped",
                         Some(json!({
-                            "reason": "breakpoint",
+                            "reason": match reason {
+                                PauseReason::Breakpoint => "breakpoint",
+                                PauseReason::Step => "step"
+                            },
                             "threadId": 1,
                             "allThreadsStopped": true,
                         })),
                     );
                 }
-                "stop" => {
+                WorkerOut::Stop { .. } => {
                     emit_event(&state, "terminated", Some(json!({ "restart": false })));
                 }
                 _ => {}

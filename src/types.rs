@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use serde_repr::Serialize_repr;
+use serde_repr::{Deserialize_repr, Serialize_repr};
 use std::collections::HashMap;
 use tsify::Tsify;
 use wasm_bindgen::JsValue;
@@ -59,7 +59,7 @@ pub struct WorkerStart {
     pub is_debug: bool,
 }
 
-#[derive(Clone, Copy, Debug, Tsify, Serialize_repr)]
+#[derive(Clone, Copy, Debug, Tsify, Serialize_repr, Deserialize_repr)]
 #[repr(u8)]
 #[tsify(type = "1 | 2")]
 pub enum StdoutMode {
@@ -67,16 +67,16 @@ pub enum StdoutMode {
     Err = 2,
 }
 
-#[derive(Tsify, Serialize)]
+#[derive(Tsify, Serialize, Deserialize)]
 #[serde(tag = "type")]
-pub enum WorkerOut<'a> {
+pub enum WorkerOut {
     #[serde(rename = "ready")]
     Ready,
     #[serde(rename = "stdout")]
     Stdout {
         #[tsify(type = "Uint8Array")]
         #[serde(with = "serde_bytes")]
-        data: &'a [u8],
+        data: Vec<u8>,
         mode: StdoutMode,
     },
     #[serde(rename = "debug")]
@@ -87,18 +87,18 @@ pub enum WorkerOut<'a> {
     Artifact {
         #[tsify(type = "Uint8Array")]
         #[serde(with = "serde_bytes")]
-        data: &'a [u8],
+        data: Vec<u8>,
         name: String,
     },
 
     /// Indicate that execution has paused
-    #[serde(rename = "breakpoint")]
+    #[serde(rename = "paused")]
     Paused { reason: PauseReason },
     #[serde(rename = "stop")]
     Stop { exit_code: i32 },
 }
 
-impl<'a> WorkerOut<'a> {
+impl WorkerOut {
     pub fn send(&self) {
         let scope = DedicatedWorkerGlobalScope::from(JsValue::from(js_sys::global()));
         scope
@@ -208,7 +208,7 @@ pub enum BreakpointMode {
     StepOut = 3,
 }
 
-#[derive(Clone, Copy, Debug, Tsify, Serialize_repr)]
+#[derive(Clone, Copy, Debug, Tsify, Serialize_repr, Deserialize_repr)]
 #[repr(u8)]
 pub enum PauseReason {
     Breakpoint = 0,

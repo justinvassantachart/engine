@@ -141,7 +141,7 @@ impl<'a> Step<'a> {
 
             if self.debug {
                 WorkerOut::Artifact {
-                    data: &wasm,
+                    data: wasm.clone(),
                     name: "pre.wasm".into(),
                 }
                 .send();
@@ -154,7 +154,7 @@ impl<'a> Step<'a> {
                 wasm = instrumented_wasm;
 
                 WorkerOut::Artifact {
-                    data: &wasm,
+                    data: wasm.clone(),
                     name: "post.wasm".into(),
                 }
                 .send();

@@ -34,10 +34,7 @@ impl Stdin {
             0,
             2, // 2 i32s: read_index and write_index
         );
-        let data = js_sys::Uint8Array::new_with_byte_offset(
-            stdin_buffer,
-            HEADER_SIZE
-        );
+        let data = js_sys::Uint8Array::new_with_byte_offset(stdin_buffer, HEADER_SIZE);
         Self { indices, data }
     }
 }
@@ -192,7 +189,7 @@ impl AsyncWrite for Stdout {
         buf: &[u8],
     ) -> Poll<io::Result<usize>> {
         WorkerOut::Stdout {
-            data: buf,
+            data: buf.to_vec(),
             mode: self.mode,
         }
         .send();
