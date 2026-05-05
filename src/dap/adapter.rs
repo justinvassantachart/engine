@@ -9,7 +9,8 @@ use wasm_bindgen::prelude::*;
 
 use crate::dap::types::{ProtocolMessage, VariablesMap};
 use crate::debug::Debugger;
-use crate::types::{PauseReason, WorkerOut};
+use crate::types::{DebugInfo, PauseReason};
+use crate::util::warning;
 
 struct DapState {
     seq_counter: i64,
@@ -332,16 +333,25 @@ impl DapAdapter {
 
         let closure = Closure::wrap(Box::new(move |event: web_sys::MessageEvent| {
             let data = event.data();
-            let Ok(msg) = serde_wasm_bindgen::from_value::<WorkerOut>(data) else {
-                return;
-            };
+            let msg_type = js_sys::Reflect::get(&data, &"type".into())
+                .ok()
+                .and_then(|v| v.as_string())
+                .unwrap_or_default();
 
-            match msg {
-                WorkerOut::Debug { info } => {
+            match msg_type.as_str() {
+                "debug" => {
+                    let info = js_sys::Reflect::get(&data, &"info".into())
+                        .expect("debug message has info field");
+                    let info: DebugInfo =
+                        serde_wasm_bindgen::from_value(info).expect("DebugInfo deserialization");
                     state.borrow_mut().debugger = Some(Debugger::new(info));
                     try_emit_initialized(&state);
                 }
-                WorkerOut::Paused { reason } => {
+                "paused" => {
+                    let reason = js_sys::Reflect::get(&data, &"reason".into())
+                        .expect("debug message has reason field");
+                    let reason: PauseReason = serde_wasm_bindgen::from_value(reason)
+                        .expect("PauseReason deserialization");
                     emit_event(
                         &state,
                         "stopped",
@@ -355,7 +365,7 @@ impl DapAdapter {
                         })),
                     );
                 }
-                WorkerOut::Stop { .. } => {
+                "stop" => {
                     emit_event(&state, "terminated", Some(json!({ "restart": false })));
                 }
                 _ => {}

@@ -59,7 +59,7 @@ pub struct WorkerStart {
     pub is_debug: bool,
 }
 
-#[derive(Clone, Copy, Debug, Tsify, Serialize_repr, Deserialize_repr)]
+#[derive(Clone, Copy, Debug, Tsify, Serialize_repr)]
 #[repr(u8)]
 #[tsify(type = "1 | 2")]
 pub enum StdoutMode {
@@ -67,16 +67,16 @@ pub enum StdoutMode {
     Err = 2,
 }
 
-#[derive(Tsify, Serialize, Deserialize)]
+#[derive(Tsify, Serialize)]
 #[serde(tag = "type")]
-pub enum WorkerOut {
+pub enum WorkerOut<'a> {
     #[serde(rename = "ready")]
     Ready,
     #[serde(rename = "stdout")]
     Stdout {
         #[tsify(type = "Uint8Array")]
         #[serde(with = "serde_bytes")]
-        data: Vec<u8>,
+        data: &'a [u8],
         mode: StdoutMode,
     },
     #[serde(rename = "debug")]
@@ -87,7 +87,7 @@ pub enum WorkerOut {
     Artifact {
         #[tsify(type = "Uint8Array")]
         #[serde(with = "serde_bytes")]
-        data: Vec<u8>,
+        data: &'a [u8],
         name: String,
     },
 
@@ -98,7 +98,7 @@ pub enum WorkerOut {
     Stop { exit_code: i32 },
 }
 
-impl WorkerOut {
+impl<'a> WorkerOut<'a> {
     pub fn send(&self) {
         let scope = DedicatedWorkerGlobalScope::from(JsValue::from(js_sys::global()));
         scope

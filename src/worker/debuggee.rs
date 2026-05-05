@@ -140,20 +140,23 @@ impl Debuggee {
     ///
     /// This is the main entry point called from instrumented WASM code.
     pub fn bkpt(&mut self, index: usize) -> bool {
-        let mode = self.bkpt_mode();
         let sp = self.stack_pointer.value().as_f64().unwrap() as i32;
 
-        let is_bkpt = self.bkpt_enabled(index);
-        let is_step = match mode {
-            BreakpointMode::Normal => false,
-            BreakpointMode::StepInto => true,
-            BreakpointMode::StepOver => sp >= self.last_sp,
-            BreakpointMode::StepOut => sp > self.last_sp,
+        let reason = if self.bkpt_enabled(index) {
+            PauseReason::Breakpoint
+        } else {
+            let mode = self.bkpt_mode();
+            let should_pause = match mode {
+                BreakpointMode::Normal => false,
+                BreakpointMode::StepInto => true,
+                BreakpointMode::StepOver => sp >= self.last_sp,
+                BreakpointMode::StepOut => sp > self.last_sp,
+            };
+            if !should_pause {
+                return false;
+            }
+            PauseReason::Step
         };
-
-        if !is_step && !is_bkpt {
-            return false;
-        }
 
         let pc = self
             .info
@@ -177,14 +180,7 @@ impl Debuggee {
         self.last_sp = sp;
         js_sys::Atomics::store(&self.state, 0, sp).unwrap();
 
-        WorkerOut::Paused {
-            reason: if is_step {
-                PauseReason::Step
-            } else {
-                PauseReason::Breakpoint
-            },
-        }
-        .send();
+        WorkerOut::Paused { reason }.send();
         self.wait_for_resume();
         true
     }
