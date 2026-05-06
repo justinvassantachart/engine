@@ -1,9 +1,8 @@
 use std::rc::Rc;
 
+use crate::debug::dwarf::Location;
 use crate::debug::{Type, TypeGraph, Variable, get_location, get_variables as debug_get_variables};
-use crate::types::{
-    BreakpointMode, DebugFunction, DebugInfo, GlobalAddress, WasmLocation,
-};
+use crate::types::{BreakpointMode, DebugFunction, DebugInfo, GlobalAddress, WasmLocation};
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::JsCast;
 
@@ -73,16 +72,23 @@ impl Debugger {
 
             let loc = self
                 .info
-                .dwarf
-                .locations()
-                .filter(|l| l.address() <= pc)
-                .max_by_key(|l| l.address());
+                .locations
+                .iter()
+                .filter(|l| l.address <= pc)
+                .max_by_key(|l| l.address);
+
             frames.push(StackFrame {
                 id: frames.len() as u32,
                 name: die.name().unwrap_or(String::new()),
-                line: loc.as_ref().map_or(0, |l| l.line() as u32),
-                column: loc.as_ref().map_or(0, |l| l.column() as u32),
-                source: loc.as_ref().map(|l| l.file.to_string_lossy().into_owned()),
+                line: loc.as_ref().map_or(0, |l| l.line as u32),
+                column: loc.as_ref().map_or(0, |l| l.column as u32),
+                source: loc.as_ref().map(|l| {
+                    self.info
+                        .dwarf
+                        .file_at(l.file_index)
+                        .to_string_lossy()
+                        .into_owned()
+                }),
             });
             pos += func.size as u32;
         }
@@ -91,7 +97,8 @@ impl Debugger {
     }
 
     /// Sets one breakpoint for one `(file, line)` pair.
-    pub fn set_breakpoint(&self, file: &str, line: i64) -> bool {
+    /// Returns the location it gets set at, if any.
+    pub fn set_breakpoint(&self, file: &str, line: i64) -> Option<&Location> {
         let flags = self.info.get_bp_flags();
 
         let target = std::path::Path::new(file);
@@ -102,18 +109,25 @@ impl Debugger {
         };
         let mut verified = false;
 
-        for (idx, loc) in self.info.dwarf.locations().enumerate() {
-            if loc.file != target {
-                continue;
-            }
-            let loc_line = loc.line() as i64;
-            if loc_line == line {
-                flags.set_index(idx as u32, 1);
-                verified = true;
-            }
-        }
+        // If a breakpoint cannot be set on the requested line,
+        // it will be set on the next executable statement.
+        //
+        // TODO: how to handle inline functions where a line
+        // may map to multiple instructions?
+        let (index, loc) = self
+            .info
+            .locations
+            .iter()
+            .enumerate()
+            .filter(|l| {
+                let file = self.info.dwarf.file_at(l.1.file_index);
+                let loc_line = l.1.line as i64;
+                *file == target && loc_line >= line
+            })
+            .min_by_key(|l| l.1.address)?;
 
-        verified
+        flags.set_index(index as u32, 1);
+        Some(loc)
     }
 
     /// Walks the debug stack to the Nth frame and returns (position, pc, func).

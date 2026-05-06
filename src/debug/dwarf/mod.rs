@@ -7,6 +7,7 @@ pub use unit::*;
 use anyhow::Result;
 use gimli::{DwarfSections, EndianRcSlice, LittleEndian, SectionId};
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::rc::Rc;
 
 use crate::util::weak_error;
@@ -84,12 +85,18 @@ impl Dwarf {
         &self.units
     }
 
-    /// Gets all locations across all compilation units
-    pub fn locations(&self) -> impl Iterator<Item = Location<'_>> {
+    /// Gets all locations across all compilation units.
+    /// This list is retrieved directly from the DWARF and represents all locations known to the compiler.
+    /// For the list of locations for which a breakpoint can be set, see [DebugInfo::locations]
+    pub fn locations(&self) -> impl Iterator<Item = Location> {
         self.units.iter().flat_map(|u| u.locations())
     }
 
-    pub fn location_at(&self, index: usize) -> Option<Location<'_>> {
-        self.units.iter().find_map(|u| u.location_at(index))
+    /// Gets the path for the file with the given index.
+    pub fn file_at(&self, index: usize) -> &PathBuf {
+        self.units
+            .iter()
+            .find_map(|u| u.file_at(index))
+            .expect("Valid file index")
     }
 }

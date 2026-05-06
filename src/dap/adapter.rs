@@ -10,7 +10,6 @@ use wasm_bindgen::prelude::*;
 use crate::dap::types::{ProtocolMessage, VariablesMap};
 use crate::debug::Debugger;
 use crate::types::{DebugInfo, PauseReason};
-use crate::util::warning;
 
 struct DapState {
     seq_counter: i64,
@@ -85,8 +84,12 @@ impl DapState {
         let bps: Vec<_> = lines
             .iter()
             .map(|line| {
-                let verified = dbg.set_breakpoint(source, *line);
-                json!({ "verified": verified, "line": line })
+                let location = dbg.set_breakpoint(source, *line);
+                if let Some(location) = location {
+                    json!({ "verified": true, "line": location.line })
+                } else {
+                    json!({ "verified": false })
+                }
             })
             .collect();
         Ok(json!({ "breakpoints": bps }))

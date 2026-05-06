@@ -1,7 +1,4 @@
-use std::{
-    num::NonZeroU64,
-    path::{Path, PathBuf},
-};
+use std::{num::NonZeroU64, path::PathBuf};
 
 use crate::{
     debug::dwarf::{DerefContext, Die, Dwarf},
@@ -11,13 +8,14 @@ use crate::{
 
 use super::R;
 use gimli::{Reader, UnitHeader};
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone)]
 pub struct UnitProperties {
     /// The index of this unit among all units in the dwarf output
     index: usize,
-    /// The index of the first location in this unit in the global locations list
-    loc_offset: usize,
+    /// The index of the first file in this unit in the global locations list
+    file_offset: usize,
 }
 
 #[derive(Debug)]
@@ -26,54 +24,19 @@ pub struct Unit {
     unit: gimli::Unit<R>,
     properties: UnitProperties,
     files: Vec<PathBuf>,
-    /// Information about the lines in this unit.
-    /// Each of these is theoretically a breakable program statement
-    /// (whether it actually is depends on if instrumentation code was generated)
-    lines: Vec<LineRow>,
 }
 
-#[derive(PartialEq, Debug, Clone)]
-#[repr(Rust, packed)]
-pub struct LineRow {
-    /// PC address within code segment
-    address: GlobalAddress,
-    /// Index of corresponding file within this unit
-    file_index: usize,
+#[derive(PartialEq, Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct Location {
+    /// Address within code segment
+    pub address: GlobalAddress,
+    /// Index of the corresponding file.
+    /// Use [Dwarf::file_at] to get the associated [PathBuf].
+    pub file_index: usize,
     /// Line number within file (one-indexed)
-    line: usize,
-    /// Column number (0 is left edge)
-    column: usize,
-}
-
-impl LineRow {
-    #[inline]
-    pub fn address(&self) -> GlobalAddress {
-        self.address
-    }
-
-    #[inline]
-    pub fn line(&self) -> usize {
-        self.line
-    }
-
-    #[inline]
-    pub fn column(&self) -> usize {
-        self.column
-    }
-}
-
-pub struct Location<'a> {
-    pub unit: &'a Unit,
-    pub line: &'a LineRow,
-    pub file: &'a Path,
-}
-
-impl<'a> std::ops::Deref for Location<'a> {
-    type Target = LineRow;
-
-    fn deref(&self) -> &Self::Target {
-        &self.line
-    }
+    pub line: usize,
+    /// Column number (one-indexed)
+    pub column: usize,
 }
 
 impl std::ops::Deref for Unit {
@@ -96,7 +59,6 @@ impl Unit {
             unit,
             properties: self.properties.clone(),
             files: self.files.clone(),
-            lines: self.lines.clone(),
         }
     }
 
@@ -116,28 +78,27 @@ impl Unit {
         self.properties.index
     }
 
-    pub fn locations(&self) -> impl Iterator<Item = Location<'_>> {
-        self.lines.iter().map(|l| Location {
-            unit: self,
-            line: l,
-            file: &self.files[l.file_index as usize],
-        })
+    pub fn locations(&self) -> impl Iterator<Item = Location> {
+        let Some(line_program) = self.unit.line_program.clone() else {
+            return Vec::new().into_iter();
+        };
+
+        let mut rows = line_program.rows();
+        weak_error!(parse_lines(self.properties.file_offset, &mut rows))
+            .unwrap_or_default()
+            .into_iter()
     }
 
-    pub fn location_at(&self, index: usize) -> Option<Location<'_>> {
-        let local_index = index.checked_sub(self.properties.loc_offset)?;
-        self.lines.get(local_index).map(|line| Location {
-            unit: self,
-            line,
-            file: &self.files[line.file_index as usize],
-        })
+    pub fn file_at(&self, index: usize) -> Option<&PathBuf> {
+        let local_index = index.checked_sub(self.properties.file_offset)?;
+        self.files.get(local_index)
     }
 }
 
 pub struct UnitParser<'a> {
     dwarf: &'a gimli::Dwarf<R>,
     unit_index: usize,
-    loc_index: usize,
+    file_index: usize,
 }
 
 impl<'a> UnitParser<'a> {
@@ -145,7 +106,7 @@ impl<'a> UnitParser<'a> {
         UnitParser {
             dwarf,
             unit_index: 0,
-            loc_index: 0,
+            file_index: 0,
         }
     }
 
@@ -153,35 +114,33 @@ impl<'a> UnitParser<'a> {
         let unit = weak_error!(self.dwarf.unit(header))?;
 
         let mut files = vec![];
-        let mut lines = vec![];
         if let Some(ref lp) = unit.line_program {
-            let mut rows = lp.clone().rows();
-            lines = weak_error!(parse_lines(&mut rows))?;
+            let rows = lp.clone().rows();
             files = weak_error!(parse_files(self.dwarf, &unit, &rows))?;
         }
 
         let index = self.unit_index;
         self.unit_index += 1;
 
-        let loc_offset = self.loc_index;
-        self.loc_index += lines.len();
+        let file_offset = self.file_index;
+        self.file_index += files.len();
 
         Some(Unit {
-            properties: UnitProperties { index, loc_offset },
+            properties: UnitProperties { index, file_offset },
             unit,
             files,
-            lines,
         })
     }
 }
 
 fn parse_lines(
+    file_offset: usize,
     rows: &mut gimli::LineRows<R, gimli::IncompleteLineProgram<R>>,
-) -> gimli::Result<Vec<LineRow>> {
+) -> gimli::Result<Vec<Location>> {
     let mut lines = vec![];
     while let Some((_, line_row)) = rows.next_row()? {
         let column = match line_row.column() {
-            gimli::ColumnType::LeftEdge => 0,
+            gimli::ColumnType::LeftEdge => 1,
             gimli::ColumnType::Column(x) => x.get(),
         };
 
@@ -189,9 +148,9 @@ fn parse_lines(
             continue;
         }
 
-        lines.push(LineRow {
+        lines.push(Location {
             address: line_row.address().into(),
-            file_index: line_row.file_index() as usize,
+            file_index: file_offset + line_row.file_index() as usize,
             line: line_row.line().map(NonZeroU64::get).unwrap_or(0) as usize,
             column: column as usize,
         })

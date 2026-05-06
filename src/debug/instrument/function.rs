@@ -34,17 +34,17 @@ impl WasmLocations {
     }
 }
 
-pub struct FnInstrumenter<'a, 'b, 'c> {
-    instr: &'a mut Instrumenter<'b>,
+pub struct FnInstrumenter<'a, 'b> {
+    instr: &'a mut Instrumenter,
     func_idx: usize,
-    func_body: wasmparser::FunctionBody<'c>,
+    func_body: wasmparser::FunctionBody<'b>,
 
     /// A [wasmparser] validator used to track the types of locals and operands
     /// throughout the instrumentation of this function
     validator: wasmparser::FuncValidator<wasmparser::ValidatorResources>,
 
     /// A vector of instructions forming the body of the instrumented function
-    instructions: Vec<Instruction<'c>>,
+    instructions: Vec<Instruction<'b>>,
 
     /// During instrumentation, the size of the function's debug frame is not
     /// yet known. This vector stores indexes into [FnInstrumenter::instructions]
@@ -65,11 +65,11 @@ pub struct FnInstrumenter<'a, 'b, 'c> {
     scratch_locals: Vec<wasmparser::ValType>,
 }
 
-impl<'a, 'b, 'c> FnInstrumenter<'a, 'b, 'c> {
+impl<'a, 'b> FnInstrumenter<'a, 'b> {
     pub fn new(
-        instr: &'a mut Instrumenter<'b>,
+        instr: &'a mut Instrumenter,
         func_idx: usize,
-        func_body: wasmparser::FunctionBody<'c>,
+        func_body: wasmparser::FunctionBody<'b>,
     ) -> InstrResult<Self> {
         let mut validator = instr
             .validator
@@ -92,14 +92,14 @@ impl<'a, 'b, 'c> FnInstrumenter<'a, 'b, 'c> {
     }
 
     fn func(&self) -> &DebugFunction {
-        &self.instr.info.functions[self.func_idx]
+        &self.instr.functions[self.func_idx]
     }
 
     fn func_mut(&mut self) -> &mut DebugFunction {
-        &mut self.instr.info.functions[self.func_idx]
+        &mut self.instr.functions[self.func_idx]
     }
 
-    fn emit_op(&mut self, op: wasmparser::Operator<'c>) -> InstrResult {
+    fn emit_op(&mut self, op: wasmparser::Operator<'b>) -> InstrResult {
         self.instructions.push(self.instr.instruction(op)?);
         Ok(())
     }
@@ -128,7 +128,7 @@ impl<'a, 'b, 'c> FnInstrumenter<'a, 'b, 'c> {
         self.stack_intructions.push(instr_count + 1);
     }
 
-    fn emit_call(&mut self, pc: GlobalAddress, op: wasmparser::Operator<'c>) -> InstrResult {
+    fn emit_call(&mut self, pc: GlobalAddress, op: wasmparser::Operator<'b>) -> InstrResult {
         self.instructions.extend([
             Instruction::GlobalGet(self.instr.sp_gl_index),
             Instruction::I32Const(pc.0 as i32),
@@ -176,7 +176,7 @@ impl<'a, 'b, 'c> FnInstrumenter<'a, 'b, 'c> {
         Ok(locs)
     }
 
-    fn emit_bkpt(&mut self, bkpt_idx: usize, pc: GlobalAddress) -> InstrResult {
+    fn emit_bkpt(&mut self, loc_idx: usize, pc: GlobalAddress) -> InstrResult {
         // High-level goal:
         // Loop through all variables of the function.
         // For every variable with an active location at this point in the
@@ -194,7 +194,7 @@ impl<'a, 'b, 'c> FnInstrumenter<'a, 'b, 'c> {
         self.emit_globals(&locs)?;
 
         self.instructions
-            .push(Instruction::I32Const(bkpt_idx as i32));
+            .push(Instruction::I32Const(loc_idx as i32));
         self.instructions
             .push(Instruction::Call(self.instr.bkpt_fn_index));
         Ok(())
@@ -370,23 +370,13 @@ impl<'a, 'b, 'c> FnInstrumenter<'a, 'b, 'c> {
             .get_operators_reader()
             .map_err(reencode::Error::from)?;
 
-        let body_rel_start = self.instr.code_ofs(self.func_body.range().start);
-        let first_instr_rel = self.instr.code_ofs(reader.original_position());
-
-        for pc in body_rel_start.0..first_instr_rel.0 {
-            let pc = GlobalAddress(pc);
-            let Some(bkpt_idx) = self.instr.breakpoints.get(&pc).copied() else {
-                continue;
-            };
-            self.emit_bkpt(bkpt_idx, pc)?;
-        }
-
         while !reader.eof() {
             let (op, binary_ofs) = reader.read_with_offset().map_err(reencode::Error::from)?;
             let pc = self.instr.code_ofs(binary_ofs);
 
-            if let Some(&bkpt_idx) = self.instr.breakpoints.get(&pc) {
-                self.emit_bkpt(bkpt_idx, pc)?;
+            if let Some(&location) = self.instr.breakpoints.get(&pc) {
+                let loc_index = self.instr.next_location(location);
+                self.emit_bkpt(loc_index, pc)?;
             }
 
             // Pass this operator to the wasmparser validator. It will internally
@@ -461,10 +451,10 @@ impl<'a, 'b, 'c> FnInstrumenter<'a, 'b, 'c> {
             .map_err(reencode::Error::from)?
         {
             let (cnt, ty) = pair.map_err(reencode::Error::from)?;
-            locals.push((cnt, reencode::Reencode::val_type(self.instr, ty)?));
+            locals.push((cnt, self.instr.val_type(ty)?));
         }
-        for ty in &self.scratch_locals {
-            locals.push((1, reencode::Reencode::val_type(self.instr, *ty)?));
+        for &ty in &self.scratch_locals {
+            locals.push((1, self.instr.val_type(ty)?));
         }
 
         /* Emit the new function with new instructions and return */

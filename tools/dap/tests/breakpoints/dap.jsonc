@@ -55,6 +55,11 @@
       "type": "request",
       "command": "continue",
       "arguments": { "threadId": "{{thread}}" }
+    },
+    {
+      "type": "request",
+      "command": "continue",
+      "arguments": { "threadId": "{{thread}}" }
     }
   ]
 }

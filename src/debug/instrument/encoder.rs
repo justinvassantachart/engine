@@ -1,35 +1,136 @@
 use std::collections::HashMap;
 
 use super::{Error, FnInstrumenter, InstrResult};
-use crate::types::{DebugInfo, GlobalAddress};
+use crate::{
+    debug::dwarf::{Dwarf, Location},
+    types::{BP_PREFIX_BYTES, DebugFunction, DebugInfo, GlobalAddress, MemoryDescriptor},
+    util::supports_wasm_multi_memory,
+};
+use anyhow::Result;
 use wasm_encoder::reencode::{self};
+use wasmparser::Payload;
 
-pub struct Instrumenter<'a> {
-    pub info: &'a mut DebugInfo,
+pub struct InstrumenterInfo {
+    pub dwarf: Dwarf,
+    pub memory: MemoryDescriptor,
+    pub stack: MemoryDescriptor,
+}
+
+impl InstrumenterInfo {
+    pub fn new(wasm: &[u8]) -> Result<InstrumenterInfo> {
+        let mut sections: HashMap<&str, &[u8]> = HashMap::new();
+        let mut memory_initial = 0u32;
+
+        for payload in wasmparser::Parser::new(0).parse_all(wasm) {
+            let payload = payload?;
+            match payload {
+                Payload::CustomSection(reader) => {
+                    sections.insert(reader.name(), reader.data());
+                }
+                Payload::MemorySection(reader) => {
+                    for mem in reader {
+                        let mem = mem?;
+                        memory_initial = mem.initial as u32;
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        let dwarf = Dwarf::from_sections(&sections)?;
+        let supports_mm = supports_wasm_multi_memory();
+        let memory = if supports_mm {
+            MemoryDescriptor::new(memory_initial, 16 * memory_initial)
+        } else {
+            // No multi-memory support: reserve extra main memory capacity for debug stack data.
+            MemoryDescriptor::new(16 * memory_initial, 16 * memory_initial)
+        };
+
+        let stack = if supports_mm {
+            MemoryDescriptor::new(16, 16)
+        } else {
+            memory.clone()
+        };
+
+        Ok(InstrumenterInfo {
+            dwarf,
+            memory,
+            stack,
+        })
+    }
+
+    /// Whether we store the debug stack separately from the main program memory.
+    pub fn is_multi_memory(&self) -> bool {
+        !js_sys::Object::is(self.memory.memory.as_ref(), self.stack.memory.as_ref())
+    }
+}
+
+fn parse_debug_functions(dwarf: &Dwarf) -> Vec<DebugFunction> {
+    let mut fns = dwarf
+        .units()
+        .iter()
+        .flat_map(|unit| {
+            let Some(root) = unit.root(dwarf) else {
+                return Vec::new();
+            };
+
+            root.collect_children(|child| {
+                if child.tag() != gimli::DW_TAG_subprogram {
+                    return None;
+                }
+
+                let Some((low_pc, high_pc)) = child.addr_range() else {
+                    return None;
+                };
+
+                Some(DebugFunction {
+                    low_pc,
+                    high_pc,
+                    die_ref: child.die_ref(),
+                    size: 0,
+                    layout: Vec::default(),
+                })
+            })
+        })
+        .collect::<Vec<DebugFunction>>();
+    fns.sort_by_key(|f| f.low_pc);
+    fns
+}
+
+pub struct Instrumenter {
+    pub info: InstrumenterInfo,
+    pub functions: Vec<DebugFunction>,
+    pub locations: Vec<Location>,
+
     pub validator: wasmparser::Validator,
     pub bkpt_type_index: u32,
     pub bkpt_fn_index: u32,
     pub stack_mem_index: u32,
     pub sp_gl_index: u32,
 
-    pub num_imported_functions: u32,
-    pub num_imported_globals: u32,
+    num_imported_functions: u32,
+    num_imported_globals: u32,
+    code_section_start: usize,
 
-    pub code_section_start: usize,
-
-    /// Map from code-section byte offset to breakpoint index (1-based; 0 is sentinel).
-    pub breakpoints: std::collections::HashMap<GlobalAddress, usize>,
+    /// Map from code-section byte offset to location
+    pub breakpoints: std::collections::HashMap<GlobalAddress, Location>,
 }
 
-impl<'a> Instrumenter<'a> {
-    pub fn new(info: &'a mut DebugInfo) -> Self {
-        let mut breakpoints = HashMap::new();
-        for (index, loc) in info.dwarf.locations().enumerate() {
-            breakpoints.entry(loc.address()).or_insert(index);
-        }
-        let stack_mem_index = if info.is_multi_memory() { 1 } else { 0 };
+impl Instrumenter {
+    pub fn new(wasm: &[u8]) -> Result<Self> {
+        let info = InstrumenterInfo::new(wasm)?;
 
-        Self {
+        let mut breakpoints = HashMap::new();
+        for loc in info.dwarf.locations() {
+            breakpoints.entry(loc.address).or_insert(loc);
+        }
+
+        let stack_mem_index = if supports_wasm_multi_memory() { 1 } else { 0 };
+
+        Ok(Self {
+            functions: parse_debug_functions(&info.dwarf),
+            locations: Vec::new(),
             info,
             validator: wasmparser::Validator::new(),
             bkpt_type_index: 0,
@@ -40,13 +141,38 @@ impl<'a> Instrumenter<'a> {
             num_imported_globals: 0,
             code_section_start: 0,
             breakpoints,
-        }
+        })
     }
 
     /// Converts an offset into the WASM binary into an offset relative to the code section.
     /// DWARF represents PC values relative to start of the code section.
     pub fn code_ofs(&self, address: usize) -> GlobalAddress {
         GlobalAddress(address.saturating_sub(self.code_section_start) as u64)
+    }
+
+    pub fn next_location(&mut self, location: Location) -> usize {
+        let idx = self.locations.len();
+        self.locations.push(location);
+        idx
+    }
+
+    pub fn finish(self) -> DebugInfo {
+        let InstrumenterInfo {
+            memory,
+            stack,
+            dwarf,
+        } = self.info;
+
+        DebugInfo {
+            breakpoints: js_sys::SharedArrayBuffer::new(
+                (BP_PREFIX_BYTES + self.locations.len()) as u32,
+            ),
+            locations: self.locations,
+            functions: self.functions,
+            memory,
+            stack,
+            dwarf,
+        }
     }
 }
 
@@ -83,7 +209,7 @@ fn count_global_imports(imports: &wasmparser::Imports<'_>) -> u32 {
     count_imports(imports, |ty| matches!(ty, TypeRef::Global(_)))
 }
 
-impl<'a> reencode::Reencode for Instrumenter<'a> {
+impl reencode::Reencode for Instrumenter {
     type Error = Error;
 
     fn function_index(&mut self, func: u32) -> InstrResult<u32> {
@@ -235,9 +361,9 @@ impl<'a> reencode::Reencode for Instrumenter<'a> {
         /* Get the debug function entry for this function based on its address */
         let body_start = func.range().start;
         let code_ofs = self.code_ofs(body_start);
-        let debug_func_idx = self.info.fn_index_at(code_ofs.into());
+        let func_idx = self.functions.iter().position(|f| f.low_pc == code_ofs);
 
-        let Some(debug_func_idx) = debug_func_idx else {
+        let Some(func_idx) = func_idx else {
             // If this is not a function with a corresponding DWARF entry,
             // then we will not do any instrumentation on it and will just emit it as-is.
             //
@@ -247,7 +373,7 @@ impl<'a> reencode::Reencode for Instrumenter<'a> {
             return reencode::utils::parse_function_body::<Self>(self, code, func);
         };
 
-        let fn_instr = FnInstrumenter::new(self, debug_func_idx, func)?;
+        let fn_instr = FnInstrumenter::new(self, func_idx, func)?;
         code.function(&fn_instr.instrument()?);
 
         Ok(())

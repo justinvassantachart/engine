@@ -1,5 +1,5 @@
 use crate::types::{BreakpointMode, DebugInfo, PauseReason, WorkerOut};
-use crate::util::{warning, weak_error};
+use crate::util::{supports_wasm_multi_memory, warning, weak_error};
 use js_sys::{Object, Reflect, WebAssembly};
 use wasm_bindgen::JsCast;
 use wasm_bindgen::prelude::*;
@@ -160,9 +160,9 @@ impl Debuggee {
 
         let pc = self
             .info
-            .dwarf
-            .location_at(index)
-            .map(|location| location.address());
+            .locations
+            .get(index)
+            .map(|location| location.address);
 
         let Some(pc) = pc else {
             warning!(

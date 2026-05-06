@@ -6,7 +6,7 @@ use wasm_bindgen::JsValue;
 use wasmer::{MemoryType, Pages};
 use web_sys::DedicatedWorkerGlobalScope;
 
-use crate::debug::dwarf::{DieReference, Dwarf};
+use crate::debug::dwarf::{DieReference, Dwarf, Location};
 
 // ============================================================================
 // Types
@@ -111,16 +111,6 @@ impl<'a> WorkerOut<'a> {
     }
 }
 
-#[derive(Debug, Clone, Tsify, Serialize, Deserialize)]
-pub struct LocationInfo {
-    /// Index into [DebugInfo::files]
-    pub file: usize,
-    pub line: usize,
-    pub col: usize,
-    /// Byte offset into the WASM code section for instrumentation
-    pub address: usize,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MemoryDescriptor {
     #[serde(with = "serde_wasm_bindgen::preserve")]
@@ -147,6 +137,11 @@ impl MemoryDescriptor {
 pub struct DebugInfo {
     /// List of debuggable functions, sorted by low_pc
     pub functions: Vec<DebugFunction>,
+
+    /// List of locations where breakpoints can be placed.
+    /// Each location has had instrumentation code generated for it,
+    /// and has an entry in [DebugInfo::breakpoints].
+    pub locations: Vec<Location>,
 
     /// This buffer encodes execution state and breakpoint metadata in a
     /// compact, fixed layout. All fields are little-endian.
