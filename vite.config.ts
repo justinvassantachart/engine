@@ -9,15 +9,18 @@ export default defineConfig({
   plugins: [wasm(), dts()],
   worker: {
     format: 'es',
-    plugins: () => [wasm()],
+    plugins: () => [wasm()]
   },
   build: {
     outDir,
     lib: {
       entry: 'src/ts/index.ts',
       name: 'runtime',
-    },
-  },
+      // Pin output filename so a package rename doesn't silently break the
+      // `main`/`module`/`exports` paths (which expect `runtime.{js,umd.cjs}`).
+      fileName: (format) => (format === 'es' ? 'runtime.js' : 'runtime.umd.cjs')
+    }
+  }
 });
 
 function wasm(): PluginOption {
@@ -74,6 +77,6 @@ function wasm(): PluginOption {
           const buf = Uint8Array.from(atob(src), c => c.charCodeAt(0));
           export default buf;
         `;
-    },
+    }
   };
 }

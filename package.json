@@ -1,6 +1,6 @@
 {
   "name": "debugger-sh",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "description": "A browser-based runtime and debugger powered by WebAssembly",
   "keywords": [
     "wasm",
