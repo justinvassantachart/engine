@@ -179,7 +179,7 @@ rt.debugger.on('event', handler); // receive async DAP events
 
 ## Example project
 
-See the [`demo/`](./demo) app for a Next.js + MUI example that wires up CodeMirror 6, xterm.js, and `debugger-sh` into a working in-browser IDE. Start from [`demo/README.md`](./demo/README.md) and [`demo/components/CodeEditor.tsx`](./demo/components/CodeEditor.tsx).
+For a full reference integration, see the [debugger.sh IDE](https://github.com/debugger-sh/debugger.sh) — a Next.js + MUI app that wires up CodeMirror 6, xterm.js, and `debugger-sh` into a working in-browser IDE.
 
 ---
 
@@ -199,11 +199,11 @@ For local development, use:
 npm run dev
 ```
 
-To run the built-in demo:
+To try changes against the reference IDE, clone [debugger-sh/debugger.sh](https://github.com/debugger-sh/debugger.sh) alongside this repo and link the package:
 
 ```bash
-npm link
-cd demo
+npm link                       # in this repo
+cd ../debugger.sh
 npm link debugger-sh
 npm run dev
 ```
