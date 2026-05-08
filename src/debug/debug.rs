@@ -1,7 +1,10 @@
 use std::rc::Rc;
 
 use crate::debug::dwarf::Location;
-use crate::debug::{Type, TypeGraph, Variable, get_location, get_variables as debug_get_variables};
+use crate::debug::{
+    ChildrenProvider, Type, TypeGraph, Variable, get_location,
+    get_variables as debug_get_variables,
+};
 use crate::types::{BreakpointMode, DebugFunction, DebugInfo, GlobalAddress, WasmLocation};
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::JsCast;
@@ -25,13 +28,37 @@ pub struct Debugger {
     info: DebugInfo,
     types: Rc<TypeGraph>,
     state: js_sys::Int32Array,
+    formatters: Vec<Box<dyn ChildrenProvider>>,
 }
 
 impl Debugger {
     pub fn new(info: DebugInfo) -> Self {
         let state = info.get_bp_state();
         let types = Rc::from(TypeGraph::new(&info.dwarf));
-        Self { info, state, types }
+        Self {
+            info,
+            state,
+            types,
+            formatters: Vec::new(),
+        }
+    }
+
+    /// Registers a [`ChildrenProvider`]. Providers are consulted in registration
+    /// order; the first to return `Some` wins. If none match, the default
+    /// structural expansion ([`Variable::children`]) is used.
+    pub fn add_formatter(&mut self, provider: Box<dyn ChildrenProvider>) {
+        self.formatters.push(provider);
+    }
+
+    /// Returns the children of `var`, dispatching through registered formatters
+    /// before falling back to the default expansion.
+    pub fn children(&self, var: &Variable) -> Vec<Variable> {
+        for f in &self.formatters {
+            if let Some(c) = f.children(var, &self.info) {
+                return c;
+            }
+        }
+        var.children(&self.info)
     }
 
     fn read_wasm_value(

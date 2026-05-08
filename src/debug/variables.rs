@@ -54,6 +54,14 @@ pub fn get_location(die: &Die<'_>, pc: GlobalAddress) -> Option<Expression<R>> {
     die.expression(gimli::DW_AT_location, pc)
 }
 
+/// Provides custom expansion for a [`Variable`].
+///
+/// Returning `Some` short-circuits the default structure/pointer expansion;
+/// `None` lets the next provider (or the default) handle the variable.
+pub trait ChildrenProvider {
+    fn children(&self, value: &Variable, info: &DebugInfo) -> Option<Vec<Variable>>;
+}
+
 /// A typed value backed by one or more DWARF location pieces.
 ///
 /// `pieces` describes where the bytes live (memory address, embedded value,
