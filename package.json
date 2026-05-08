@@ -1,7 +1,7 @@
 {
-  "name": "@jtrb/runtime",
-  "version": "0.2.2",
-  "description": "A browser-based C runtime powered by WASM, with stdin/stdout/stderr I/O and a debugger",
+  "name": "debugger-sh",
+  "version": "0.2.3",
+  "description": "A browser-based runtime and debugger powered by WebAssembly",
   "keywords": [
     "wasm",
     "runtime",
@@ -12,7 +12,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/jacobrobertsbaca/runtime.git"
+    "url": "git+https://github.com/debugger-sh/runtime.git"
   },
   "type": "module",
   "main": "./dist/runtime.umd.cjs",
