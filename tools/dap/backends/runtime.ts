@@ -1,6 +1,6 @@
-import type { Artifact } from '@jtrb/runtime';
 import { $ } from 'bun';
 import chalk from 'chalk';
+import type { Artifact } from 'debugger-sh';
 import { existsSync } from 'node:fs';
 import { writeFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -9,7 +9,7 @@ import process from 'node:process';
 import type { Backend, BackendOptions, Json } from '../run';
 
 export async function createRuntimeBackend(opts: BackendOptions): Promise<Backend> {
-  const { Runtime } = await import('@jtrb/runtime');
+  const { Runtime } = await import('debugger-sh');
   const runtime = await Runtime.create('c');
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   runtime.fs = opts.fsNode as unknown as any;
