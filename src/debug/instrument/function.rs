@@ -181,7 +181,7 @@ impl<'a, 'b> FnInstrumenter<'a, 'b> {
         // Loop through all variables of the function.
         // For every variable with an active location at this point in the
         // program, insert instrumentation code to store the WASM internals
-        // needed to derive the variable's value at runtime onto the debug
+        // needed to derive the variable's value at engine onto the debug
         // stack frame of this function.
         //
         // All instrumentation code must have no observable side effects.

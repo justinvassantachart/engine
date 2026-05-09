@@ -1,5 +1,5 @@
-import init, * as wasm from '../../pkg/runtime.js';
-import wasmBinary from '../../pkg/runtime_bg.wasm';
+import init, * as wasm from '../../pkg/engine.js';
+import wasmBinary from '../../pkg/engine_bg.wasm';
 import { errorResult } from './util';
 
 try {

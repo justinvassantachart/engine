@@ -15,7 +15,7 @@ export default defineConfig({
     outDir,
     lib: {
       entry: 'src/ts/index.ts',
-      name: 'runtime'
+      name: 'engine'
     }
   }
 });

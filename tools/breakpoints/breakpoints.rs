@@ -3,7 +3,7 @@ use std::env;
 use std::fs;
 use std::process;
 
-use runtime::debug::instrument::{instrument_wasm, InstrumenterResult};
+use engine::debug::instrument::{instrument_wasm, InstrumenterResult};
 use wasmparser::{Parser, Payload};
 
 fn main() {

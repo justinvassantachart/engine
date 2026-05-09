@@ -2,11 +2,11 @@
 members = [".", "tools/breakpoints"]
 
 [package]
-name = "runtime"
+name = "engine"
 version = "0.1.0"
 edition = "2024"
-description = "WebAssembly runtime and debugger"
-repository = "https://github.com/jacobrobertsbaca/runtime"
+description = "WebAssembly engine and debugger"
+repository = "https://github.com/jacobrobertsbaca/engine"
 license = "MIT"
 
 [lib]

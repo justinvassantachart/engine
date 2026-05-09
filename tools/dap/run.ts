@@ -7,8 +7,8 @@ import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 import stripJsonComments from 'strip-json-comments';
 
+import { createEngineBackend } from './backends/engine.ts';
 import { createLldbBackend } from './backends/lldb.ts';
-import { createRuntimeBackend } from './backends/runtime.ts';
 import { CaptureMap, executeSnippet, match, MatchResult, substitutePlaceholders } from './matcher';
 
 export type Json = null | boolean | number | string | Json[] | { [k: string]: Json };
@@ -122,8 +122,8 @@ function parseCli(argv: string[]): CliOpts {
   return { tests, lldb };
 }
 
-async function ensureRuntimeLinked() {
-  logInfo('installing runtime library...');
+async function ensureEngineLinked() {
+  logInfo('installing library...');
   await $`npm link`.cwd(ROOT).quiet();
   await $`npm link debugger-sh`.cwd(HERE).quiet();
 }
@@ -262,7 +262,7 @@ async function runTest(testName: string, opts: CliOpts): Promise<void> {
   const backendOpts: BackendOptions = { testDir, testOutputDir, fsNode };
   const backend = opts.lldb
     ? await createLldbBackend(backendOpts)
-    : await createRuntimeBackend(backendOpts);
+    : await createEngineBackend(backendOpts);
 
   const eventQueue: Json[] = [];
   const rawDapLog: Json[] = [];
@@ -372,7 +372,7 @@ async function main() {
     await waitForDevBuild();
     if (!existsSync(path.join(ROOT, 'dist/debugger-sh.js')))
       die(`missing dist/debugger-sh.js. Run 'npm run build' first.`);
-    await ensureRuntimeLinked();
+    await ensureEngineLinked();
   } else {
     logInfo(`${chalk.bold('--lldb')}: running against ${chalk.bold('lldb-dap')}`);
   }

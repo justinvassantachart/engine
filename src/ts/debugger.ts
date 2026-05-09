@@ -1,6 +1,6 @@
 import EventEmitter from 'events';
 
-import { DapAdapter, WorkerOut } from '../../pkg/runtime';
+import { DapAdapter, WorkerOut } from '../../pkg/engine';
 import { Internals } from './util';
 
 type DebuggerEventMap = {

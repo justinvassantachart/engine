@@ -1,6 +1,6 @@
 ## Developing and Building
 
-- `npm run dev` to run the local runtime dev loop. Changes to project files will trigger automatic rebuild
+- `npm run dev` to run the local engine dev loop. Changes to project files will trigger automatic rebuild
 - `npm run build` to build the project.
   - This command builds the Rust components to WASM and then bundles everything into the npm library.
 - `npm run tools:dap` to run a suite of integration tests against the Debugger Adapter Protocol (DAP).
