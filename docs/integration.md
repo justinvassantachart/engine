@@ -15,7 +15,7 @@ The package ships a WebAssembly binary and TypeScript bindings. Initialize it on
 ```ts
 import { Engine } from 'debugger-sh';
 
-const rt = await Engine.create('c');
+const engine = await Engine.create('c');
 ```
 
 ---
@@ -25,11 +25,11 @@ const rt = await Engine.create('c');
 Set the virtual filesystem, then call `run()`. The program sees `/main.c` as its source file.
 
 ```ts
-rt.fs = {
+engine.fs = {
   'main.c': `#include <iostream>\nint main() { std::cout << "hello\\n"; }`
 };
 
-await rt.run();
+await engine.run();
 ```
 
 **stdout / stderr** use a small event-style API: subscribe with `on('data', …)` and unsubscribe with `off` using the same listener function. Each chunk is a `Uint8Array` of UTF-8 bytes.
@@ -39,25 +39,25 @@ const decoder = new TextDecoder();
 const onOut = (chunk: Uint8Array) => {
   console.log(decoder.decode(chunk));
 };
-rt.stdout.on('data', onOut);
-rt.stderr.on('data', onOut);
+engine.stdout.on('data', onOut);
+engine.stderr.on('data', onOut);
 
 // When tearing down (optional if the engine is discarded):
-rt.stdout.off('data', onOut);
-rt.stderr.off('data', onOut);
+engine.stdout.off('data', onOut);
+engine.stderr.off('data', onOut);
 ```
 
 **stdin** exposes `write(value: string | Uint8Array)` (UTF-8 for strings):
 
 ```ts
-await rt.stdin.write('hello\n');
-await rt.stdin.write(new TextEncoder().encode('hello\n'));
+await engine.stdin.write('hello\n');
+await engine.stdin.write(new TextEncoder().encode('hello\n'));
 ```
 
 To stop a running program:
 
 ```ts
-rt.stop();
+engine.stop();
 ```
 
 ---
@@ -67,7 +67,7 @@ rt.stop();
 The debugger exposes a [Debug Adapter Protocol](https://microsoft.github.io/debug-adapter-protocol/) interface. Requests are sent synchronously and return a response. DAP messages (events, and optionally routed responses) are emitted asynchronously through the `event` listener.
 
 ```ts
-const dbg = rt.debugger;
+const dbg = engine.debugger;
 
 dbg.on('event', (msg) => {
   // receives both events (type: 'event') and — if you choose to route them here — responses
@@ -89,7 +89,7 @@ Order matches the usual DAP lifecycle:
 8. **Client →** `configurationDone`
 9. **Adapter →** `configurationDone` response — the debuggee then leaves its initial wait and **starts running**
 
-Call `run()` when the worker should compile and execute; the worker blocks until step **8** completes. A typical pattern is: register `dbg.on('event', …)`, send **`initialize`**, then **`await rt.run()`** (which starts the worker). React to **`initialized`** with steps **5–8**.
+Call `run()` when the worker should compile and execute; the worker blocks until step **8** completes. A typical pattern is: register `dbg.on('event', …)`, send **`initialize`**, then **`await engine.run()`** (which starts the worker). React to **`initialized`** with steps **5–8**.
 
 ```ts
 let seq = 1;
@@ -118,7 +118,7 @@ dbg.on('event', (msg: { type: string; event?: string }) => {
 });
 
 dbg.send({ type: 'request', seq: seq++, command: 'initialize', arguments: {} });
-await rt.run();
+await engine.run();
 ```
 
 ### Handling a pause (`stopped`)
