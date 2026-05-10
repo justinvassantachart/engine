@@ -162,6 +162,17 @@ impl Type {
             _ => None,
         }
     }
+
+    pub fn ns(&self) -> NamespaceHierarchy {
+        match self.resolved() {
+            Some(TypeDeclaration::Scalar { ns, .. })
+            | Some(TypeDeclaration::Array { ns, .. })
+            | Some(TypeDeclaration::Referential { ns, .. })
+            | Some(TypeDeclaration::Structure { ns, .. })
+            | Some(TypeDeclaration::ModifiedType { ns, .. }) => ns.clone(),
+            None => NamespaceHierarchy::default(),
+        }
+    }
 }
 
 fn decl_name(decl: Option<&TypeDeclaration>, graph: &TypeGraph) -> String {
