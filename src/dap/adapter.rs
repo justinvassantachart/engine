@@ -323,7 +323,7 @@ impl DapAdapter {
     ///   `initialize` again. Keeping `client_initialized` true means the next `debug` message can
     ///   emit `initialized` immediately without waiting for another `initialize` request. That is
     /// intentional for this embedding. A client that wants a strict fresh DAP session per run
-    /// should send `initialize` again (and/or construct a new runtime so the adapter is new).
+    /// should send `initialize` again (and/or construct a new engine so the adapter is new).
     pub fn attach(&self, worker: web_sys::Worker) {
         {
             let mut s = self.state.borrow_mut();

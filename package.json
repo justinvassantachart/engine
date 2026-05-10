@@ -12,17 +12,17 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/debugger-sh/runtime.git"
+    "url": "git+https://github.com/debugger-sh/engine.git"
   },
   "type": "module",
-  "main": "./dist/runtime.umd.cjs",
-  "module": "./dist/runtime.js",
+  "main": "./dist/debugger-sh.umd.cjs",
+  "module": "./dist/debugger-sh.js",
   "types": "./dist/index.d.ts",
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
-      "import": "./dist/runtime.js",
-      "require": "./dist/runtime.umd.cjs"
+      "import": "./dist/debugger-sh.js",
+      "require": "./dist/debugger-sh.umd.cjs"
     }
   },
   "files": [

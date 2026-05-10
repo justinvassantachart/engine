@@ -1,6 +1,6 @@
 # debugger-sh
 
-A browser-based C++ runtime powered by WebAssembly. Compile and run C++ programs entirely in the browser, with stdin/stdout/stderr I/O and a built-in debugger.
+A browser-based execution engine powered by WebAssembly. Compile and run C++ programs entirely in the browser with a built-in debugger.
 
 ## Installation
 
@@ -8,7 +8,7 @@ A browser-based C++ runtime powered by WebAssembly. Compile and run C++ programs
 npm install debugger-sh
 ```
 
-> **Requirements:** Your bundler or server must set these HTTP headers, as the runtime uses `SharedArrayBuffer` for stdin:
+> **Requirements:** Your bundler or server must set these HTTP headers, as the engine uses `SharedArrayBuffer` for stdin:
 >
 > ```
 > Cross-Origin-Embedder-Policy: require-corp
@@ -22,10 +22,10 @@ npm install debugger-sh
 ## Quick start
 
 ```ts
-import { Runtime } from 'debugger-sh';
+import { Engine } from 'debugger-sh';
 
-// 1. Create the runtime (loads and compiles the WASM module)
-const rt = await Runtime.create('c');
+// 1. Create the engine (loads and compiles the WASM module)
+const rt = await Engine.create('c');
 
 // 2. Set the virtual filesystem — the program sees these as real files
 rt.fs = {
@@ -54,7 +54,7 @@ await rt.run();
 
 ## The DAP handshake
 
-The runtime compiles programs in **debug mode**, which means a DAP (Debug Adapter Protocol) debugger is always active. The worker **blocks at startup** and will not execute your program until the handshake is complete.
+The engine compiles programs in **debug mode**, which means a DAP (Debug Adapter Protocol) debugger is always active. The worker **blocks at startup** and will not execute your program until the handshake is complete.
 
 This is a required step — skipping it will cause `rt.run()` to hang forever.
 
@@ -73,12 +73,12 @@ const dapSend = (command: string, args: Record<string, unknown>) => {
 };
 
 // Register the event listener BEFORE sending initialize.
-// All async events from the runtime arrive here — initialized, stopped, etc.
+// All async events from the engine arrive here — initialized, stopped, etc.
 rt.debugger.on('event', (msg) => {
   const m = msg as { type?: string; event?: string };
 
   if (m?.type === 'event' && m?.event === 'initialized') {
-    // The runtime is ready to receive configuration.
+    // The engine is ready to receive configuration.
     // Send an empty breakpoint list for now.
     dapSend('setBreakpoints', { source: { path: '/main.c' }, breakpoints: [] });
     dapSend('setExceptionBreakpoints', { filters: [] });
@@ -96,7 +96,7 @@ await rt.run();
 
 ### Why DAP?
 
-The runtime exposes a full DAP interface so that IDEs can add debugging features (breakpoints, stepping, variable inspection) without any special runtime changes. Everything goes through standard DAP requests and events.
+The engine exposes a full DAP interface so that IDEs can add debugging features (breakpoints, stepping, variable inspection) without any special engine changes. Everything goes through standard DAP requests and events.
 
 **What works today:**
 
@@ -158,15 +158,15 @@ rt.stop(); // terminates the worker immediately; rt.run() resolves
 ## Full API
 
 ```ts
-// Create a runtime for the given language ('c' is currently supported)
-const rt = await Runtime.create('c');
+// Create a engine for the given language ('c' is currently supported)
+const rt = await Engine.create('c');
 
 rt.fs; // DirNode  — virtual filesystem, set before calling run()
-rt.stdout; // RuntimeOutput — program stdout; use .on('data', fn) / .off('data', fn)
-rt.stderr; // RuntimeOutput — program stderr
-rt.stdin; // RuntimeStdin — program stdin; use .write(string | Uint8Array)
+rt.stdout; // EngineOutput — program stdout; use .on('data', fn) / .off('data', fn)
+rt.stderr; // EngineOutput — program stderr
+rt.stdin; // EngineStdin — program stdin; use .write(string | Uint8Array)
 rt.debugger; // Debugger — DAP interface
-rt.lang; // Lang     — language this runtime was created for
+rt.lang; // Lang     — language this engine was created for
 
 rt.run(); // Promise<void> — start execution, resolves on exit
 rt.stop(); // void         — kill the worker

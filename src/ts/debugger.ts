@@ -1,6 +1,8 @@
 import EventEmitter from 'events';
 
-import { DapAdapter, WorkerOut } from '../../pkg/runtime';
+/* eslint-disable-next-line @typescript-eslint/no-unused-vars */
+import { type Engine } from '.';
+import { DapAdapter, WorkerOut } from '../../pkg/engine';
 import { Internals } from './util';
 
 type DebuggerEventMap = {
@@ -42,6 +44,12 @@ export class Debugger extends EventEmitter<DebuggerEventMap> {
   };
 
   private readonly dap: DapAdapter;
+
+  /**
+   * Whether or not debugging is enabled.
+   * Changes will takes effect during the next call to {@link Engine.run}.
+   */
+  public enabled: boolean = true;
 
   constructor() {
     super();

@@ -177,7 +177,7 @@ dependencies = [
 name = "breakpoints"
 version = "0.1.0"
 dependencies = [
- "runtime",
+ "engine",
  "wasmparser 0.245.1",
 ]
 
@@ -711,6 +711,35 @@ name = "encode_unicode"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "34aa73646ffb006b8f5147f3dc182bd4bcb190227ce861fc4a4844bf8e3cb2c0"
+
+[[package]]
+name = "engine"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "console_error_panic_hook",
+ "flate2",
+ "futures",
+ "gimli 0.33.1",
+ "instant",
+ "js-sys",
+ "serde",
+ "serde-wasm-bindgen",
+ "serde_bytes",
+ "serde_json",
+ "serde_repr",
+ "tar",
+ "tsify",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "wasm-encoder 0.245.1",
+ "wasmer",
+ "wasmer-config",
+ "wasmer-wasix",
+ "wasmparser 0.245.1",
+ "web-sys",
+]
 
 [[package]]
 name = "enum-iterator"
@@ -1975,35 +2004,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.114",
-]
-
-[[package]]
-name = "runtime"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "console_error_panic_hook",
- "flate2",
- "futures",
- "gimli 0.33.1",
- "instant",
- "js-sys",
- "serde",
- "serde-wasm-bindgen",
- "serde_bytes",
- "serde_json",
- "serde_repr",
- "tar",
- "tsify",
- "wasm-bindgen",
- "wasm-bindgen-futures",
- "wasm-encoder 0.245.1",
- "wasmer",
- "wasmer-config",
- "wasmer-wasix",
- "wasmparser 0.245.1",
- "web-sys",
 ]
 
 [[package]]

@@ -82,7 +82,7 @@ pub enum WorkerOut<'a> {
     #[serde(rename = "debug")]
     Debug { info: DebugInfo },
 
-    /// Emit a build/runtime artifact for the main thread to consume.
+    /// Emit a build/engine artifact for the main thread to consume.
     #[serde(rename = "artifact")]
     Artifact {
         #[tsify(type = "Uint8Array")]

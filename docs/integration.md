@@ -1,6 +1,6 @@
 # Integration Guide
 
-This guide is for teams building an IDE or editor on top of this runtime. It covers setting up code execution and the debugger.
+This guide is for teams building an IDE or editor on top of this engine. It covers setting up code execution and the debugger.
 
 ---
 
@@ -13,9 +13,9 @@ npm install debugger-sh
 The package ships a WebAssembly binary and TypeScript bindings. Initialize it once before use:
 
 ```ts
-import { Runtime } from 'debugger-sh';
+import { Engine } from 'debugger-sh';
 
-const rt = await Runtime.create('c');
+const rt = await Engine.create('c');
 ```
 
 ---
@@ -42,7 +42,7 @@ const onOut = (chunk: Uint8Array) => {
 rt.stdout.on('data', onOut);
 rt.stderr.on('data', onOut);
 
-// When tearing down (optional if the runtime is discarded):
+// When tearing down (optional if the engine is discarded):
 rt.stdout.off('data', onOut);
 rt.stderr.off('data', onOut);
 ```
@@ -84,7 +84,7 @@ Order matches the usual DAP lifecycle:
 3. **Adapter** builds the internal debugger when the worker sends its `debug` message (instrumented binary ready).
 4. **Adapter →** `initialized` event — emitted only after step **2** has completed **and** step **3** has happened (so the client never configures before the adapter is ready).
 5. **Client →** `setBreakpoints` (zero or more; one request per source file)
-6. **Client →** `setFunctionBreakpoints` if `supportsFunctionBreakpoints` is true (this runtime advertises `false`; you can omit it)
+6. **Client →** `setFunctionBreakpoints` if `supportsFunctionBreakpoints` is true (this engine advertises `false`; you can omit it)
 7. **Client →** `setExceptionBreakpoints` when you have filters to set
 8. **Client →** `configurationDone`
 9. **Adapter →** `configurationDone` response — the debuggee then leaves its initial wait and **starts running**
@@ -128,7 +128,7 @@ Whenever the debuggee stops—on a **line breakpoint** or after a **step** reque
 - **`breakpoint`** — the worker paused in normal mode because execution reached a line where you set a breakpoint.
 - **`step`** — the worker paused while a step mode was active (`next`, `stepIn`, or `stepOut`). The next section describes how those modes work internally.
 
-`threadId` is always `1` (single-threaded runtime).
+`threadId` is always `1` (single-threaded engine).
 
 ```ts
 if (msg.type === 'event' && msg.event === 'stopped') {
@@ -230,7 +230,7 @@ if (msg.type === 'event' && msg.event === 'terminated') {
 
 ## Notes
 
-- The runtime compiles C++ to WASM in-browser using clang — the first run may take a few seconds.
+- The engine compiles C++ to WASM in-browser using clang — the first run may take a few seconds.
 - There is one thread (`id: 1`). Multi-threading is not supported.
 - `send()` returns the response synchronously. DAP traffic that is pushed from the adapter arrives asynchronously via `on('event', ...)`.
 - Variable handles (`variablesReference` from `scopes` / `variables`) are invalidated when you **`continue`** or issue a **step** request; always re-query after the next `stopped`.

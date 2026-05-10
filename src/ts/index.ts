@@ -1,36 +1,27 @@
 import EventEmitter from 'events';
 
-import { StdoutMode, WorkerOut, WorkerStart } from '../../pkg/runtime';
-import init from '../../pkg/runtime';
-import wasmBinary from '../../pkg/runtime_bg.wasm';
+import { StdoutMode, WorkerOut, WorkerStart } from '../../pkg/engine';
+import init from '../../pkg/engine';
+import wasmBinary from '../../pkg/engine_bg.wasm';
 import { Debugger } from './debugger';
 import { errorResult, Internals } from './util';
 import RustWorker from './worker?worker&inline';
 
 export type Lang = 'c';
 
-export type RunOptions = {
-  /**
-   * Whether or not to enable debugging.
-   * Running with debugging enabled (default) will slow down startup and execution time.
-   * @default true
-   */
-  enableDebugging?: boolean;
-};
-
-/** The runtime ran to completion with the provided `exitCode`. */
+/** The engine ran to completion with the provided `exitCode`. */
 export type CompletedResult = { type: 'completed'; exitCode: number };
-/** The runtime was stopped by calling `stop`. */
+/** The engine was stopped by calling `stop`. */
 export type StoppedResult = { type: 'stopped' };
-/** The runtime had an error. This is an error with the runtime itself, and not the user's code. */
+/** The engine had an error. This is an error with the engine itself, and not the user's code. */
 export type ErrorResult = { type: 'error'; error: { type: string; message: string } };
-/** The result of calling {@link Runtime.run} */
+/** The result of calling {@link Engine.run} */
 export type RunResult = CompletedResult | StoppedResult | ErrorResult;
 
 export type FsNode = string | DirNode;
 export type DirNode = { [name: string]: FsNode };
 
-export class Runtime {
+export class Engine {
   public readonly stdout = new Stdout(1);
   public readonly stderr = new Stdout(2);
   public readonly stdin = new Stdin();
@@ -43,7 +34,7 @@ export class Runtime {
   private promise?: Promise<RunResult>;
 
   /**
-   * The programming language of this runtime.
+   * The programming language of this engine.
    */
   public readonly lang: Lang;
 
@@ -55,9 +46,9 @@ export class Runtime {
    */
   public fs: DirNode = {};
 
-  static async create(lang: Lang): Promise<Runtime> {
+  static async create(lang: Lang): Promise<Engine> {
     await init({ module_or_path: wasmBinary });
-    return new Runtime(lang);
+    return new Engine(lang);
   }
 
   private constructor(lang: Lang) {
@@ -72,16 +63,15 @@ export class Runtime {
     this.rejector?.();
   }
 
-  public async run(options?: RunOptions): Promise<RunResult> {
-    options ??= { enableDebugging: true };
+  public async run(): Promise<RunResult> {
     if (this.promise) return this.promise;
-    this.promise = this.execute(options);
+    this.promise = this.execute();
     const result = await this.promise;
     this.promise = undefined;
     return result;
   }
 
-  private async execute({ enableDebugging = true }: RunOptions): Promise<RunResult> {
+  private async execute(): Promise<RunResult> {
     const worker = new RustWorker();
 
     /* Set up handling for stdout/stderr */
@@ -115,7 +105,7 @@ export class Runtime {
         const message: WorkerStart = {
           fs: this.fs,
           stdin_buffer: this.stdin[Internals].buffer,
-          is_debug: enableDebugging
+          is_debug: this.debugger.enabled
         };
         worker.postMessage(message);
       });

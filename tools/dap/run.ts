@@ -7,8 +7,8 @@ import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 import stripJsonComments from 'strip-json-comments';
 
+import { createEngineBackend } from './backends/engine.ts';
 import { createLldbBackend } from './backends/lldb.ts';
-import { createRuntimeBackend } from './backends/runtime.ts';
 import { CaptureMap, executeSnippet, match, MatchResult, substitutePlaceholders } from './matcher';
 
 export type Json = null | boolean | number | string | Json[] | { [k: string]: Json };
@@ -67,22 +67,22 @@ const COMMON_INIT_STEPS: Step[] = [
       adapterID: 'lldb-dap',
       pathFormat: 'path',
       linesStartAt1: true,
-      columnsStartAt1: true,
-    },
+      columnsStartAt1: true
+    }
   },
   {
     type: 'response',
     success: true,
-    command: 'initialize',
+    command: 'initialize'
   },
   {
     type: 'request',
     command: 'launch',
     arguments: {
-      stopOnEntry: false,
-    },
+      stopOnEntry: false
+    }
   },
-  { type: 'event', event: 'initialized', $timeout: 10000 },
+  { type: 'event', event: 'initialized', $timeout: 10000 }
 ];
 
 type CliOpts = {
@@ -122,10 +122,10 @@ function parseCli(argv: string[]): CliOpts {
   return { tests, lldb };
 }
 
-async function ensureRuntimeLinked() {
-  logInfo('installing runtime library...');
+async function ensureEngineLinked() {
+  logInfo('installing library...');
   await $`npm link`.cwd(ROOT).quiet();
-  await $`npm link @jtrb/runtime`.cwd(HERE).quiet();
+  await $`npm link debugger-sh`.cwd(HERE).quiet();
 }
 
 async function listTestNames(): Promise<string[]> {
@@ -203,7 +203,7 @@ function formatMismatch(
     ...receivedLines.map((line) => `${rbar} ${line}`),
     rbar,
     chalk.red(`${bar} at ${chalk.underline(result.at)}: ${result.reason}`),
-    '',
+    ''
   ].join('\n');
 }
 
@@ -236,7 +236,7 @@ async function waitForEvent(
     if (remaining <= 0) break;
     await Promise.race([
       waitForNext(),
-      new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), remaining)),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), remaining))
     ]).catch((err) => {
       if (String(err).includes('timeout')) return;
       throw err;
@@ -262,7 +262,7 @@ async function runTest(testName: string, opts: CliOpts): Promise<void> {
   const backendOpts: BackendOptions = { testDir, testOutputDir, fsNode };
   const backend = opts.lldb
     ? await createLldbBackend(backendOpts)
-    : await createRuntimeBackend(backendOpts);
+    : await createEngineBackend(backendOpts);
 
   const eventQueue: Json[] = [];
   const rawDapLog: Json[] = [];
@@ -294,7 +294,7 @@ async function runTest(testName: string, opts: CliOpts): Promise<void> {
           type: 'request',
           seq: seq++,
           command: step.command,
-          arguments: step.arguments ?? {},
+          arguments: step.arguments ?? {}
         },
         captures
       ) as Json;
@@ -369,10 +369,10 @@ async function main() {
   const opts = parseCli(process.argv.slice(2));
 
   if (!opts.lldb) {
-    if (!existsSync(path.join(ROOT, 'dist/runtime.js')))
-      die(`missing dist/runtime.js. Run 'npm run build' first.`);
     await waitForDevBuild();
-    await ensureRuntimeLinked();
+    if (!existsSync(path.join(ROOT, 'dist/debugger-sh.js')))
+      die(`missing dist/debugger-sh.js. Run 'npm run build' first.`);
+    await ensureEngineLinked();
   } else {
     logInfo(`${chalk.bold('--lldb')}: running against ${chalk.bold('lldb-dap')}`);
   }

@@ -1,5 +1,5 @@
 {
-  "name": "@jtrb/dev",
+  "name": "@debugger-sh/dev",
   "private": true,
   "type": "module",
   "scripts": {

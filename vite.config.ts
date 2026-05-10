@@ -15,10 +15,7 @@ export default defineConfig({
     outDir,
     lib: {
       entry: 'src/ts/index.ts',
-      name: 'runtime',
-      // Pin output filename so a package rename doesn't silently break the
-      // `main`/`module`/`exports` paths (which expect `runtime.{js,umd.cjs}`).
-      fileName: (format) => (format === 'es' ? 'runtime.js' : 'runtime.umd.cjs')
+      name: 'engine'
     }
   }
 });
@@ -44,7 +41,7 @@ function wasm(): PluginOption {
         }
       }
 
-      const file = path.join(outDir, 'runtime.js');
+      const file = path.join(outDir, 'debugger-sh.js');
       if (!fs.existsSync(file)) return; // in worker builds this file doesn't exist yet
       let js = fs.readFileSync(file, { encoding: 'utf-8' });
       js = js.replaceAll(/(["'`])data:application\/wasm[^"'`]*\1/g, '""');

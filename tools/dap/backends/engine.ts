@@ -1,6 +1,6 @@
-import type { Artifact } from '@jtrb/runtime';
 import { $ } from 'bun';
 import chalk from 'chalk';
+import type { Artifact } from 'debugger-sh';
 import { existsSync } from 'node:fs';
 import { writeFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -8,26 +8,26 @@ import process from 'node:process';
 
 import type { Backend, BackendOptions, Json } from '../run';
 
-export async function createRuntimeBackend(opts: BackendOptions): Promise<Backend> {
-  const { Runtime } = await import('@jtrb/runtime');
-  const runtime = await Runtime.create('c');
+export async function createEngineBackend(opts: BackendOptions): Promise<Backend> {
+  const { Engine } = await import('debugger-sh');
+  const engine = await Engine.create('c');
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  runtime.fs = opts.fsNode as unknown as any;
+  engine.fs = opts.fsNode as unknown as any;
 
   const decoder = new TextDecoder();
   const onIo = (chunk: Uint8Array) => {
     process.stdout.write(chalk.gray(decoder.decode(chunk)));
   };
-  runtime.stdout.on('data', onIo);
-  runtime.stderr.on('data', onIo);
+  engine.stdout.on('data', onIo);
+  engine.stderr.on('data', onIo);
 
   const eventCbs: ((e: Json) => void)[] = [];
   const artifactTasks: Promise<void>[] = [];
 
-  runtime.debugger.on('event', (msg: unknown) => {
+  engine.debugger.on('event', (msg: unknown) => {
     for (const cb of eventCbs) cb(msg as Json);
   });
-  runtime.debugger.on('artifact', (artifact) => {
+  engine.debugger.on('artifact', (artifact) => {
     const task = handleArtifactOutput(opts.testOutputDir, artifact).catch((err) => {
       console.log(`${chalk.cyan('info')} artifact output failed: ${String(err)}`);
     });
@@ -35,7 +35,7 @@ export async function createRuntimeBackend(opts: BackendOptions): Promise<Backen
     void task;
   });
 
-  const runPromise = runtime.run();
+  const runPromise = engine.run();
 
   return {
     async send(req) {
@@ -55,7 +55,7 @@ export async function createRuntimeBackend(opts: BackendOptions): Promise<Backen
           command: request.command ?? 'launch'
         };
       }
-      return runtime.debugger.send(req) as Json;
+      return engine.debugger.send(req) as Json;
     },
     onEvent(cb) {
       eventCbs.push(cb);

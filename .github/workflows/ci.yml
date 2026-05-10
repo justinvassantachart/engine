@@ -34,7 +34,7 @@ jobs:
       - name: Install root dependencies
         run: npm ci
 
-      - name: Build runtime (Rust → WASM → JS)
+      - name: Build engine (Rust → WASM → JS)
         run: npm run build
 
       - name: Lint

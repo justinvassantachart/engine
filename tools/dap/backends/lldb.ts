@@ -18,7 +18,7 @@ export async function createLldbBackend(opts: BackendOptions): Promise<Backend> 
     cmd: [lldbPath],
     stdin: 'pipe',
     stdout: 'pipe',
-    stderr: 'pipe',
+    stderr: 'pipe'
   });
 
   const eventListeners: ((e: Json) => void)[] = [];
@@ -58,7 +58,7 @@ export async function createLldbBackend(opts: BackendOptions): Promise<Backend> 
       msg.arguments = {
         program: progAbs,
         cwd: path.dirname(progAbs),
-        stopOnEntry: false,
+        stopOnEntry: false
       };
     }
     const seq = msg.seq;
@@ -88,9 +88,9 @@ export async function createLldbBackend(opts: BackendOptions): Promise<Backend> 
             type: 'request',
             seq: 0xffff_ffff,
             command: 'disconnect',
-            arguments: { terminateDebuggee: true },
+            arguments: { terminateDebuggee: true }
           } as Json),
-          new Promise((resolve) => setTimeout(resolve, 250)),
+          new Promise((resolve) => setTimeout(resolve, 250))
         ]);
       } catch {
         /* best effort */
@@ -100,7 +100,7 @@ export async function createLldbBackend(opts: BackendOptions): Promise<Backend> 
       } catch {
         /* ignore */
       }
-    },
+    }
   };
 }
 
@@ -135,7 +135,7 @@ async function detectLldbDap(): Promise<string> {
       'lldb-dap not found.',
       `tried: ${tried.join(', ')}`,
       'install via Xcode (lldb-dap ships with the developer toolchain) or `brew install llvm`.',
-      'override with env LLDB_DAP_PATH=/abs/path.',
+      'override with env LLDB_DAP_PATH=/abs/path.'
     ].join('\n  ')
   );
 }
@@ -143,7 +143,7 @@ async function detectLldbDap(): Promise<string> {
 async function compileTest(testDir: string): Promise<{ progAbs: string }> {
   // Keep lldb-dap activity out of protected folders (e.g. ~/Documents),
   // otherwise OS privacy prompts can interrupt the debug session.
-  const lldbDir = await mkdtemp(path.join(tmpdir(), 'runtime-dap-lldb-'));
+  const lldbDir = await mkdtemp(path.join(tmpdir(), 'engine-dap-lldb-'));
   await cp(testDir, lldbDir, { recursive: true });
 
   const sourceRels = (await collectSourceFiles(lldbDir)).sort();
