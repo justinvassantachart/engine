@@ -58,7 +58,7 @@ pub fn get_location(die: &Die<'_>, pc: GlobalAddress) -> Option<Expression<R>> {
 ///
 /// Returning `Some` short-circuits the default structure/pointer expansion;
 /// `None` lets the next provider (or the default) handle the variable.
-pub trait ChildrenProvider {
+pub trait VariableProvider {
     fn children(&self, value: &Variable, info: &DebugInfo) -> Option<Vec<Variable>>;
 }
 

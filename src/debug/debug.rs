@@ -2,7 +2,7 @@ use std::rc::Rc;
 
 use crate::debug::dwarf::Location;
 use crate::debug::{
-    ChildrenProvider, Type, TypeGraph, Variable, get_location,
+    Type, TypeGraph, Variable, VariableProvider, get_location,
     get_variables as debug_get_variables,
 };
 use crate::types::{BreakpointMode, DebugFunction, DebugInfo, GlobalAddress, WasmLocation};
@@ -28,7 +28,7 @@ pub struct Debugger {
     info: DebugInfo,
     types: Rc<TypeGraph>,
     state: js_sys::Int32Array,
-    formatters: Vec<Box<dyn ChildrenProvider>>,
+    formatters: Vec<Box<dyn VariableProvider>>,
 }
 
 impl Debugger {
@@ -43,10 +43,10 @@ impl Debugger {
         }
     }
 
-    /// Registers a [`ChildrenProvider`]. Providers are consulted in registration
+    /// Registers a [`VariableProvider`]. Providers are consulted in registration
     /// order; the first to return `Some` wins. If none match, the default
     /// structural expansion ([`Variable::children`]) is used.
-    pub fn add_formatter(&mut self, provider: Box<dyn ChildrenProvider>) {
+    pub fn add_formatter(&mut self, provider: Box<dyn VariableProvider>) {
         self.formatters.push(provider);
     }
 
