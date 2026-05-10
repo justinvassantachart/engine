@@ -250,11 +250,11 @@ fn value_to_le_bytes(value: gimli::Value, len: usize) -> Vec<u8> {
     out
 }
 
-fn read_ptr(info: &DebugInfo, addr: u64) -> u64 {
+pub(super) fn read_ptr(info: &DebugInfo, addr: u64) -> u64 {
     u32::from_le_bytes(read_main_memory(info, addr, 4).try_into().unwrap_or([0; 4])) as u64
 }
 
-fn addr_piece(address: u64) -> gimli::Piece<R> {
+pub(super) fn addr_piece(address: u64) -> gimli::Piece<R> {
     gimli::Piece {
         size_in_bits: None,
         bit_offset: None,
