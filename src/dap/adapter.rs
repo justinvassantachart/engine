@@ -8,7 +8,7 @@ use wasm_bindgen::closure::Closure;
 use wasm_bindgen::prelude::*;
 
 use crate::dap::types::{ProtocolMessage, VariablesMap};
-use crate::debug::Debugger;
+use crate::debug::{Debugger, Variable};
 use crate::types::{DebugInfo, PauseReason};
 
 struct DapState {
@@ -158,14 +158,16 @@ impl DapState {
             .context("Unknown variablesReference")?
             .clone();
         let dbg = self.debugger().context("No debugger attached")?;
-        let info = dbg.info().clone();
-        // Children must be precomputed: dispatching through `dbg` borrows `self`
-        // immutably, which conflicts with `self.vars.allocate` in the loop.
-        let children_per: Vec<_> = entries.iter().map(|var| dbg.children(var)).collect();
+        // Display + children must be precomputed: dispatching through `dbg`
+        // borrows `self` immutably, which conflicts with `self.vars.allocate`
+        // in the loop.
+        let computed: Vec<(String, Vec<Variable>)> = entries
+            .iter()
+            .map(|var| (dbg.display(var), dbg.children(var)))
+            .collect();
 
         let mut variables: Vec<Value> = Vec::with_capacity(entries.len());
-        for (var, children) in entries.iter().zip(children_per) {
-            let display = var.display(&info);
+        for (var, (display, children)) in entries.iter().zip(computed) {
             let type_name = var.type_name();
             let sub_ref = if children.is_empty() {
                 0
