@@ -1,6 +1,6 @@
 use crate::{
     debug::{
-        ReferenceKind, Type, TypeDeclaration,
+        Debugger, ReferenceKind, Type, TypeDeclaration,
         dwarf::{Die, R, Visit},
     },
     types::{DebugInfo, GlobalAddress},
@@ -56,10 +56,17 @@ pub fn get_location(die: &Die<'_>, pc: GlobalAddress) -> Option<Expression<R>> {
 
 /// Provides custom expansion for a [`Variable`].
 ///
-/// Returning `Some` short-circuits the default structure/pointer expansion;
-/// `None` lets the next provider (or the default) handle the variable.
+/// The first registered provider whose [`matches`](Self::matches) returns
+/// `true` for a variable wins; its [`children`](Self::children) result replaces
+/// the default structure/pointer expansion. Providers that only need to alter
+/// matching can rely on the default `children` implementation, which yields the
+/// raw structural view.
 pub trait VariableProvider {
-    fn children(&self, value: &Variable, info: &DebugInfo) -> Option<Vec<Variable>>;
+    fn matches(&self, value: &Variable) -> bool;
+
+    fn children(&self, value: &Variable, dbg: &Debugger) -> Vec<Variable> {
+        value.children(dbg.info())
+    }
 }
 
 /// A typed value backed by one or more DWARF location pieces.

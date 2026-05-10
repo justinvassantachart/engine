@@ -44,18 +44,20 @@ impl Debugger {
     }
 
     /// Registers a [`VariableProvider`]. Providers are consulted in registration
-    /// order; the first to return `Some` wins. If none match, the default
-    /// structural expansion ([`Variable::children`]) is used.
+    /// order; the first whose `matches()` predicate accepts the variable wins.
+    /// If none match, the default structural expansion ([`Variable::children`])
+    /// is used.
     pub fn add_formatter(&mut self, provider: Box<dyn VariableProvider>) {
         self.formatters.push(provider);
     }
 
-    /// Returns the children of `var`, dispatching through registered formatters
-    /// before falling back to the default expansion.
+    /// Returns the children of `var`, dispatching through the first registered
+    /// formatter whose `matches()` predicate accepts the variable; otherwise
+    /// falls back to the default expansion.
     pub fn children(&self, var: &Variable) -> Vec<Variable> {
         for f in &self.formatters {
-            if let Some(c) = f.children(var, &self.info) {
-                return c;
+            if f.matches(var) {
+                return f.children(var, self);
             }
         }
         var.children(&self.info)
