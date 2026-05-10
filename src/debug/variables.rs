@@ -105,6 +105,10 @@ impl Variable {
         }
     }
 
+    pub fn addr_value(&self, info: &DebugInfo) -> Option<u64> {
+        Some(read_ptr(info, self.address()?.0))
+    }
+
     /// Human-readable type name (e.g. `int`, `Point`, `int*`).
     pub fn type_name(&self) -> String {
         self.ty.name()
