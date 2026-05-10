@@ -35,12 +35,14 @@ impl Debugger {
     pub fn new(info: DebugInfo) -> Self {
         let state = info.get_bp_state();
         let types = Rc::from(TypeGraph::new(&info.dwarf));
-        Self {
+        let mut dbg = Self {
             info,
             state,
             types,
             formatters: Vec::new(),
-        }
+        };
+        crate::debug::formatters::register_defaults(&mut dbg);
+        dbg
     }
 
     /// Registers a [`VariableProvider`]. Providers are consulted in registration
