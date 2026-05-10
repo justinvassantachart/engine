@@ -14,8 +14,8 @@ impl VariableProvider for StdVectorProvider {
         let begin = vec_children.find("__begin_");
         let end = vec_children.find("__end_");
 
-        let begin_addr = begin.addr_value();
-        let end_addr = end.addr_value();
+        let begin_addr = begin.addr_value(&dbg.info);
+        let end_addr = end.addr_value(&dbg.info);
 
         let elem_size = begin.ty().child().byte_size().unwrap_or(1);
         let count = end_addr.saturating_sub(begin_addr) / elem_size;
