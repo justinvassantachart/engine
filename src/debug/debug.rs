@@ -63,6 +63,18 @@ impl Debugger {
         var.children(&self.info)
     }
 
+    /// Renders the DAP `value` field for `var`, dispatching through the first
+    /// registered formatter whose `matches()` predicate accepts the variable;
+    /// otherwise falls back to the default scalar/struct/pointer rendering.
+    pub fn display(&self, var: &Variable) -> String {
+        for f in &self.formatters {
+            if f.matches(var) {
+                return f.display(var, self);
+            }
+        }
+        var.display(&self.info)
+    }
+
     fn read_wasm_value(
         &self,
         view: &js_sys::DataView,

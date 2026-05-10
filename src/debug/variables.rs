@@ -67,6 +67,10 @@ pub trait VariableProvider {
     fn children(&self, value: &Variable, dbg: &Debugger) -> Vec<Variable> {
         value.children(dbg.info())
     }
+
+    fn display(&self, value: &Variable, dbg: &Debugger) -> String {
+        value.display(dbg.info())
+    }
 }
 
 /// A typed value backed by one or more DWARF location pieces.
