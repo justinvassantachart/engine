@@ -28,6 +28,15 @@ impl NamespaceHierarchy {
         // TODO: This is a hack, we should really parse out all template parameters
         qualified.replace("std::__2::", "std::")
     }
+
+    pub fn matches(&self, target: &str) -> bool {
+        if target.is_empty() {
+            return false;
+        }
+        let parts: Vec<&str> = target.split("::").collect();
+        self.0.len() >= parts.len()
+            && self.0.iter().zip(&parts).all(|(a, b)| a == b)
+    }
 }
 
 #[derive(Clone)]
