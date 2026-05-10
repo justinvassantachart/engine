@@ -210,6 +210,17 @@ impl Variable {
     }
 }
 
+// Reusable for various formatter that follow the same access pattern
+pub trait VariableSliceExt {
+    fn find(&self, name: &str) -> Option<&Variable>;
+}
+
+impl VariableSliceExt for [Variable] {
+    fn find(&self, name: &str) -> Option<&Variable> {
+        self.iter().find(|v| v.name() == name)
+    }
+}
+
 /// Reads `len` bytes addressed by the first piece (memory or immediate).
 ///
 /// Returns `None` if the location is empty or unsupported.
