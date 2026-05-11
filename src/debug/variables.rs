@@ -1,3 +1,5 @@
+use std::rc::Rc;
+
 use crate::{
     debug::{
         Debugger, ReferenceKind, Type, TypeDeclaration,
@@ -65,11 +67,11 @@ pub trait VariableProvider {
     fn matches(&self, value: &Variable) -> bool;
 
     fn children(&self, value: &Variable, dbg: &Debugger) -> Vec<Variable> {
-        value.children(dbg.info())
+        value.children()
     }
 
     fn display(&self, value: &Variable, dbg: &Debugger) -> String {
-        value.display(dbg.info())
+        value.display()
     }
 }
 
@@ -79,14 +81,21 @@ pub trait VariableProvider {
 /// register, …); `ty` describes how to interpret them.
 #[derive(Clone)]
 pub struct Variable {
-    name: String,
-    pieces: Vec<gimli::Piece<R>>,
-    ty: Type,
+    pub(crate) dbg: Rc<Debugger>,
+    pub(crate) name: String,
+    pub(crate) pieces: Vec<gimli::Piece<R>>,
+    pub(crate) ty: Type,
 }
 
 impl Variable {
-    pub fn new(name: String, pieces: Vec<gimli::Piece<R>>, ty: Type) -> Self {
-        Self { name, pieces, ty }
+    /// Duplicates the variable with a new name, contents, and type.
+    fn copy(&self, name: String, pieces: Vec<gimli::Piece<R>>, ty: Type) -> Self {
+        Self {
+            dbg: self.dbg.clone(),
+            name,
+            pieces,
+            ty,
+        }
     }
 
     pub fn name(&self) -> &str {
@@ -105,8 +114,8 @@ impl Variable {
         }
     }
 
-    pub fn addr_value(&self, info: &DebugInfo) -> Option<u64> {
-        Some(read_ptr(info, self.address()?.0))
+    pub fn addr_value(&self) -> Option<u64> {
+        Some(read_ptr(self.dbg.info(), self.address()?.0))
     }
 
     /// Human-readable type name (e.g. `int`, `Point`, `int*`).
@@ -114,19 +123,17 @@ impl Variable {
         self.ty.name()
     }
 
-    /// Renders this value for the DAP `value` field.
-    ///
-    /// - Scalars are decoded according to their DWARF encoding.
-    /// - Compound types render as e.g. `Point { ... }`; their fields are
-    ///   reachable via [`Self::children`].
-    pub fn display(&self, info: &DebugInfo) -> String {
+    /// Renders this value to a string
+    pub fn display(&self) -> String {
         match self.ty.resolved() {
             Some(TypeDeclaration::Scalar {
                 byte_size,
                 encoding,
                 ..
             }) => {
-                let Some(bytes) = read_value_bytes(info, &self.pieces, *byte_size as usize) else {
+                let Some(bytes) =
+                    read_value_bytes(self.dbg.info(), &self.pieces, *byte_size as usize)
+                else {
                     return "<unavailable>".into();
                 };
                 format_scalar(&bytes, *encoding, *byte_size)
@@ -144,12 +151,12 @@ impl Variable {
                     let Some(addr) = self.address() else {
                         return "<unavailable>".into();
                     };
-                    Variable::new(
+                    self.copy(
                         self.name.clone(),
-                        vec![addr_piece(read_ptr(info, addr.0))],
+                        vec![addr_piece(read_ptr(self.dbg.info(), addr.0))],
                         self.ty.child(*target),
                     )
-                    .display(info)
+                    .display()
                 }
             },
             _ => "<unavailable>".into(),
@@ -159,7 +166,7 @@ impl Variable {
     /// Expands a compound value into named child variables.
     ///
     /// Returns an empty vector for scalars / unsupported aggregates.
-    pub fn children(&self, info: &DebugInfo) -> Vec<Variable> {
+    pub fn children(&self) -> Vec<Variable> {
         match self.ty.resolved() {
             Some(TypeDeclaration::Structure { members, .. }) => {
                 let Some(base) = self.address() else {
@@ -176,11 +183,7 @@ impl Variable {
                         Some(super::Value::Expr(_)) => continue,
                     };
                     let addr = (base.0 as i64).wrapping_add(offset) as u64;
-                    out.push(Variable::new(
-                        name,
-                        vec![addr_piece(addr)],
-                        self.ty.child(member.ty),
-                    ));
+                    out.push(self.copy(name, vec![addr_piece(addr)], self.ty.child(member.ty)));
                 }
                 out
             }
@@ -189,7 +192,7 @@ impl Variable {
                 let Some(addr) = self.address() else {
                     return Vec::new();
                 };
-                let target_addr = read_ptr(info, addr.0);
+                let target_addr = read_ptr(self.dbg.info(), addr.0);
                 if is_ptr && target_addr == 0 {
                     return Vec::new();
                 }
@@ -197,13 +200,10 @@ impl Variable {
                 let piece = addr_piece(target_addr);
                 if is_ptr && matches!(target_type.resolved(), Some(TypeDeclaration::Scalar { .. }))
                 {
-                    return vec![Variable::new(
-                        format!("*{}", self.name),
-                        vec![piece],
-                        target_type,
-                    )];
+                    return vec![self.copy(format!("*{}", self.name), vec![piece], target_type)];
                 }
-                Variable::new(self.name.clone(), vec![piece], target_type).children(info)
+                self.copy(self.name.clone(), vec![piece], target_type)
+                    .children()
             }
             _ => Vec::new(),
         }

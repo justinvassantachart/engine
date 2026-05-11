@@ -13,7 +13,7 @@ use crate::types::{DebugInfo, PauseReason};
 
 struct DapState {
     seq_counter: i64,
-    debugger: Option<Debugger>,
+    debugger: Option<Rc<Debugger>>,
     /// `initialize` request was handled and the client received the capabilities response.
     client_initialized: bool,
     /// We emitted `initialized` for this debug session (once per worker / run).
@@ -30,7 +30,7 @@ impl DapState {
     }
 
     fn debugger(&self) -> Option<&Debugger> {
-        self.debugger.as_ref()
+        self.debugger.as_deref()
     }
 
     // Returns the capababilities. TODO: check what more we can support.

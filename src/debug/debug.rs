@@ -1,9 +1,8 @@
-use std::rc::Rc;
+use std::rc::{Rc, Weak};
 
 use crate::debug::dwarf::Location;
 use crate::debug::{
-    Type, TypeGraph, Variable, VariableProvider, get_location,
-    get_variables as debug_get_variables,
+    Type, TypeGraph, Variable, VariableProvider, get_location, get_variables as debug_get_variables,
 };
 use crate::types::{BreakpointMode, DebugFunction, DebugInfo, GlobalAddress, WasmLocation};
 use serde::{Deserialize, Serialize};
@@ -25,6 +24,7 @@ pub struct StackFrame {
 /// Main-thread debugger that operates on shared memory from an attached worker.
 /// Constructed from `DebugInfo` received via the worker's `debug` message.
 pub struct Debugger {
+    me: Weak<Self>,
     info: DebugInfo,
     types: Rc<TypeGraph>,
     state: js_sys::Int32Array,
@@ -32,17 +32,20 @@ pub struct Debugger {
 }
 
 impl Debugger {
-    pub fn new(info: DebugInfo) -> Self {
-        let state = info.get_bp_state();
-        let types = Rc::from(TypeGraph::new(&info.dwarf));
-        let mut dbg = Self {
-            info,
-            state,
-            types,
-            formatters: Vec::new(),
-        };
-        crate::debug::formatters::register_defaults(&mut dbg);
-        dbg
+    pub fn new(info: DebugInfo) -> Rc<Self> {
+        Rc::new_cyclic(|me| {
+            let state = info.get_bp_state();
+            let types = Rc::from(TypeGraph::new(&info.dwarf));
+            let mut dbg = Self {
+                me: me.clone(),
+                info,
+                state,
+                types,
+                formatters: Vec::new(),
+            };
+            crate::debug::formatters::register_defaults(&mut dbg);
+            dbg
+        })
     }
 
     /// Registers a [`VariableProvider`]. Providers are consulted in registration
@@ -62,7 +65,7 @@ impl Debugger {
                 return f.children(var, self);
             }
         }
-        var.children(&self.info)
+        var.children()
     }
 
     /// Renders the DAP `value` field for `var`, dispatching through the first
@@ -74,7 +77,7 @@ impl Debugger {
                 return f.display(var, self);
             }
         }
-        var.display(&self.info)
+        var.display()
     }
 
     fn read_wasm_value(
@@ -319,7 +322,16 @@ impl Debugger {
             let Some(type_id) = var_die.type_ref() else {
                 continue;
             };
-            let variable = Variable::new(name, pieces, Type::new(type_id, self.types.clone()));
+
+            let variable = Variable {
+                // Note: upgrading `me` to an Rc<Debugger> should be safe here
+                // because the debugger should stay alive for longer than this variable
+                dbg: self.me.upgrade().unwrap(),
+                name,
+                pieces,
+                ty: Type::new(type_id, self.types.clone()),
+            };
+
             match var_die.tag() {
                 gimli::DW_TAG_formal_parameter => arguments.push(variable),
                 gimli::DW_TAG_variable | gimli::DW_TAG_local_variable => locals.push(variable),
