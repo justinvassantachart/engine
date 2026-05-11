@@ -19,6 +19,18 @@ use crate::debug::dwarf::{DieReference, Dwarf, Location};
 #[serde(transparent)]
 pub struct GlobalAddress(pub u64);
 
+impl GlobalAddress {
+    pub fn is_null(&self) -> bool {
+        self.0 == 0
+    }
+}
+
+impl From<u32> for GlobalAddress {
+    fn from(v: u32) -> Self {
+        Self(v as u64)
+    }
+}
+
 impl From<u64> for GlobalAddress {
     fn from(v: u64) -> Self {
         Self(v)

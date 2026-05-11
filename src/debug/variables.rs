@@ -4,10 +4,13 @@ use crate::{
     debug::{
         Debugger, ReferenceKind, Type, TypeDeclaration,
         dwarf::{Die, R, Visit},
-        formatters::VariableFormatter,
     },
     types::{DebugInfo, GlobalAddress},
 };
+
+#[allow(unused_imports)]
+use crate::debug::formatters::VariableFormatter;
+
 use gimli::Reader;
 use gimli::read::Expression;
 use wasm_bindgen::JsCast;
@@ -88,6 +91,8 @@ impl Variable {
         &self.ty
     }
 
+    /// Returns the address of this variable.
+    /// If this variable has no known address, returns [None].
     pub fn address(&self) -> Option<GlobalAddress> {
         let piece = self.pieces.first()?;
         match &piece.location {
@@ -96,8 +101,44 @@ impl Variable {
         }
     }
 
-    pub fn addr_value(&self) -> Option<u64> {
-        Some(read_ptr(self.dbg.info(), self.address()?.0))
+    /// Reads `len` bytes from the start of this variable's value.
+    /// If exactly `len` bytes cannot be read, returns [None].
+    pub fn read(&self, len: usize) -> Option<Vec<u8>> {
+        // TODO: Handling for multi-piece value, not just `first()`
+        let piece = self.pieces.first()?;
+        let mut bytes = match &piece.location {
+            gimli::Location::Address { address } => {
+                read_main_memory(self.dbg.info(), *address, len)
+            }
+            gimli::Location::Value { value } => value_to_le_bytes(*value, len),
+            gimli::Location::Bytes { value } => value.to_slice().ok()?.to_vec(),
+            _ => Vec::default(),
+        };
+
+        if bytes.len() < len {
+            return None;
+        }
+
+        bytes.resize(len, 0);
+        Some(bytes)
+    }
+
+    /// Returns the actual address stored by a pointer.
+    ///
+    /// For example, in the following snippet:
+    ///
+    /// ```cpp
+    /// int* x = (int*) 0xBA5EBA11;
+    /// ```
+    ///
+    /// [Variable::pointer_value] would return `Some(GlobalAddress(0xBA5EBA11))` for
+    /// the [Variable] corresponding to `x`.
+    pub fn pointer_value(&self) -> Option<GlobalAddress> {
+        if let Some(bytes) = self.read(4) {
+            Some(u32::from_le_bytes(bytes.try_into().ok()?).into())
+        } else {
+            None
+        }
     }
 
     /// Renders this value to a string using the default logic.
@@ -109,9 +150,7 @@ impl Variable {
                 encoding,
                 ..
             }) => {
-                let Some(bytes) =
-                    read_value_bytes(self.dbg.info(), &self.pieces, *byte_size as usize)
-                else {
+                let Some(bytes) = self.read(*byte_size as usize) else {
                     return "<unavailable>".into();
                 };
                 format_scalar(&bytes, *encoding, *byte_size)
@@ -126,15 +165,11 @@ impl Variable {
                     None => "<unavailable>".into(),
                 },
                 ReferenceKind::Reference | ReferenceKind::Temporary => {
-                    let Some(addr) = self.address() else {
+                    let Some(addr) = self.pointer_value() else {
                         return "<unavailable>".into();
                     };
-                    self.copy(
-                        self.name.clone(),
-                        vec![addr_piece(read_ptr(self.dbg.info(), addr.0))],
-                        self.ty.child(*target),
-                    )
-                    .display()
+                    self.copy(self.name.clone(), addr.pieces(), self.ty.child(*target))
+                        .display()
                 }
             },
             _ => "<unavailable>".into(),
@@ -146,6 +181,7 @@ impl Variable {
     pub fn children(&self) -> Vec<Variable> {
         match self.ty.resolved() {
             Some(TypeDeclaration::Structure { members, .. }) => {
+                // TODO: What is structure not located in memory? E.g. stored in pieces instead
                 let Some(base) = self.address() else {
                     return Vec::new();
                 };
@@ -166,20 +202,18 @@ impl Variable {
             }
             Some(TypeDeclaration::Referential { target, kind, .. }) => {
                 let is_ptr = matches!(kind, ReferenceKind::Pointer);
-                let Some(addr) = self.address() else {
+                let Some(addr) = self.pointer_value() else {
                     return Vec::new();
                 };
-                let target_addr = read_ptr(self.dbg.info(), addr.0);
-                if is_ptr && target_addr == 0 {
+                if is_ptr && addr.is_null() {
                     return Vec::new();
                 }
                 let target_type = self.ty.child(*target);
-                let piece = addr_piece(target_addr);
                 if is_ptr && matches!(target_type.resolved(), Some(TypeDeclaration::Scalar { .. }))
                 {
-                    return vec![self.copy(format!("*{}", self.name), vec![piece], target_type)];
+                    return vec![self.copy(format!("*{}", self.name), addr.pieces(), target_type)];
                 }
-                self.copy(self.name.clone(), vec![piece], target_type)
+                self.copy(self.name.clone(), addr.pieces(), target_type)
                     .children()
             }
             _ => Vec::new(),
@@ -215,23 +249,6 @@ impl Variable {
             }
         }
         self.children()
-    }
-}
-
-/// Reads `len` bytes addressed by the first piece (memory or immediate).
-///
-/// Returns `None` if the location is empty or unsupported.
-fn read_value_bytes(info: &DebugInfo, pieces: &[gimli::Piece<R>], len: usize) -> Option<Vec<u8>> {
-    let piece = pieces.first()?;
-    match &piece.location {
-        gimli::Location::Address { address } => Some(read_main_memory(info, *address, len)),
-        gimli::Location::Value { value } => Some(value_to_le_bytes(*value, len)),
-        gimli::Location::Bytes { value } => {
-            let mut buf = value.to_slice().ok()?.to_vec();
-            buf.resize(len, 0);
-            Some(buf)
-        }
-        _ => None,
     }
 }
 
@@ -319,5 +336,18 @@ fn format_scalar(bytes: &[u8], encoding: gimli::DwAte, byte_size: u64) -> String
             _ => "<unsupported char size>".into(),
         },
         _ => "<unsupported encoding>".into(),
+    }
+}
+
+impl GlobalAddress {
+    /// Returns the pieces for a variable located at this address.
+    pub fn pieces(&self) -> Vec<gimli::Piece<R>> {
+        vec![gimli::Piece {
+            size_in_bits: None,
+            bit_offset: None,
+            location: gimli::Location::Address {
+                address: (*self).into(),
+            },
+        }]
     }
 }

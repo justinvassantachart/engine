@@ -8,7 +8,7 @@ use wasm_bindgen::closure::Closure;
 use wasm_bindgen::prelude::*;
 
 use crate::dap::types::{ProtocolMessage, VariablesMap};
-use crate::debug::{Debugger, Variable};
+use crate::debug::Debugger;
 use crate::types::{DebugInfo, PauseReason};
 
 struct DapState {
