@@ -157,12 +157,12 @@ impl DapState {
             .get(reference)
             .context("Unknown variablesReference")?
             .clone();
-        let dbg = self.debugger().context("No debugger attached")?;
 
+        let dbg = self.debugger().context("No debugger attached")?;
         let mut variables: Vec<Value> = Vec::with_capacity(entries.len());
 
         for var in entries {
-            let children = var.synthetic_children();
+            let children = var.formatted_children();
             let sub_ref = if children.is_empty() {
                 0
             } else {
@@ -171,7 +171,7 @@ impl DapState {
 
             let mut v = json!({
                 "name": var.name(),
-                "value": var.display(),
+                "value": var.formatted_display(),
                 "type": var.ty().name(),
                 "variablesReference": sub_ref,
             });

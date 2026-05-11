@@ -4,6 +4,7 @@ use crate::{
     debug::{
         Debugger, ReferenceKind, Type, TypeDeclaration,
         dwarf::{Die, R, Visit},
+        formatters::VariableFormatter,
     },
     types::{DebugInfo, GlobalAddress},
 };
@@ -99,14 +100,9 @@ impl Variable {
         Some(read_ptr(self.dbg.info(), self.address()?.0))
     }
 
-    /// Renders this value to a string
+    /// Renders this value to a string using the default logic.
+    /// Use [Self::formatted_display] to use any matching [VariableFormatter] instead.
     pub fn display(&self) -> String {
-        for formatter in &self.dbg.formatters {
-            if formatter.matches(self) {
-                return formatter.display(self);
-            }
-        }
-
         match self.ty.resolved() {
             Some(TypeDeclaration::Scalar {
                 byte_size,
@@ -145,7 +141,8 @@ impl Variable {
         }
     }
 
-    /// Expands a compound value into named child variables.
+    /// Expands this variable into its children using the default logic.
+    /// Use [Self::formatted_children] to use any matching [VariableFormatter] instead.
     pub fn children(&self) -> Vec<Variable> {
         match self.ty.resolved() {
             Some(TypeDeclaration::Structure { members, .. }) => {
@@ -189,10 +186,32 @@ impl Variable {
         }
     }
 
-    pub fn synthetic_children(&self) -> Vec<Variable> {
+    /// Renders this variable to a string using any matching [VariableFormatter].
+    ///
+    /// Be careful calling this inside of a [VariableFormatter::display] implementation
+    /// that you do not cause an infinite loop.
+    pub fn formatted_display(&self) -> String {
         for formatter in &self.dbg.formatters {
-            if formatter.matches(self) {
-                return formatter.children(self);
+            if formatter.matches(self)
+                && let Some(result) = formatter.display(self)
+            {
+                return result;
+            }
+        }
+
+        self.display()
+    }
+
+    /// Expands this variable into its children any matching [VariableFormatter].
+    ///
+    /// Be careful calling this inside of a [VariableFormatter::children] implementation
+    /// that you do not cause an infinite loop.
+    pub fn formatted_children(&self) -> Vec<Variable> {
+        for formatter in &self.dbg.formatters {
+            if formatter.matches(self)
+                && let Some(result) = formatter.children(self)
+            {
+                return result;
             }
         }
         self.children()

@@ -1,7 +1,7 @@
 use std::rc::{Rc, Weak};
 
 use crate::debug::dwarf::Location;
-use crate::debug::formatters::VariableProvider;
+use crate::debug::formatters::VariableFormatter;
 use crate::debug::{Type, TypeGraph, Variable, get_location, get_variables as debug_get_variables};
 use crate::types::{BreakpointMode, DebugFunction, DebugInfo, GlobalAddress, WasmLocation};
 use serde::{Deserialize, Serialize};
@@ -27,7 +27,7 @@ pub struct Debugger {
     info: DebugInfo,
     types: Rc<TypeGraph>,
     state: js_sys::Int32Array,
-    pub(crate) formatters: Vec<Box<dyn VariableProvider>>,
+    pub(crate) formatters: Vec<Box<dyn VariableFormatter>>,
 }
 
 impl Debugger {
@@ -51,7 +51,7 @@ impl Debugger {
     /// order; the first whose `matches()` predicate accepts the variable wins.
     /// If none match, the default structural expansion ([`Variable::children`])
     /// is used.
-    pub fn add_formatter(&mut self, provider: Box<dyn VariableProvider>) {
+    pub fn add_formatter(&mut self, provider: Box<dyn VariableFormatter>) {
         self.formatters.push(provider);
     }
 
