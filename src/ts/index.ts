@@ -7,6 +7,16 @@ import { Debugger } from './debugger';
 import { errorResult, Internals } from './util';
 import RustWorker from './worker?worker&inline';
 
+// Warms the browser HTTP cache at module load so the worker's fetch on run() hits cache.
+const LLVM_PREFETCH_URLS = [
+  'https://fabioibanez.github.io/website/llvm.core.wasm',
+  'https://fabioibanez.github.io/website/llvm-resources.tar.gz'
+];
+
+if (typeof window !== 'undefined' && typeof fetch !== 'undefined') {
+  for (const url of LLVM_PREFETCH_URLS) void fetch(url, { cache: 'force-cache' });
+}
+
 export type Lang = 'c';
 
 /** The engine ran to completion with the provided `exitCode`. */
