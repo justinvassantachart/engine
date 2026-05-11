@@ -99,11 +99,6 @@ impl Variable {
         Some(read_ptr(self.dbg.info(), self.address()?.0))
     }
 
-    /// Human-readable type name (e.g. `int`, `Point`, `int*`).
-    pub fn type_name(&self) -> String {
-        self.ty.name()
-    }
-
     /// Renders this value to a string
     pub fn display(&self) -> String {
         for formatter in &self.dbg.formatters {
