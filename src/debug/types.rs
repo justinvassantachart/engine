@@ -34,8 +34,7 @@ impl NamespaceHierarchy {
             return false;
         }
         let parts: Vec<&str> = target.split("::").collect();
-        self.0.len() >= parts.len()
-            && self.0.iter().zip(&parts).all(|(a, b)| a == b)
+        self.0.len() >= parts.len() && self.0.iter().zip(&parts).all(|(a, b)| a == b)
     }
 }
 
@@ -129,6 +128,18 @@ impl Type {
         Type {
             root: id,
             graph: self.graph.clone(),
+        }
+    }
+
+    /// For pointer types, returns the target type.
+    /// For array types, returns the element type.
+    ///
+    /// Modifiers are excluded, e.g. `const int*` returns `int`.
+    pub fn pointee(&self) -> Option<Type> {
+        match self.resolved()? {
+            TypeDeclaration::Array { element_type, .. } => Some(self.child(*element_type)),
+            TypeDeclaration::Referential { target, .. } => Some(self.child(*target)),
+            _ => None,
         }
     }
 

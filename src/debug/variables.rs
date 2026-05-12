@@ -176,7 +176,7 @@ impl Variable {
         }
     }
 
-    /// Expands this variable into its children using the default logic.
+    /// Expands this variable into its raw children using the default logic.
     /// Use [Self::formatted_children] to use any matching [VariableFormatter] instead.
     pub fn children(&self) -> Vec<Variable> {
         match self.ty.resolved() {
@@ -217,6 +217,65 @@ impl Variable {
                     .children()
             }
             _ => Vec::new(),
+        }
+    }
+
+    /// Returns the children of this variable as if it were an array.
+    ///
+    /// `start` is the index of the first child to retrieve, and `count` is how many to fetch.
+    /// Fewer than `count` elements may be returned if the debugger is unable to fetch that many
+    /// due to OOB accesses or known array bounds.
+    ///
+    /// For pointer types, this will treat a `T*` as if it were a `T[]`.
+    pub fn indexed_children(&self, start: usize, count: usize) -> Vec<Variable> {
+        match self.ty.resolved() {
+            Some(TypeDeclaration::Referential { target, kind, .. })
+                if matches!(kind, ReferenceKind::Pointer) =>
+            {
+                let Some(base) = self.pointer_value() else {
+                    return Vec::new();
+                };
+
+                if base.is_null() {
+                    return Vec::new();
+                }
+
+                let elem_ty = self.ty.child(*target);
+                let Some(elem_size) = elem_ty.byte_size() else {
+                    return Vec::new();
+                };
+
+                let elem_size = elem_size as usize;
+                if elem_size == 0 {
+                    return Vec::new();
+                }
+
+                let mut result = Vec::new();
+
+                for i in start..start + count {
+                    // Compute start address of element
+                    let offset = base.0 as usize + i * elem_size;
+
+                    // Ensure that entire element is in-bounds
+                    if offset + elem_size >= self.dbg.info().memory.byte_size() {
+                        break;
+                    }
+
+                    result.push(self.copy(
+                        format!("[{i}]"),
+                        GlobalAddress(offset as u64).pieces(),
+                        elem_ty.clone(),
+                    ));
+                }
+
+                result
+            }
+            _ => {
+                // For all other types, let's simply query the children and return a slice.
+                // Note that this will be inefficient for large arrays, but simpler to implement
+                let children = self.formatted_children();
+                children.into_iter().skip(start).take(count).collect()
+            }
         }
     }
 

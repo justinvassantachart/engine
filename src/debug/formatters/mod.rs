@@ -30,7 +30,7 @@ pub trait VariableFormatter {
     ///
     /// In order to handle errors, if this method returns [None], matching will
     /// proceed with the next registered provider, or the default one if none exist.
-    fn children(&self, value: &Variable) -> Option<Vec<Variable>> {
+    fn children(&self, _value: &Variable) -> Option<Vec<Variable>> {
         None
     }
 
@@ -41,7 +41,7 @@ pub trait VariableFormatter {
     ///
     /// In order to handle errors, if this method returns [None], matching will
     /// proceed with the next registered provider, or the default one if none exist.
-    fn display(&self, value: &Variable) -> Option<String> {
+    fn display(&self, _value: &Variable) -> Option<String> {
         None
     }
 }

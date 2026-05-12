@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use serde_repr::{Deserialize_repr, Serialize_repr};
 use std::collections::HashMap;
 use tsify::Tsify;
+use wasm_bindgen::JsCast;
 use wasm_bindgen::JsValue;
 use wasmer::{MemoryType, Pages};
 use web_sys::DedicatedWorkerGlobalScope;
@@ -261,6 +262,15 @@ pub struct DebugFrameEntry {
 // ============================================================================
 // Implementations
 // ============================================================================
+
+impl MemoryDescriptor {
+    /// Returns the actual number of bytes currently allocated in this memory
+    pub fn byte_size(&self) -> usize {
+        let buffer = self.memory.buffer();
+        let buffer = buffer.unchecked_ref::<js_sys::ArrayBuffer>();
+        buffer.byte_length() as usize
+    }
+}
 
 impl DebugInfo {
     /// Whether we store the debug stack separately from the main program memory.

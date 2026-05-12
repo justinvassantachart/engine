@@ -158,7 +158,6 @@ impl DapState {
             .context("Unknown variablesReference")?
             .clone();
 
-        let dbg = self.debugger().context("No debugger attached")?;
         let mut variables: Vec<Value> = Vec::with_capacity(entries.len());
 
         for var in entries {
