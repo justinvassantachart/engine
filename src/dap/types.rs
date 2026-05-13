@@ -3,6 +3,12 @@ use std::collections::HashMap;
 
 use crate::debug::Variable;
 
+#[derive(Clone)]
+pub enum VariableReference {
+    List(Vec<Variable>),
+    Variable(Variable),
+}
+
 /// Tracks variable handles handed out via DAP `variablesReference` IDs.
 ///
 /// DAP requires that any non-zero `variablesReference` returned in a
@@ -12,20 +18,29 @@ use crate::debug::Variable;
 #[derive(Default)]
 pub struct VariablesMap {
     next_ref: i64,
-    entries: HashMap<i64, Vec<Variable>>,
+    entries: HashMap<i64, VariableReference>,
 }
 
 impl VariablesMap {
     /// Stores `vars` and returns a fresh non-zero `variablesReference`.
     pub fn allocate(&mut self, vars: Vec<Variable>) -> i64 {
+        self.allocate_reference(VariableReference::List(vars))
+    }
+
+    /// Stores `var` and returns a fresh non-zero `variablesReference`.
+    pub fn allocate_variable(&mut self, var: Variable) -> i64 {
+        self.allocate_reference(VariableReference::Variable(var))
+    }
+
+    fn allocate_reference(&mut self, reference: VariableReference) -> i64 {
         self.next_ref += 1;
         let id = self.next_ref;
-        self.entries.insert(id, vars);
+        self.entries.insert(id, reference);
         id
     }
 
     /// Returns the variables previously registered under `reference`, if any.
-    pub fn get(&self, reference: i64) -> Option<&Vec<Variable>> {
+    pub fn get(&self, reference: i64) -> Option<&VariableReference> {
         self.entries.get(&reference)
     }
 
