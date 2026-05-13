@@ -1,24 +1,70 @@
 //! libc++ `std::vector<T>` synthetic children.
 
-use crate::debug::{Debugger, Variable, VariableProvider};
+use std::ops::Range;
 
-pub struct StdVectorProvider;
+use anyhow::{Context, Result};
 
-impl VariableProvider for StdVectorProvider {
+use crate::debug::Variable;
+use crate::debug::formatters::{ChildCounts, VariableFormatter, VariableSliceExt};
+
+pub struct StdVectorFormatter;
+
+impl StdVectorFormatter {
+    fn data(value: &Variable) -> Result<(Variable, usize)> {
+        let children = value.children();
+        let begin = children
+            .find("__begin_")
+            .context("std::vector is missing __begin_")?;
+        let end = children
+            .find("__end_")
+            .context("std::vector is missing __end_")?;
+
+        let begin_addr = begin
+            .pointer_value()
+            .context("std::vector __begin_ is unavailable")?;
+        let end_addr = end
+            .pointer_value()
+            .context("std::vector __end_ is unavailable")?;
+
+        let elem_size = begin
+            .ty()
+            .pointee()
+            .and_then(|ty| ty.byte_size())
+            .context("std::vector element size is unavailable")?;
+        if elem_size == 0 {
+            return Ok((begin.clone(), 0));
+        }
+
+        let bytes = end_addr.0.saturating_sub(begin_addr.0);
+        Ok((begin.clone(), (bytes / elem_size) as usize))
+    }
+}
+
+impl VariableFormatter for StdVectorFormatter {
     fn matches(&self, value: &Variable) -> bool {
-        value.ty().ns().matches("std") && value.ty().name() == "vector"
+        let name = value.ty().name();
+        value.ty().ns().matches("std")
+            && (name == "std::vector" || name.starts_with("std::vector<"))
     }
 
-    fn children(&self, value: &Variable, dbg: &Debugger) -> Vec<Variable> {
-        let vec_children = value.children(&dbg.info);
-        let begin = vec_children.find("__begin_");
-        let end = vec_children.find("__end_");
+    fn display(&self, value: &Variable) -> Result<String> {
+        let (_, count) = Self::data(value)?;
+        Ok(format!("size={count}"))
+    }
 
-        let begin_addr = begin.addr_value(&dbg.info);
-        let end_addr = end.addr_value(&dbg.info);
+    fn num_children(&self, value: &Variable) -> Result<ChildCounts> {
+        let (_, count) = Self::data(value)?;
+        Ok(ChildCounts::indexed(count))
+    }
 
-        let elem_size = begin.ty().child().byte_size().unwrap_or(1);
-        let count = end_addr.saturating_sub(begin_addr) / elem_size;
-        begin.indexed_children(&dbg.info, 0, count as usize)
+    fn indexed_children(&self, value: &Variable, range: Range<usize>) -> Result<Vec<Variable>> {
+        let (begin, count) = Self::data(value)?;
+        let start = range.start.min(count);
+        let end = range.end.min(count);
+        Ok(begin.raw_indexed_children(start..end))
+    }
+
+    fn named_children(&self, _value: &Variable, _range: Range<usize>) -> Result<Vec<Variable>> {
+        Ok(Vec::new())
     }
 }
