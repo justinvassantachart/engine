@@ -67,7 +67,7 @@ pub trait VariableFormatter {
     fn display(&self, value: &Variable) -> Result<String>;
 
     /// Returns how many formatted children `value` has.
-    fn child_counts(&self, value: &Variable) -> Result<ChildCounts>;
+    fn num_children(&self, value: &Variable) -> Result<ChildCounts>;
 
     /// Returns indexed children in `range`.
     fn indexed_children(&self, value: &Variable, range: Range<usize>) -> Result<Vec<Variable>>;
