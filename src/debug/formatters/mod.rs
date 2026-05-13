@@ -1,10 +1,13 @@
 use std::ops::Range;
 
-use anyhow::{Result, anyhow};
+use anyhow::Result;
 
 use super::Debugger;
 use crate::debug::Variable;
 
+mod cpp;
+
+#[derive(Clone, Copy, Debug, Default)]
 pub struct ChildCounts {
     /// The number of indexed children the variable has.
     ///
@@ -40,55 +43,46 @@ impl ChildCounts {
             named: count,
         }
     }
+
+    pub fn total(&self) -> usize {
+        self.indexed + self.named
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.total() == 0
+    }
 }
 
-/// Provides custom expansion for a [Variable].
+/// Provides custom presentation and expansion for a [Variable].
 ///
-/// Implement this trait to provide custom formatting for variable children
-/// and/or variable values.
+/// The first registered formatter whose [matches](Self::matches) method returns `true`
+/// owns the whole formatted view for that variable. It provides the display text,
+/// child counts, and child slices so a client can ask for a small range without
+/// materializing a large container.
 pub trait VariableFormatter {
-    /// Performs a match on a [Variable] to see if this formatter can
-    /// format it. If this returns `true`, this formatter confirms that it can format the variable.
+    /// Returns whether this formatter can present `value`.
     fn matches(&self, value: &Variable) -> bool;
 
-    /// Computes the number of children that a variable has.
-    ///
-    /// Returns [None] if this formatter cannot provide children for this node.
-    /// If the return value is [Some], the debugger may proceed with calling
-    /// [indexed_children](Self::indexed_children) and [named_children](Self::named_children)
-    /// for this variable.
-    #[allow(unused)]
-    fn num_children(&self, value: &Variable) -> Result<ChildCounts>;
+    /// Renders the value for display in the variables view.
+    fn display(&self, value: &Variable) -> Result<String>;
 
-    /// Provides the indexed children for a [Variable] within a range of indices.
-    #[allow(unused)]
-    fn indexed_children(&self, value: &Variable, range: Range<usize>) -> Result<Vec<Variable>> {
-        Err(anyhow!("indexed_children not implemented"))
-    }
+    /// Returns how many formatted children `value` has.
+    fn child_counts(&self, value: &Variable) -> Result<ChildCounts>;
 
-    /// Provides the named children for a [Variable] within a range of indices.
-    #[allow(unused)]
-    fn named_children(&self, value: &Variable, range: Range<usize>) -> Result<Vec<Variable>> {
-        Err(anyhow!("named_children not implemented"))
-    }
+    /// Returns indexed children in `range`.
+    fn indexed_children(&self, value: &Variable, range: Range<usize>) -> Result<Vec<Variable>>;
 
-    /// Renders the value for a [Variable].
-    ///
-    /// The first matching formatter who returns a non-[None] value from
-    /// [display](Self::display) wins and replaces the default expansion logic.
-    ///
-    /// In order to handle errors, if this method returns [None], matching will
-    /// proceed with the next registered provider, or the default one if none exist.
-    #[allow(unused)]
-    fn display(&self, value: &Variable) -> Result<String> {
-        Ok(value.display())
-    }
+    /// Returns named children in `range`.
+    fn named_children(&self, value: &Variable, range: Range<usize>) -> Result<Vec<Variable>>;
 }
 
 /// Registers the built-in formatters on `dbg`.
-pub fn register_defaults(_dbg: &mut Debugger) {}
+pub fn register_defaults(dbg: &mut Debugger) {
+    // enforces that cpp::StdVectorFormatter implements
+    dbg.add_formatter(Box::new(cpp::StdVectorFormatter));
+}
 
-// Reusable for various formatter that follow the same access pattern
+// Reusable for formatters that inspect raw structure fields.
 pub trait VariableSliceExt {
     fn find(&self, name: &str) -> Option<&Variable>;
 }
