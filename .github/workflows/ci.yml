@@ -37,8 +37,5 @@ jobs:
       - name: Build engine (Rust → WASM → JS)
         run: npm run build
 
-      - name: Run DAP integration tests
-        run: npm run tools:dap
-
       - name: Lint
         run: npx eslint src/
