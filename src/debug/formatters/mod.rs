@@ -53,6 +53,12 @@ impl ChildCounts {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+pub enum ChildKind {
+    Indexed,
+    Named,
+}
+
 /// Provides custom presentation and expansion for a [Variable].
 ///
 /// The first registered formatter whose [matches](Self::matches) method returns `true`
@@ -78,7 +84,6 @@ pub trait VariableFormatter {
 
 /// Registers the built-in formatters on `dbg`.
 pub fn register_defaults(dbg: &mut Debugger) {
-    // enforces that cpp::StdVectorFormatter implements
     dbg.add_formatter(Box::new(cpp::StdVectorFormatter));
 }
 
