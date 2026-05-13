@@ -1,10 +1,14 @@
+use std::{ops::Range, rc::Rc};
+
 use crate::{
     debug::{
-        ReferenceKind, Type, TypeDeclaration,
+        Debugger, ReferenceKind, Type, TypeDeclaration,
         dwarf::{Die, R, Visit},
+        formatters::{ChildCounts, VariableFormatter},
     },
     types::{DebugInfo, GlobalAddress},
 };
+
 use gimli::Reader;
 use gimli::read::Expression;
 use wasm_bindgen::JsCast;
@@ -60,14 +64,21 @@ pub fn get_location(die: &Die<'_>, pc: GlobalAddress) -> Option<Expression<R>> {
 /// register, …); `ty` describes how to interpret them.
 #[derive(Clone)]
 pub struct Variable {
-    name: String,
-    pieces: Vec<gimli::Piece<R>>,
-    ty: Type,
+    pub(crate) dbg: Rc<Debugger>,
+    pub(crate) name: String,
+    pub(crate) pieces: Vec<gimli::Piece<R>>,
+    pub(crate) ty: Type,
 }
 
 impl Variable {
-    pub fn new(name: String, pieces: Vec<gimli::Piece<R>>, ty: Type) -> Self {
-        Self { name, pieces, ty }
+    /// Duplicates the variable with a new name, contents, and type.
+    fn copy(&self, name: String, pieces: Vec<gimli::Piece<R>>, ty: Type) -> Self {
+        Self {
+            dbg: self.dbg.clone(),
+            name,
+            pieces,
+            ty,
+        }
     }
 
     pub fn name(&self) -> &str {
@@ -78,6 +89,16 @@ impl Variable {
         &self.ty
     }
 
+    fn formatter(&self) -> Option<&dyn VariableFormatter> {
+        self.dbg
+            .formatters
+            .iter()
+            .find(|formatter| formatter.matches(self))
+            .map(|formatter| formatter.as_ref())
+    }
+
+    /// Returns the address of this variable.
+    /// If this variable has no known address, returns [None].
     pub fn address(&self) -> Option<GlobalAddress> {
         let piece = self.pieces.first()?;
         match &piece.location {
@@ -86,24 +107,56 @@ impl Variable {
         }
     }
 
-    /// Human-readable type name (e.g. `int`, `Point`, `int*`).
-    pub fn type_name(&self) -> String {
-        self.ty.name()
+    /// Reads `len` bytes from the start of this variable's value.
+    /// If exactly `len` bytes cannot be read, returns [None].
+    pub fn read(&self, len: usize) -> Option<Vec<u8>> {
+        // TODO: Handling for multi-piece value, not just `first()`
+        let piece = self.pieces.first()?;
+        let mut bytes = match &piece.location {
+            gimli::Location::Address { address } => {
+                read_main_memory(self.dbg.info(), *address, len)
+            }
+            gimli::Location::Value { value } => value_to_le_bytes(*value, len),
+            gimli::Location::Bytes { value } => value.to_slice().ok()?.to_vec(),
+            _ => Vec::default(),
+        };
+
+        if bytes.len() < len {
+            return None;
+        }
+
+        bytes.resize(len, 0);
+        Some(bytes)
     }
 
-    /// Renders this value for the DAP `value` field.
+    /// Returns the actual address stored by a pointer.
     ///
-    /// - Scalars are decoded according to their DWARF encoding.
-    /// - Compound types render as e.g. `Point { ... }`; their fields are
-    ///   reachable via [`Self::children`].
-    pub fn display(&self, info: &DebugInfo) -> String {
+    /// For example, in the following snippet:
+    ///
+    /// ```cpp
+    /// int* x = (int*) 0xBA5EBA11;
+    /// ```
+    ///
+    /// [Variable::pointer_value] would return `Some(GlobalAddress(0xBA5EBA11))` for
+    /// the [Variable] corresponding to `x`.
+    pub fn pointer_value(&self) -> Option<GlobalAddress> {
+        if let Some(bytes) = self.read(4) {
+            Some(u32::from_le_bytes(bytes.try_into().ok()?).into())
+        } else {
+            None
+        }
+    }
+
+    /// Renders this value to a string using the default logic.
+    /// Use [Self::formatted_display] to use any matching [VariableFormatter] instead.
+    pub fn display(&self) -> String {
         match self.ty.resolved() {
             Some(TypeDeclaration::Scalar {
                 byte_size,
                 encoding,
                 ..
             }) => {
-                let Some(bytes) = read_value_bytes(info, &self.pieces, *byte_size as usize) else {
+                let Some(bytes) = self.read(*byte_size as usize) else {
                     return "<unavailable>".into();
                 };
                 format_scalar(&bytes, *encoding, *byte_size)
@@ -118,27 +171,23 @@ impl Variable {
                     None => "<unavailable>".into(),
                 },
                 ReferenceKind::Reference | ReferenceKind::Temporary => {
-                    let Some(addr) = self.address() else {
+                    let Some(addr) = self.pointer_value() else {
                         return "<unavailable>".into();
                     };
-                    Variable::new(
-                        self.name.clone(),
-                        vec![addr_piece(read_ptr(info, addr.0))],
-                        self.ty.child(*target),
-                    )
-                    .display(info)
+                    self.copy(self.name.clone(), addr.pieces(), self.ty.child(*target))
+                        .display()
                 }
             },
             _ => "<unavailable>".into(),
         }
     }
 
-    /// Expands a compound value into named child variables.
-    ///
-    /// Returns an empty vector for scalars / unsupported aggregates.
-    pub fn children(&self, info: &DebugInfo) -> Vec<Variable> {
+    /// Expands this variable into its raw children using the default logic.
+    /// Use [Self::formatted_children] to use any matching [VariableFormatter] instead.
+    pub fn children(&self) -> Vec<Variable> {
         match self.ty.resolved() {
             Some(TypeDeclaration::Structure { members, .. }) => {
+                // TODO: What is structure not located in memory? E.g. stored in pieces instead
                 let Some(base) = self.address() else {
                     return Vec::new();
                 };
@@ -153,54 +202,156 @@ impl Variable {
                         Some(super::Value::Expr(_)) => continue,
                     };
                     let addr = (base.0 as i64).wrapping_add(offset) as u64;
-                    out.push(Variable::new(
-                        name,
-                        vec![addr_piece(addr)],
-                        self.ty.child(member.ty),
-                    ));
+                    out.push(self.copy(name, vec![addr_piece(addr)], self.ty.child(member.ty)));
                 }
                 out
             }
             Some(TypeDeclaration::Referential { target, kind, .. }) => {
                 let is_ptr = matches!(kind, ReferenceKind::Pointer);
-                let Some(addr) = self.address() else {
+                let Some(addr) = self.pointer_value() else {
                     return Vec::new();
                 };
-                let target_addr = read_ptr(info, addr.0);
-                if is_ptr && target_addr == 0 {
+                if is_ptr && addr.is_null() {
                     return Vec::new();
                 }
                 let target_type = self.ty.child(*target);
-                let piece = addr_piece(target_addr);
                 if is_ptr && matches!(target_type.resolved(), Some(TypeDeclaration::Scalar { .. }))
                 {
-                    return vec![Variable::new(
-                        format!("*{}", self.name),
-                        vec![piece],
-                        target_type,
-                    )];
+                    return vec![self.copy(format!("*{}", self.name), addr.pieces(), target_type)];
                 }
-                Variable::new(self.name.clone(), vec![piece], target_type).children(info)
+                self.copy(self.name.clone(), addr.pieces(), target_type)
+                    .children()
             }
             _ => Vec::new(),
         }
     }
-}
 
-/// Reads `len` bytes addressed by the first piece (memory or immediate).
-///
-/// Returns `None` if the location is empty or unsupported.
-fn read_value_bytes(info: &DebugInfo, pieces: &[gimli::Piece<R>], len: usize) -> Option<Vec<u8>> {
-    let piece = pieces.first()?;
-    match &piece.location {
-        gimli::Location::Address { address } => Some(read_main_memory(info, *address, len)),
-        gimli::Location::Value { value } => Some(value_to_le_bytes(*value, len)),
-        gimli::Location::Bytes { value } => {
-            let mut buf = value.to_slice().ok()?.to_vec();
-            buf.resize(len, 0);
-            Some(buf)
+    /// Returns the number of children this variable has.
+    pub fn num_children(&self) -> anyhow::Result<ChildCounts> {
+        if let Some(formatter) = self.formatter() {
+            return formatter.num_children(self);
         }
-        _ => None,
+
+        Ok(match self.ty.resolved() {
+            Some(TypeDeclaration::Structure { members, .. }) => ChildCounts::named(
+                members
+                    .iter()
+                    .filter(|member| member.name.is_some())
+                    .count(),
+            ),
+            _ => ChildCounts::named(self.children().len()),
+        })
+    }
+
+    /// Returns the raw named children for this variable within `range`.
+    fn raw_named_children(&self, range: Range<usize>) -> Vec<Variable> {
+        self.children()
+            .into_iter()
+            .skip(range.start)
+            .take(range.end.saturating_sub(range.start))
+            .collect()
+    }
+
+    /// Returns the raw indexed children for this variable within `range`.
+    ///
+    /// Fewer elements may be returned if the debugger is unable to fetch that many
+    /// due to OOB accesses or known array bounds.
+    ///
+    /// For pointer types, this will treat a `T*` as if it were a `T[]`.
+    pub(crate) fn raw_indexed_children(&self, range: Range<usize>) -> Vec<Variable> {
+        match self.ty.resolved() {
+            Some(TypeDeclaration::Referential { target, kind, .. })
+                if matches!(kind, ReferenceKind::Pointer) =>
+            {
+                let Some(base) = self.pointer_value() else {
+                    return Vec::new();
+                };
+
+                if base.is_null() {
+                    return Vec::new();
+                }
+
+                let elem_ty = self.ty.child(*target);
+                let Some(elem_size) = elem_ty.byte_size() else {
+                    return Vec::new();
+                };
+
+                let elem_size = elem_size as usize;
+                if elem_size == 0 {
+                    return Vec::new();
+                }
+
+                let mut result = Vec::new();
+
+                for i in range.start..range.end {
+                    let Some(offset) = i
+                        .checked_mul(elem_size)
+                        .and_then(|offset| (base.0 as usize).checked_add(offset))
+                    else {
+                        break;
+                    };
+
+                    // Ensure that entire element is in-bounds
+                    if offset.saturating_add(elem_size) > self.dbg.info().memory.byte_size() {
+                        break;
+                    }
+
+                    result.push(self.copy(
+                        format!("[{i}]"),
+                        GlobalAddress(offset as u64).pieces(),
+                        elem_ty.clone(),
+                    ));
+                }
+
+                result
+            }
+            _ => {
+                // For all other types, let's simply query the children and return a slice.
+                // Note that this will be inefficient for large arrays, but simpler to implement
+                let children = self.children();
+                children
+                    .into_iter()
+                    .skip(range.start)
+                    .take(range.end.saturating_sub(range.start))
+                    .collect()
+            }
+        }
+    }
+
+    /// Renders this variable to a string using any matching [VariableFormatter].
+    ///
+    /// Be careful calling this inside of a [VariableFormatter::display] implementation
+    /// that you do not cause an infinite loop.
+    pub fn formatted_display(&self) -> anyhow::Result<String> {
+        if let Some(formatter) = self.formatter() {
+            return formatter.display(self);
+        }
+
+        Ok(self.display())
+    }
+
+    /// Returns indexed children within `range`.
+    ///
+    /// Be careful calling this inside of a [VariableFormatter::indexed_children] implementation
+    /// that you do not cause an infinite loop.
+    pub fn indexed_children(&self, range: Range<usize>) -> anyhow::Result<Vec<Variable>> {
+        if let Some(formatter) = self.formatter() {
+            return formatter.indexed_children(self, range);
+        }
+
+        Ok(self.raw_indexed_children(range))
+    }
+
+    /// Returns named children within `range`.
+    ///
+    /// Be careful calling this inside of a [VariableFormatter::named_children] implementation
+    /// that you do not cause an infinite loop.
+    pub fn named_children(&self, range: Range<usize>) -> anyhow::Result<Vec<Variable>> {
+        if let Some(formatter) = self.formatter() {
+            return formatter.named_children(self, range);
+        }
+
+        Ok(self.raw_named_children(range))
     }
 }
 
@@ -242,11 +393,11 @@ fn value_to_le_bytes(value: gimli::Value, len: usize) -> Vec<u8> {
     out
 }
 
-fn read_ptr(info: &DebugInfo, addr: u64) -> u64 {
+pub(super) fn read_ptr(info: &DebugInfo, addr: u64) -> u64 {
     u32::from_le_bytes(read_main_memory(info, addr, 4).try_into().unwrap_or([0; 4])) as u64
 }
 
-fn addr_piece(address: u64) -> gimli::Piece<R> {
+pub(super) fn addr_piece(address: u64) -> gimli::Piece<R> {
     gimli::Piece {
         size_in_bits: None,
         bit_offset: None,
@@ -288,5 +439,18 @@ fn format_scalar(bytes: &[u8], encoding: gimli::DwAte, byte_size: u64) -> String
             _ => "<unsupported char size>".into(),
         },
         _ => "<unsupported encoding>".into(),
+    }
+}
+
+impl GlobalAddress {
+    /// Returns the pieces for a variable located at this address.
+    pub fn pieces(&self) -> Vec<gimli::Piece<R>> {
+        vec![gimli::Piece {
+            size_in_bits: None,
+            bit_offset: None,
+            location: gimli::Location::Address {
+                address: (*self).into(),
+            },
+        }]
     }
 }

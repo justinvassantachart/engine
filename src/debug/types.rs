@@ -28,6 +28,14 @@ impl NamespaceHierarchy {
         // TODO: This is a hack, we should really parse out all template parameters
         qualified.replace("std::__2::", "std::")
     }
+
+    pub fn matches(&self, target: &str) -> bool {
+        if target.is_empty() {
+            return false;
+        }
+        let parts: Vec<&str> = target.split("::").collect();
+        self.0.len() >= parts.len() && self.0.iter().zip(&parts).all(|(a, b)| a == b)
+    }
 }
 
 #[derive(Clone)]
@@ -123,6 +131,18 @@ impl Type {
         }
     }
 
+    /// For pointer types, returns the target type.
+    /// For array types, returns the element type.
+    ///
+    /// Modifiers are excluded, e.g. `const int*` returns `int`.
+    pub fn pointee(&self) -> Option<Type> {
+        match self.resolved()? {
+            TypeDeclaration::Array { element_type, .. } => Some(self.child(*element_type)),
+            TypeDeclaration::Referential { target, .. } => Some(self.child(*target)),
+            _ => None,
+        }
+    }
+
     /// Walks past `typedef`/cv-qualifier modifiers and returns the underlying declaration.
     pub fn resolved(&self) -> Option<&TypeDeclaration> {
         let mut current = self.declaration()?;
@@ -151,6 +171,17 @@ impl Type {
             // TODO: Use the unit address size
             TypeDeclaration::Referential { .. } => Some(4),
             _ => None,
+        }
+    }
+
+    pub fn ns(&self) -> NamespaceHierarchy {
+        match self.resolved() {
+            Some(TypeDeclaration::Scalar { ns, .. })
+            | Some(TypeDeclaration::Array { ns, .. })
+            | Some(TypeDeclaration::Referential { ns, .. })
+            | Some(TypeDeclaration::Structure { ns, .. })
+            | Some(TypeDeclaration::ModifiedType { ns, .. }) => ns.clone(),
+            None => NamespaceHierarchy::default(),
         }
     }
 }

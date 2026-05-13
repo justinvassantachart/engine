@@ -1,7 +1,6 @@
-// Benchmark for the built-in std::vector formatter: expanding a
-// populated std::vector<int> must surface its elements as [0], [1], [2]
-// rather than the raw libc++ layout (__begin_, __end_, __end_cap_).
-// See tools/dap/output/formatting/log.json for the request/response stream.
+// Exercises DAP's paged variables request fields (`filter`, `start`, and
+// `count`) against the std::vector formatter. The adapter should advertise the
+// full indexed child count but only materialize the requested slice.
 {
   "steps": [
     {
@@ -78,31 +77,48 @@
           "$array.contains": [
             {
               "name": "v",
-              "value": "size=3",
-              "indexedVariables": 3,
+              "value": "size=6",
+              "indexedVariables": 6,
               "variablesReference": "${{vec}}"
             }
           ]
         }
       }
     },
-    // Drill into the vector itself. The formatter should expose only the
-    // contained elements, not the raw libc++ members.
     {
       "type": "request",
       "command": "variables",
       "arguments": {
-        "variablesReference": "{{vec}}"
+        "variablesReference": "{{vec}}",
+        "filter": "indexed",
+        "start": 2,
+        "count": 3
       }
     },
     {
       "type": "response",
       "body": {
         "variables": [
-          { "name": "[0]", "value": "10", "variablesReference": 0 },
-          { "name": "[1]", "value": "20", "variablesReference": 0 },
-          { "name": "[2]", "value": "30", "variablesReference": 0 }
+          { "name": "[2]", "value": "30", "variablesReference": 0 },
+          { "name": "[3]", "value": "40", "variablesReference": 0 },
+          { "name": "[4]", "value": "50", "variablesReference": 0 }
         ]
+      }
+    },
+    {
+      "type": "request",
+      "command": "variables",
+      "arguments": {
+        "variablesReference": "{{vec}}",
+        "filter": "indexed",
+        "start": 5,
+        "count": 10
+      }
+    },
+    {
+      "type": "response",
+      "body": {
+        "variables": [{ "name": "[5]", "value": "60", "variablesReference": 0 }]
       }
     },
     {

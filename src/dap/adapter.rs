@@ -7,13 +7,14 @@ use serde_json::{Value, json};
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::prelude::*;
 
-use crate::dap::types::{ProtocolMessage, VariablesMap};
-use crate::debug::Debugger;
+use crate::dap::types::{ProtocolMessage, VariableReference, VariablesMap};
+use crate::debug::formatters::ChildCounts;
+use crate::debug::{Debugger, Variable};
 use crate::types::{DebugInfo, PauseReason};
 
 struct DapState {
     seq_counter: i64,
-    debugger: Option<Debugger>,
+    debugger: Option<Rc<Debugger>>,
     /// `initialize` request was handled and the client received the capabilities response.
     client_initialized: bool,
     /// We emitted `initialized` for this debug session (once per worker / run).
@@ -30,7 +31,7 @@ impl DapState {
     }
 
     fn debugger(&self) -> Option<&Debugger> {
-        self.debugger.as_ref()
+        self.debugger.as_deref()
     }
 
     // Returns the capababilities. TODO: check what more we can support.
@@ -150,49 +151,68 @@ impl DapState {
             .and_then(|v| v.as_i64())
             .unwrap_or(0);
 
-        // Snapshot the entries (and a borrow-free DebugInfo handle) before we
-        // mutate `self.vars` to allocate sub-references.
-        let entries = self
+        // Snapshot the handle before allocating more handles below. Scope handles
+        // already contain a small list of variables; expandable variable handles
+        // keep only the parent variable so children can be fetched lazily.
+        let reference = self
             .vars
             .get(reference)
             .context("Unknown variablesReference")?
             .clone();
-        let info = self
-            .debugger()
-            .context("No debugger attached")?
-            .info()
-            .clone();
+
+        let entries = match reference {
+            VariableReference::List(entries) => {
+                let range = requested_range(args, entries.len());
+                entries
+                    .into_iter()
+                    .skip(range.start)
+                    .take(range.end.saturating_sub(range.start))
+                    .collect()
+            }
+            VariableReference::Variable(var) => requested_children(args, &var)?,
+        };
 
         let mut variables: Vec<Value> = Vec::with_capacity(entries.len());
-        for var in &entries {
-            let display = var.display(&info);
-            let type_name = var.type_name();
-            let children = var.children(&info);
-            let sub_ref = if children.is_empty() {
-                0
-            } else {
-                self.vars.allocate(children)
-            };
 
-            let mut v = json!({
-                "name": var.name(),
-                "value": display,
-                "type": type_name,
-                "variablesReference": sub_ref,
-            });
-
-            if let Some(map) = v.as_object_mut() {
-                if let Some(addr) = var.address() {
-                    map.insert("memoryReference".into(), addr.to_string().into());
-                }
-                if let Some(bs) = var.ty().byte_size() {
-                    map.insert("presentationHint".into(), json!({ "byteSize": bs }));
-                }
-            }
-
-            variables.push(v);
+        for var in entries {
+            variables.push(self.variable_response(var)?);
         }
         Ok(json!({ "variables": variables }))
+    }
+
+    fn variable_response(&mut self, var: Variable) -> Result<Value> {
+        // Only ask for child counts here. If the variable is expandable, store the
+        // parent as the next handle instead of eagerly materializing its children.
+        let counts = var.num_children()?;
+        let sub_ref = if counts.is_empty() {
+            0
+        } else {
+            self.vars.allocate_variable(var.clone())
+        };
+
+        let mut value = json!({
+            "name": var.name(),
+            "value": var.formatted_display()?,
+            "type": var.ty().name(),
+            "variablesReference": sub_ref,
+        });
+
+        if let Some(map) = value.as_object_mut() {
+            if counts.indexed > 0 {
+                map.insert("indexedVariables".into(), counts.indexed.into());
+            }
+            if counts.named > 0 {
+                map.insert("namedVariables".into(), counts.named.into());
+            }
+            if let Some(addr) = var.address() {
+                map.insert("memoryReference".into(), addr.to_string().into());
+            }
+            if let Some(bs) = var.ty().byte_size() {
+                map.insert("presentationHint".into(), json!({ "byteSize": bs }));
+            }
+        }
+
+        Ok(value)
     }
 
     fn handle_continue(&mut self) -> Result<Value> {
@@ -226,6 +246,63 @@ impl DapState {
         }
         Ok(json!({}))
     }
+}
+
+/// Converts DAP's optional `start`/`count` pair into the range our formatter
+/// interface expects. If `count` is absent, the client is asking for everything
+/// from `start` to the end of this child group.
+fn requested_range(args: &Value, len: usize) -> std::ops::Range<usize> {
+    let start = usize_arg(args, "start").unwrap_or(0).min(len);
+    let end = match usize_arg(args, "count") {
+        Some(count) => start.saturating_add(count).min(len),
+        None => len,
+    };
+    start..end
+}
+
+fn usize_arg(args: &Value, name: &str) -> Option<usize> {
+    args.get(name)
+        .and_then(|v| v.as_u64())
+        .and_then(|v| usize::try_from(v).ok())
+}
+
+/// Fetches children for an expandable variable handle. DAP clients can request
+/// only indexed children, only named children, or omit `filter` to get the mixed
+/// view used by simple clients and tests.
+fn requested_children(args: &Value, var: &Variable) -> Result<Vec<Variable>> {
+    let counts = var.num_children()?;
+    let filter = args.get("filter").and_then(|v| v.as_str());
+
+    match filter {
+        Some("indexed") => {
+            let range = requested_range(args, counts.indexed);
+            var.indexed_children(range)
+        }
+        Some("named") => {
+            let range = requested_range(args, counts.named);
+            var.named_children(range)
+        }
+        _ => requested_mixed_children(args, var, counts),
+    }
+}
+
+/// Handles unfiltered child requests by treating named children as coming before
+/// indexed children. This still respects `start`/`count`; without those fields,
+/// the client has explicitly requested the full mixed child list.
+fn requested_mixed_children(
+    args: &Value,
+    var: &Variable,
+    counts: ChildCounts,
+) -> Result<Vec<Variable>> {
+    let range = requested_range(args, counts.total());
+    let named_start = range.start.min(counts.named);
+    let named_end = range.end.min(counts.named);
+    let indexed_start = range.start.saturating_sub(counts.named).min(counts.indexed);
+    let indexed_end = range.end.saturating_sub(counts.named).min(counts.indexed);
+
+    let mut children = var.named_children(named_start..named_end)?;
+    children.extend(var.indexed_children(indexed_start..indexed_end)?);
+    Ok(children)
 }
 
 fn respond(rseq: i64, seq: i64, command: &str, result: Result<Value>) -> ProtocolMessage {
