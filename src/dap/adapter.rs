@@ -178,7 +178,7 @@ impl DapState {
         let sub_ref = if counts.is_empty() {
             0
         } else {
-            self.vars.allocate_variable(var.clone())
+            self.vars.allocate_variable(var.clone())?
         };
 
         let mut value = json!({
@@ -270,22 +270,18 @@ fn requested_children(args: &Value, reference: &VariableReference) -> Result<Vec
             }
         }
 
-        VariableReference::Variable(var) => {
-            let counts = var.num_children()?;
-
-            match filter {
-                Some("indexed") => {
-                    let range = requested_range(args, counts.indexed);
-                    var.indexed_children(range)
-                }
-                Some("named") => {
-                    let range = requested_range(args, counts.named);
-                    var.named_children(range)
-                }
-                None => requested_mixed_children(args, var, counts),
-                Some(filter) => Err(anyhow!("Invalid variable filter: '{:?}'", filter)),
+        VariableReference::Variable { var, counts } => match filter {
+            Some("indexed") => {
+                let range = requested_range(args, counts.indexed);
+                var.indexed_children(range)
             }
-        }
+            Some("named") => {
+                let range = requested_range(args, counts.named);
+                var.named_children(range)
+            }
+            None => requested_mixed_children(args, var, counts),
+            Some(filter) => Err(anyhow!("Invalid variable filter: '{:?}'", filter)),
+        },
     }
 }
 
@@ -295,7 +291,7 @@ fn requested_children(args: &Value, reference: &VariableReference) -> Result<Vec
 fn requested_mixed_children(
     args: &Value,
     var: &Variable,
-    counts: ChildCounts,
+    counts: &ChildCounts,
 ) -> Result<Vec<Variable>> {
     let range = requested_range(args, counts.total());
     let named_start = range.start.min(counts.named);
