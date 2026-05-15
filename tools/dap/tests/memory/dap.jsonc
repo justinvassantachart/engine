@@ -95,10 +95,7 @@
             "name": "p1",
             "type": "Point",
             "memoryReference": "${{p1_addr}}",
-            "variablesReference": "${{p1}}",
-            "presentationHint": {
-              "byteSize": "${{point_size}}"
-            }
+            "variablesReference": "${{p1}}"
           },
           {
             "name": "p2",
@@ -123,10 +120,7 @@
           {
             "name": "x",
             "type": "int",
-            "memoryReference": "${{p1_x_addr}}",
-            "presentationHint": {
-              "byteSize": "${{int_size}}"
-            }
+            "memoryReference": "${{p1_x_addr}}"
           },
           { "name": "y", "type": "int", "memoryReference": "${{p1_y_addr}}" }
         ]
@@ -163,7 +157,7 @@
       /** Expect that p2 is in the right location inside of rect */
       "type": "expect",
       "run": "hex(p2_addr)",
-      "expect": "{{hex(rect_addr) + point_size}}"
+      "expect": "{{hex(rect_addr) + 8}}"
     },
     {
       /** Expect that p1.x is in the right location */
@@ -175,7 +169,7 @@
       /** Expect that p1.y is in the right location */
       "type": "expect",
       "run": "hex(p1_y_addr)",
-      "expect": "{{hex(p1_addr) + int_size}}"
+      "expect": "{{hex(p1_addr) + 4}}"
     },
     {
       /** Expect that p2.x is in the right location */
@@ -187,7 +181,7 @@
       /** Expect that p2.y is in the right location */
       "type": "expect",
       "run": "hex(p2_y_addr)",
-      "expect": "{{hex(p2_addr) + int_size}}"
+      "expect": "{{hex(p2_addr) + 4}}"
     }
   ]
 }
