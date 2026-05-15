@@ -1,7 +1,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow};
 use serde::Serialize;
 use serde_json::{Value, json};
 use wasm_bindgen::closure::Closure;
@@ -127,22 +127,23 @@ impl DapState {
 
         let mut scopes: Vec<Value> = Vec::new();
         if !arguments.is_empty() {
-            let reference = self.vars.allocate(arguments);
-            scopes.push(json!({
-                "name": "Arguments",
-                "variablesReference": reference,
-                "expensive": false,
-            }));
+            scopes.push(self.scope_response("Arguments", arguments));
         }
         if !locals.is_empty() {
-            let reference = self.vars.allocate(locals);
-            scopes.push(json!({
-                "name": "Locals",
-                "variablesReference": reference,
-                "expensive": false,
-            }));
+            scopes.push(self.scope_response("Locals", locals));
         }
         Ok(json!({ "scopes": scopes }))
+    }
+
+    fn scope_response(&mut self, name: &str, vars: Vec<Variable>) -> Value {
+        let nvars = vars.len();
+        let reference = self.vars.allocate(vars);
+        json!({
+            "name": name,
+            "variablesReference": reference,
+            "expensive": false,
+            "namedVariables": nvars
+        })
     }
 
     fn handle_variables(&mut self, args: &Value) -> Result<Value> {
@@ -160,27 +161,17 @@ impl DapState {
             .context("Unknown variablesReference")?
             .clone();
 
-        let entries = match reference {
-            VariableReference::List(entries) => {
-                let range = requested_range(args, entries.len());
-                entries
-                    .into_iter()
-                    .skip(range.start)
-                    .take(range.end.saturating_sub(range.start))
-                    .collect()
-            }
-            VariableReference::Variable(var) => requested_children(args, &var)?,
-        };
-
-        let mut variables: Vec<Value> = Vec::with_capacity(entries.len());
-
-        for var in entries {
-            variables.push(self.variable_response(var)?);
-        }
-        Ok(json!({ "variables": variables }))
+        let entries = requested_children(args, &reference)?;
+        let variables: Result<Vec<_>> = entries
+            .iter()
+            .map(|var| self.variable_response(var))
+            .collect();
+        Ok(json!({
+            "variables": variables?
+        }))
     }
 
-    fn variable_response(&mut self, var: Variable) -> Result<Value> {
+    fn variable_response(&mut self, var: &Variable) -> Result<Value> {
         // Only ask for child counts here. If the variable is expandable, store the
         // parent as the next handle instead of eagerly materializing its children.
         let counts = var.num_children()?;
@@ -206,9 +197,6 @@ impl DapState {
             }
             if let Some(addr) = var.address() {
                 map.insert("memoryReference".into(), addr.to_string().into());
-            }
-            if let Some(bs) = var.ty().byte_size() {
-                map.insert("presentationHint".into(), json!({ "byteSize": bs }));
             }
         }
 
@@ -269,20 +257,35 @@ fn usize_arg(args: &Value, name: &str) -> Option<usize> {
 /// Fetches children for an expandable variable handle. DAP clients can request
 /// only indexed children, only named children, or omit `filter` to get the mixed
 /// view used by simple clients and tests.
-fn requested_children(args: &Value, var: &Variable) -> Result<Vec<Variable>> {
-    let counts = var.num_children()?;
+fn requested_children(args: &Value, reference: &VariableReference) -> Result<Vec<Variable>> {
     let filter = args.get("filter").and_then(|v| v.as_str());
 
-    match filter {
-        Some("indexed") => {
-            let range = requested_range(args, counts.indexed);
-            var.indexed_children(range)
+    match reference {
+        VariableReference::List(entries) => {
+            let range = requested_range(args, entries.len());
+            match filter {
+                Some("indexed") => Ok(Vec::default()),
+                Some("named") | None => Ok(entries[range].to_vec()),
+                Some(filter) => Err(anyhow!("Invalid variable filter: '{:?}'", filter)),
+            }
         }
-        Some("named") => {
-            let range = requested_range(args, counts.named);
-            var.named_children(range)
+
+        VariableReference::Variable(var) => {
+            let counts = var.num_children()?;
+
+            match filter {
+                Some("indexed") => {
+                    let range = requested_range(args, counts.indexed);
+                    var.indexed_children(range)
+                }
+                Some("named") => {
+                    let range = requested_range(args, counts.named);
+                    var.named_children(range)
+                }
+                None => requested_mixed_children(args, var, counts),
+                Some(filter) => Err(anyhow!("Invalid variable filter: '{:?}'", filter)),
+            }
         }
-        _ => requested_mixed_children(args, var, counts),
     }
 }
 

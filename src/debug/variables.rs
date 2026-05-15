@@ -283,7 +283,7 @@ impl Variable {
 
                 let mut result = Vec::new();
 
-                for i in range.start..range.end {
+                for i in range {
                     let Some(offset) = i
                         .checked_mul(elem_size)
                         .and_then(|offset| (base.0 as usize).checked_add(offset))
