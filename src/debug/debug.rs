@@ -298,9 +298,7 @@ impl Debugger {
             };
 
             let variable = Variable {
-                // Note: upgrading `me` to an Rc<Debugger> should be safe here
-                // because the debugger should stay alive for longer than this variable
-                dbg: self.me.upgrade().unwrap(),
+                dbg: self.me.clone(),
                 name,
                 pieces,
                 ty: Type::new(type_id, self.types.clone()),

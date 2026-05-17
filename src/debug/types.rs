@@ -1,5 +1,5 @@
 use crate::debug::dwarf::{Die, DieReference, Dwarf, R};
-use ::std::rc::Rc;
+use ::std::rc::{Rc, Weak};
 
 use std::collections::HashMap;
 
@@ -41,7 +41,7 @@ impl NamespaceHierarchy {
 #[derive(Clone)]
 pub struct Type {
     root: TypeId,
-    graph: Rc<TypeGraph>,
+    graph: Weak<TypeGraph>,
 }
 
 pub struct TypeGraph {
@@ -116,11 +116,20 @@ pub enum TypeDeclaration {
 
 impl Type {
     pub fn new(root: TypeId, graph: Rc<TypeGraph>) -> Self {
-        Self { root, graph }
+        Self {
+            root,
+            graph: Rc::downgrade(&graph),
+        }
     }
 
-    pub fn declaration(&self) -> Option<&TypeDeclaration> {
-        self.graph.get(self.root)
+    fn graph(&self) -> Option<&TypeGraph> {
+        let Some(rc) = self.graph.upgrade() else {
+            crate::util::warning!("Attempt to access type outside of debugging context");
+            return None;
+        };
+        // Note: we assume here that if the graph has not been dropped (which the above guard checks)
+        // then the debugger will live long enough to allow any operations to complete.
+        Some(unsafe { &*Rc::as_ptr(&rc) })
     }
 
     /// Returns a [`Type`] over the same graph, rooted at `id`.
@@ -145,11 +154,12 @@ impl Type {
 
     /// Walks past `typedef`/cv-qualifier modifiers and returns the underlying declaration.
     pub fn resolved(&self) -> Option<&TypeDeclaration> {
-        let mut current = self.declaration()?;
+        let graph = self.graph()?;
+        let mut current = graph.get(self.root)?;
         loop {
             match current {
                 TypeDeclaration::ModifiedType { inner, .. } => {
-                    current = self.graph.get(*inner)?;
+                    current = graph.get(*inner)?;
                 }
                 _ => return Some(current),
             }
@@ -158,7 +168,10 @@ impl Type {
 
     /// Human-readable name of this type (e.g. `int`, `Point`, `int*`).
     pub fn name(&self) -> String {
-        decl_name(self.declaration(), &self.graph)
+        let Some(graph) = self.graph() else {
+            return "<unknown>".to_string();
+        };
+        decl_name(graph.get(self.root), graph)
     }
 
     /// Size in bytes of this type, or `None` if unknown.

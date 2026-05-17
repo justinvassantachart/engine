@@ -1,4 +1,7 @@
-use std::{ops::Range, rc::Rc};
+use std::{
+    ops::Range,
+    rc::{Rc, Weak},
+};
 
 use crate::{
     debug::{
@@ -64,13 +67,23 @@ pub fn get_location(die: &Die<'_>, pc: GlobalAddress) -> Option<Expression<R>> {
 /// register, …); `ty` describes how to interpret them.
 #[derive(Clone)]
 pub struct Variable {
-    pub(crate) dbg: Rc<Debugger>,
+    pub(crate) dbg: Weak<Debugger>,
     pub(crate) name: String,
     pub(crate) pieces: Vec<gimli::Piece<R>>,
     pub(crate) ty: Type,
 }
 
 impl Variable {
+    fn dbg(&self) -> Option<&Debugger> {
+        let Some(rc) = self.dbg.upgrade() else {
+            crate::util::warning!("Attempt to access variable outside of debugging context");
+            return None;
+        };
+        // Note: we assume here that if the debugger has not been dropped (which the above guard checks)
+        // then it will live long enough to allow any subsequent operations to complete.
+        Some(unsafe { &*Rc::as_ptr(&rc) })
+    }
+
     /// Duplicates the variable with a new name, contents, and type.
     fn copy(&self, name: String, pieces: Vec<gimli::Piece<R>>, ty: Type) -> Self {
         Self {
@@ -90,7 +103,7 @@ impl Variable {
     }
 
     fn formatter(&self) -> Option<&dyn VariableFormatter> {
-        self.dbg
+        self.dbg()?
             .formatters
             .iter()
             .find(|formatter| formatter.matches(self))
@@ -114,7 +127,7 @@ impl Variable {
         let piece = self.pieces.first()?;
         let mut bytes = match &piece.location {
             gimli::Location::Address { address } => {
-                read_main_memory(self.dbg.info(), *address, len)
+                read_main_memory(self.dbg()?.info(), *address, len)
             }
             gimli::Location::Value { value } => value_to_le_bytes(*value, len),
             gimli::Location::Bytes { value } => value.to_slice().ok()?.to_vec(),
@@ -284,6 +297,10 @@ impl Variable {
                     return Vec::new();
                 }
 
+                let Some(dbg) = self.dbg() else {
+                    return Vec::new();
+                };
+
                 let mut result = Vec::new();
 
                 for i in range {
@@ -295,7 +312,7 @@ impl Variable {
                     };
 
                     // Ensure that entire element is in-bounds
-                    if offset.saturating_add(elem_size) > self.dbg.info().memory.byte_size() {
+                    if offset.saturating_add(elem_size) > dbg.info().memory.byte_size() {
                         break;
                     }
 
