@@ -262,6 +262,10 @@ fn walk_die(
     types: &mut HashMap<TypeId, TypeDeclaration>,
     ns: &mut NamespaceHierarchy,
 ) {
+    if let Some(decl) = parse_type_declaration(die, ns) {
+        types.insert(die.die_ref(), decl);
+    }
+
     let ns_part = parse_namespace_component(die);
     let has_ns = ns_part.is_some();
 
@@ -269,9 +273,6 @@ fn walk_die(
         ns.push(ns_part);
     }
 
-    if let Some(decl) = parse_type_declaration(die, ns) {
-        types.insert(die.die_ref(), decl);
-    }
     die.for_each_child(|child| walk_die(&child, types, ns));
 
     if has_ns {
@@ -280,7 +281,10 @@ fn walk_die(
 }
 
 fn parse_namespace_component(die: &Die<'_>) -> Option<String> {
-    if die.tag() == gimli::DW_TAG_namespace {
+    if matches!(
+        die.tag(),
+        gimli::DW_TAG_namespace | gimli::DW_TAG_structure_type | gimli::DW_TAG_class_type
+    ) {
         // If DW_AT_export_symbols is set to `true`, this represents
         // an inline namespace such as the `__2` in `std::__2`.
         // These shouldn't be included in the namespace chain since they are

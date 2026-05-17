@@ -5,14 +5,14 @@
       "command": "setBreakpoints",
       "arguments": {
         "source": { "path": "main.cpp" },
-        "breakpoints": [{ "line": 16 }]
+        "breakpoints": [{ "line": 18 }]
       }
     },
     {
       "type": "response",
       "body": {
         "breakpoints": {
-          "$array.contains": [{ "line": 16, "verified": true }]
+          "$array.contains": [{ "line": 18, "verified": true }]
         }
       }
     },
@@ -78,7 +78,8 @@
             },
             {
               "name": "namespaced",
-              "type": "custom::Widget"
+              "type": "custom::Widget",
+              "variablesReference": "${{namespaced}}"
             },
             {
               "name": "via_typedef",
@@ -87,6 +88,30 @@
             {
               "name": "via_using",
               "type": "custom::WidgetUsing"
+            },
+            {
+              "name": "via_nested_using",
+              "type": "custom::Widget::Value"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "type": "request",
+      "command": "variables",
+      "arguments": {
+        "variablesReference": "{{namespaced}}"
+      }
+    },
+    {
+      "type": "response",
+      "body": {
+        "variables": {
+          "$array.contains": [
+            {
+              "name": "value",
+              "type": "custom::Widget::Value"
             }
           ]
         }

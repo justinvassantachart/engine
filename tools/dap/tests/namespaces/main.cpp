@@ -2,7 +2,8 @@
 
 namespace custom {
 struct Widget {
-  int value;
+  using Value = int;
+  Value value;
 };
 
 typedef Widget WidgetTypedef;
@@ -14,5 +15,6 @@ int main() {
   custom::Widget namespaced{1};
   custom::WidgetTypedef via_typedef{2};
   custom::WidgetUsing via_using{3};
-  return namespaced.value + via_typedef.value + via_using.value + static_cast<int>(deep_chrono.time_since_epoch().count());
+  custom::Widget::Value via_nested_using{4};
+  return 0;
 }
