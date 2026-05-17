@@ -80,9 +80,9 @@ pub(crate) fn supports_wasm_multi_memory() -> bool {
     js_sys::WebAssembly::validate(&js_sys::Uint8Array::from(MULTI_MEMORY_PROBE)).unwrap_or(false)
 }
 
-// ============================================================================
-// References
-// ============================================================================
+// ╭──────────────────────────────────────────────────────────────────────────╮
+// │ Weak References                                                          │
+// ╰──────────────────────────────────────────────────────────────────────────╯
 
 /// Represents a shared reference to a long-lived value.
 ///

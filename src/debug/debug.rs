@@ -15,9 +15,9 @@ pub struct StackFrame {
     pub source: Option<String>,
 }
 
-// ---------------------------------------------------------------------------
-// Main-thread Debugger
-// ---------------------------------------------------------------------------
+// ╭──────────────────────────────────────────────────────────────────────────╮
+// │ Main-thread Debugger                                                     │
+// ╰──────────────────────────────────────────────────────────────────────────╯
 
 /// Main-thread debugger that operates on shared memory from an attached worker.
 /// Constructed from `DebugInfo` received via the worker's `debug` message.
