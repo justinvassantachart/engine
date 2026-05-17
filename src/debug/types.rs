@@ -1,5 +1,8 @@
 use crate::{
-    debug::dwarf::{Die, DieReference, Dwarf, R},
+    debug::{
+        Debugger,
+        dwarf::{Die, DieReference, Dwarf, R},
+    },
     util::{Ref, WeakRef},
 };
 
@@ -48,6 +51,7 @@ pub struct Type {
 
 pub struct TypeGraph {
     me: WeakRef<Self>,
+    dbg: WeakRef<Debugger>,
     types: HashMap<TypeId, TypeDeclaration>,
 }
 
@@ -246,7 +250,7 @@ fn decl_name(decl: Option<&TypeDeclaration>, graph: &TypeGraph) -> String {
 }
 
 impl TypeGraph {
-    pub fn new(dwarf: &Dwarf) -> Ref<TypeGraph> {
+    pub fn new(debugger: &WeakRef<Debugger>, dwarf: &Dwarf) -> Ref<TypeGraph> {
         Ref::new_cyclic(|me| {
             let mut types = HashMap::new();
             for unit in dwarf.units() {
@@ -256,6 +260,7 @@ impl TypeGraph {
             }
             TypeGraph {
                 me: me.clone(),
+                dbg: debugger.clone(),
                 types,
             }
         })

@@ -33,7 +33,7 @@ impl Debugger {
     pub fn new(info: DebugInfo) -> Ref<Debugger> {
         Ref::new_cyclic(|me| {
             let state = info.get_bp_state();
-            let types = TypeGraph::new(&info.dwarf);
+            let types = TypeGraph::new(me, &info.dwarf);
             let mut dbg = Self {
                 me: me.clone(),
                 info,
