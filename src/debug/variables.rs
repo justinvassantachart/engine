@@ -150,7 +150,7 @@ impl Variable {
     /// Renders this value to a string using the default logic.
     /// Use [Self::formatted_display] to use any matching [VariableFormatter] instead.
     pub fn display(&self) -> String {
-        match self.ty.resolved() {
+        match self.ty().resolved() {
             Some(TypeDeclaration::Scalar {
                 byte_size,
                 encoding,
@@ -161,9 +161,12 @@ impl Variable {
                 };
                 format_scalar(&bytes, *encoding, *byte_size)
             }
-            Some(TypeDeclaration::Structure { name, .. }) => {
-                let label = name.as_deref().unwrap_or("");
-                format!("{label} {{ ... }}")
+            Some(TypeDeclaration::Structure { .. }) => {
+                if let Some(addr) = self.address() {
+                    format!("@{addr}")
+                } else {
+                    String::default()
+                }
             }
             Some(TypeDeclaration::Referential { target, kind, .. }) => match kind {
                 ReferenceKind::Pointer => match self.address() {
