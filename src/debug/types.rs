@@ -1,5 +1,7 @@
-use crate::debug::dwarf::{Die, DieReference, Dwarf, R};
-use ::std::rc::{Rc, Weak};
+use crate::{
+    debug::dwarf::{Die, DieReference, Dwarf, R},
+    util::{Ref, WeakRef},
+};
 
 use std::collections::HashMap;
 
@@ -41,10 +43,11 @@ impl NamespaceHierarchy {
 #[derive(Clone)]
 pub struct Type {
     root: TypeId,
-    graph: Weak<TypeGraph>,
+    graph: WeakRef<TypeGraph>,
 }
 
 pub struct TypeGraph {
+    me: WeakRef<Self>,
     types: HashMap<TypeId, TypeDeclaration>,
 }
 
@@ -115,21 +118,8 @@ pub enum TypeDeclaration {
 }
 
 impl Type {
-    pub fn new(root: TypeId, graph: Rc<TypeGraph>) -> Self {
-        Self {
-            root,
-            graph: Rc::downgrade(&graph),
-        }
-    }
-
     fn graph(&self) -> Option<&TypeGraph> {
-        let Some(rc) = self.graph.upgrade() else {
-            crate::util::warning!("Attempt to access type outside of debugging context");
-            return None;
-        };
-        // Note: we assume here that if the graph has not been dropped (which the above guard checks)
-        // then the debugger will live long enough to allow any operations to complete.
-        Some(unsafe { &*Rc::as_ptr(&rc) })
+        self.graph.as_deref()
     }
 
     /// Returns a [`Type`] over the same graph, rooted at `id`.
@@ -155,11 +145,11 @@ impl Type {
     /// Walks past `typedef`/cv-qualifier modifiers and returns the underlying declaration.
     pub fn resolved(&self) -> Option<&TypeDeclaration> {
         let graph = self.graph()?;
-        let mut current = graph.get(self.root)?;
+        let mut current = graph.decl(self.root)?;
         loop {
             match current {
                 TypeDeclaration::ModifiedType { inner, .. } => {
-                    current = graph.get(*inner)?;
+                    current = graph.decl(*inner)?;
                 }
                 _ => return Some(current),
             }
@@ -171,7 +161,8 @@ impl Type {
         let Some(graph) = self.graph() else {
             return "<unknown>".to_string();
         };
-        decl_name(graph.get(self.root), graph)
+
+        decl_name(graph.decl(self.root), graph)
     }
 
     /// Size in bytes of this type, or `None` if unknown.
@@ -210,7 +201,7 @@ fn decl_name(decl: Option<&TypeDeclaration>, graph: &TypeGraph) -> String {
             .map(|name| ns.qualify(name))
             .unwrap_or_else(|| "<anonymous>".to_string()),
         TypeDeclaration::Referential { target, kind, .. } => {
-            let inner = decl_name(graph.get(*target), graph);
+            let inner = decl_name(graph.decl(*target), graph);
             match kind {
                 ReferenceKind::Pointer => format!("{inner}*"),
                 ReferenceKind::Reference => format!("{inner}&"),
@@ -223,7 +214,7 @@ fn decl_name(decl: Option<&TypeDeclaration>, graph: &TypeGraph) -> String {
             upper_bound,
             ..
         } => {
-            let elem = decl_name(graph.get(*element_type), graph);
+            let elem = decl_name(graph.decl(*element_type), graph);
             let count = match (lower_bound, upper_bound) {
                 (Value::Constant(lo), Some(Value::Constant(hi))) => Some(hi - lo + 1),
                 _ => None,
@@ -242,7 +233,7 @@ fn decl_name(decl: Option<&TypeDeclaration>, graph: &TypeGraph) -> String {
             if let Some(name) = name {
                 return ns.qualify(name);
             }
-            let inner_name = decl_name(graph.get(*inner), graph);
+            let inner_name = decl_name(graph.decl(*inner), graph);
             match modifier {
                 Modifier::TypeDef => inner_name,
                 Modifier::Const => format!("const {inner_name}"),
@@ -255,18 +246,30 @@ fn decl_name(decl: Option<&TypeDeclaration>, graph: &TypeGraph) -> String {
 }
 
 impl TypeGraph {
-    pub fn new(dwarf: &Dwarf) -> TypeGraph {
-        let mut types = HashMap::new();
-        for unit in dwarf.units() {
-            if let Some(root) = unit.root(dwarf) {
-                walk_die(&root, &mut types, &mut NamespaceHierarchy::default());
+    pub fn new(dwarf: &Dwarf) -> Ref<TypeGraph> {
+        Ref::new_cyclic(|me| {
+            let mut types = HashMap::new();
+            for unit in dwarf.units() {
+                if let Some(root) = unit.root(dwarf) {
+                    walk_die(&root, &mut types, &mut NamespaceHierarchy::default());
+                }
             }
-        }
-        TypeGraph { types }
+            TypeGraph {
+                me: me.clone(),
+                types,
+            }
+        })
     }
 
-    pub fn get(&self, id: TypeId) -> Option<&TypeDeclaration> {
+    pub fn decl(&self, id: TypeId) -> Option<&TypeDeclaration> {
         self.types.get(&id)
+    }
+
+    pub fn get(&self, id: TypeId) -> Type {
+        Type {
+            root: id,
+            graph: self.me.clone(),
+        }
     }
 }
 

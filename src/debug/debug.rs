@@ -1,5 +1,3 @@
-use std::rc::Rc;
-
 use crate::debug::dwarf::Location;
 use crate::debug::formatters::VariableFormatter;
 use crate::debug::{Type, TypeGraph, Variable, get_location, get_variables as debug_get_variables};
@@ -26,7 +24,7 @@ pub struct StackFrame {
 pub struct Debugger {
     me: WeakRef<Self>,
     info: DebugInfo,
-    types: Rc<TypeGraph>,
+    types: Ref<TypeGraph>,
     state: js_sys::Int32Array,
     pub(crate) formatters: Vec<Box<dyn VariableFormatter>>,
 }
@@ -35,9 +33,9 @@ impl Debugger {
     pub fn new(info: DebugInfo) -> Ref<Debugger> {
         Ref::new_cyclic(|me| {
             let state = info.get_bp_state();
-            let types = Rc::from(TypeGraph::new(&info.dwarf));
+            let types = TypeGraph::new(&info.dwarf);
             let mut dbg = Self {
-                me: WeakRef::clone(me),
+                me: me.clone(),
                 info,
                 state,
                 types,
@@ -302,7 +300,7 @@ impl Debugger {
                 dbg: self.me.clone(),
                 name,
                 pieces,
-                ty: Type::new(type_id, self.types.clone()),
+                ty: self.types.get(type_id),
             };
 
             match var_die.tag() {
