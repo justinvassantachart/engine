@@ -181,64 +181,6 @@ impl Variable {
             None
         }
     }
-}
-
-/// Expands a variable into its default named child list (structure members, dereferenced
-/// referents, and so on).
-fn compute_default_named_children(var: &Variable) -> Vec<Variable> {
-    match var.ty.resolved() {
-        Some(TypeDeclaration::Structure { members, .. }) => {
-            // TODO: What is structure not located in memory? E.g. stored in pieces instead
-            let Some(base) = var.address() else {
-                return Vec::new();
-            };
-            let mut out = Vec::with_capacity(members.len());
-            for member in members {
-                let Some(name) = member.name.clone() else {
-                    continue;
-                };
-                let offset = match &member.location {
-                    Some(super::Value::Constant(o)) => *o,
-                    None => 0,
-                    Some(super::Value::Expr(_)) => continue,
-                };
-                let addr = (base.0 as i64).wrapping_add(offset) as u64;
-                out.push(var.copy(name, vec![addr_piece(addr)], var.ty.child(member.ty)));
-            }
-            out
-        }
-        Some(TypeDeclaration::Referential { target, kind, .. }) => {
-            let is_ptr = matches!(kind, ReferenceKind::Pointer);
-            let Some(addr) = var.pointer_value() else {
-                return Vec::new();
-            };
-            if is_ptr && addr.is_null() {
-                return Vec::new();
-            }
-            let target_type = var.ty.child(*target);
-            if is_ptr && matches!(target_type.resolved(), Some(TypeDeclaration::Scalar { .. })) {
-                return vec![var.copy(format!("*{}", var.name), addr.pieces(), target_type)];
-            }
-
-            let inner = var.copy(var.name.clone(), addr.pieces(), target_type);
-            compute_default_named_children(&inner)
-        }
-        _ => Vec::new(),
-    }
-}
-
-fn compute_default_indexed_children(_var: &Variable) -> Vec<Variable> {
-    Vec::new()
-}
-
-impl Variable {
-    fn formatter(&self) -> Option<&dyn VariableFormatter> {
-        self.debugger()?
-            .formatters
-            .iter()
-            .find(|formatter| formatter.matches(self))
-            .map(|formatter| formatter.as_ref())
-    }
 
     pub fn display(&self) -> Result<String> {
         Ok(match self.ty().resolved() {
@@ -340,6 +282,24 @@ impl Variable {
         Ok(self.cache.named(self)[range].to_vec())
     }
 
+    pub fn named_child(&self, name: &str) -> Result<Variable> {
+        let children = self.cache.named(self);
+        for child in children {
+            if child.name() == name {
+                return Ok(child.clone());
+            }
+        }
+        Err(anyhow::anyhow!("No child named '{}'", name))
+    }
+
+    fn formatter(&self) -> Option<&dyn VariableFormatter> {
+        self.debugger()?
+            .formatters
+            .iter()
+            .find(|formatter| formatter.matches(self))
+            .map(|formatter| formatter.as_ref())
+    }
+
     pub fn formatted_display(&self) -> Result<String> {
         match self.formatter() {
             Some(formatter) => formatter.display(self),
@@ -367,6 +327,54 @@ impl Variable {
             None => self.named_children(range),
         }
     }
+}
+
+/// Computes the default named children of a variable.
+fn compute_default_named_children(var: &Variable) -> Vec<Variable> {
+    match var.ty.resolved() {
+        Some(TypeDeclaration::Structure { members, .. }) => {
+            // TODO: What is structure not located in memory? E.g. stored in pieces instead
+            let Some(base) = var.address() else {
+                return Vec::new();
+            };
+            let mut out = Vec::with_capacity(members.len());
+            for member in members {
+                let Some(name) = member.name.clone() else {
+                    continue;
+                };
+                let offset = match &member.location {
+                    Some(super::Value::Constant(o)) => *o,
+                    None => 0,
+                    Some(super::Value::Expr(_)) => continue,
+                };
+                let addr = (base.0 as i64).wrapping_add(offset) as u64;
+                out.push(var.copy(name, vec![addr_piece(addr)], var.ty.child(member.ty)));
+            }
+            out
+        }
+        Some(TypeDeclaration::Referential { target, kind, .. }) => {
+            let is_ptr = matches!(kind, ReferenceKind::Pointer);
+            let Some(addr) = var.pointer_value() else {
+                return Vec::new();
+            };
+            if is_ptr && addr.is_null() {
+                return Vec::new();
+            }
+            let target_type = var.ty.child(*target);
+            if is_ptr && matches!(target_type.resolved(), Some(TypeDeclaration::Scalar { .. })) {
+                return vec![var.copy(format!("*{}", var.name), addr.pieces(), target_type)];
+            }
+
+            let inner = var.copy(var.name.clone(), addr.pieces(), target_type);
+            compute_default_named_children(&inner)
+        }
+        _ => Vec::new(),
+    }
+}
+
+/// Computes the default indexed children of a variable.
+fn compute_default_indexed_children(_var: &Variable) -> Vec<Variable> {
+    Vec::new()
 }
 
 pub(crate) fn read_main_memory(info: &DebugInfo, address: u64, len: usize) -> Vec<u8> {

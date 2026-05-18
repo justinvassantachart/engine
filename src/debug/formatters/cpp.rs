@@ -36,14 +36,8 @@ pub struct StdVectorFormatter;
 
 impl StdVectorFormatter {
     fn data(value: &Variable) -> Result<(Variable, usize)> {
-        let counts = value.num_children()?;
-        let children = value.named_children(0..counts.named)?;
-        let begin = children
-            .find("__begin_")
-            .context("std::vector is missing __begin_")?;
-        let end = children
-            .find("__end_")
-            .context("std::vector is missing __end_")?;
+        let begin = value.named_child("__begin_")?;
+        let end = value.named_child("__end_")?;
 
         let begin_addr = begin
             .pointer_value()
@@ -74,8 +68,7 @@ impl VariableFormatter for StdVectorFormatter {
     }
 
     fn display(&self, value: &Variable) -> Result<String> {
-        let (_, count) = Self::data(value)?;
-        Ok(format!("size={count}"))
+        value.display()
     }
 
     fn num_children(&self, value: &Variable) -> Result<ChildCounts> {

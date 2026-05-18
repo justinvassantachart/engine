@@ -78,7 +78,6 @@
           "$array.contains": [
             {
               "name": "v",
-              "value": "size=3",
               "indexedVariables": 3,
               "variablesReference": "${{vec}}"
             }
