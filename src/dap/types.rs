@@ -35,8 +35,7 @@ impl VariablesMap {
     }
 
     /// Stores `var` and returns a fresh non-zero `variablesReference`.
-    pub fn allocate_variable(&mut self, var: Variable) -> Result<i64> {
-        let counts = var.formatted_num_children()?;
+    pub fn allocate_variable(&mut self, var: Variable, counts: ChildCounts) -> Result<i64> {
         Ok(self.allocate_reference(VariableReference::Variable { var, counts }))
     }
 

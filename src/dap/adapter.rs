@@ -179,7 +179,7 @@ impl DapState {
         let sub_ref = if counts.is_empty() {
             0
         } else {
-            self.vars.allocate_variable(var.clone())?
+            self.vars.allocate_variable(var.clone(), counts.clone())?
         };
 
         let mut value = json!({
