@@ -1,3 +1,4 @@
+use std::cell::OnceCell;
 use std::ops::Range;
 
 use crate::{
@@ -10,7 +11,7 @@ use crate::{
     util::WeakRef,
 };
 
-use anyhow::{Result, anyhow};
+use anyhow::Result;
 
 use gimli::Reader;
 use gimli::read::Expression;
@@ -67,15 +68,45 @@ pub fn get_location(die: &Die<'_>, pc: GlobalAddress) -> Option<Expression<R>> {
 /// register, …); `ty` describes how to interpret them.
 #[derive(Clone)]
 pub struct Variable {
-    pub(crate) debugger: WeakRef<Debugger>,
-    pub(crate) name: String,
-    pub(crate) pieces: Vec<gimli::Piece<R>>,
-    pub(crate) ty: Type,
+    debugger: WeakRef<Debugger>,
+    name: String,
+    pieces: Vec<gimli::Piece<R>>,
+    ty: Type,
+    cache: VariableCache,
+}
+
+#[derive(Clone, Default)]
+struct VariableCache {
+    named: OnceCell<Vec<Variable>>,
+    indexed: OnceCell<Vec<Variable>>,
+}
+
+impl VariableCache {
+    pub fn named(&self, var: &Variable) -> &Vec<Variable> {
+        self.named
+            .get_or_init(|| compute_default_named_children(var))
+    }
+
+    pub fn indexed(&self, var: &Variable) -> &Vec<Variable> {
+        self.indexed
+            .get_or_init(|| compute_default_indexed_children(var))
+    }
 }
 
 impl Variable {
-    pub(crate) fn debugger(&self) -> Option<&Debugger> {
-        self.debugger.as_deref()
+    pub fn new(
+        debugger: WeakRef<Debugger>,
+        name: String,
+        pieces: Vec<gimli::Piece<R>>,
+        ty: Type,
+    ) -> Self {
+        Variable {
+            debugger: debugger.clone(),
+            name,
+            pieces,
+            ty,
+            cache: Default::default(),
+        }
     }
 
     /// Duplicates the variable with a new name, contents, and type.
@@ -85,7 +116,12 @@ impl Variable {
             name,
             pieces,
             ty,
+            cache: Default::default(),
         }
+    }
+
+    fn debugger(&self) -> Option<&Debugger> {
+        self.debugger.as_deref()
     }
 
     pub fn name(&self) -> &str {
@@ -147,9 +183,9 @@ impl Variable {
     }
 }
 
-/// Expands a variable into its default child list (structure members, dereferenced
+/// Expands a variable into its default named child list (structure members, dereferenced
 /// referents, and so on).
-fn default_children(var: &Variable) -> Vec<Variable> {
+fn compute_default_named_children(var: &Variable) -> Vec<Variable> {
     match var.ty.resolved() {
         Some(TypeDeclaration::Structure { members, .. }) => {
             // TODO: What is structure not located in memory? E.g. stored in pieces instead
@@ -183,10 +219,16 @@ fn default_children(var: &Variable) -> Vec<Variable> {
             if is_ptr && matches!(target_type.resolved(), Some(TypeDeclaration::Scalar { .. })) {
                 return vec![var.copy(format!("*{}", var.name), addr.pieces(), target_type)];
             }
-            default_children(&var.copy(var.name.clone(), addr.pieces(), target_type))
+
+            let inner = var.copy(var.name.clone(), addr.pieces(), target_type);
+            compute_default_named_children(&inner)
         }
         _ => Vec::new(),
     }
+}
+
+fn compute_default_indexed_children(_var: &Variable) -> Vec<Variable> {
+    Vec::new()
 }
 
 impl Variable {
@@ -206,7 +248,7 @@ impl Variable {
                 ..
             }) => {
                 let Some(bytes) = self.read(*byte_size as usize) else {
-                    return Ok("<unavailable>".to_string());
+                    return Ok("<unavailable>".into());
                 };
                 format_scalar(&bytes, *encoding, *byte_size)
             }
@@ -236,15 +278,10 @@ impl Variable {
     }
 
     pub fn num_children(&self) -> Result<ChildCounts> {
-        Ok(match self.ty.resolved() {
-            Some(TypeDeclaration::Structure { members, .. }) => ChildCounts::named(
-                members
-                    .iter()
-                    .filter(|member| member.name.is_some())
-                    .count(),
-            ),
-            _ => ChildCounts::named(default_children(self).len()),
-        })
+        Ok(ChildCounts::mixed(
+            self.cache.indexed(self).len(),
+            self.cache.named(self).len(),
+        ))
     }
 
     pub fn indexed_children(&self, range: Range<usize>) -> Result<Vec<Variable>> {
@@ -295,16 +332,12 @@ impl Variable {
 
                 Ok(result)
             }
-            _ => self.named_children(range),
+            _ => Ok(self.cache.indexed(self)[range].to_vec()),
         }
     }
 
     pub fn named_children(&self, range: Range<usize>) -> Result<Vec<Variable>> {
-        Ok(default_children(self)
-            .into_iter()
-            .skip(range.start)
-            .take(range.end.saturating_sub(range.start))
-            .collect())
+        Ok(self.cache.named(self)[range].to_vec())
     }
 
     pub fn formatted_display(&self) -> Result<String> {

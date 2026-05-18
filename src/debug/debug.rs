@@ -1,6 +1,6 @@
 use crate::debug::dwarf::Location;
 use crate::debug::formatters::VariableFormatter;
-use crate::debug::{Type, TypeGraph, Variable, get_location, get_variables as debug_get_variables};
+use crate::debug::{TypeGraph, Variable, get_location, get_variables as debug_get_variables};
 use crate::types::{BreakpointMode, DebugFunction, DebugInfo, GlobalAddress, WasmLocation};
 use crate::util::{Ref, WeakRef};
 use serde::{Deserialize, Serialize};
@@ -296,12 +296,7 @@ impl Debugger {
                 continue;
             };
 
-            let variable = Variable {
-                debugger: self.me.clone(),
-                name,
-                pieces,
-                ty: self.types.get(type_id),
-            };
+            let variable = Variable::new(self.me.clone(), name, pieces, self.types.get(type_id));
 
             match var_die.tag() {
                 gimli::DW_TAG_formal_parameter => arguments.push(variable),

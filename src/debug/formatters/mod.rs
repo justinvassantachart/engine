@@ -1,6 +1,6 @@
 use std::ops::Range;
 
-use anyhow::{Result, anyhow};
+use anyhow::Result;
 
 use super::Debugger;
 use crate::debug::Variable;
