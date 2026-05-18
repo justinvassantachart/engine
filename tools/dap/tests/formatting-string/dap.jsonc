@@ -1,0 +1,116 @@
+// Exploratory scenario: capture how lldb-dap renders std::string locals
+// across the four interesting shapes (empty, SSO, heap, escapes). The
+// stream lands in tools/dap/output/formatting-string/log.json and becomes
+// the golden reference for StdStringFormatter.
+{
+  "steps": [
+    {
+      "type": "request",
+      "command": "setBreakpoints",
+      "arguments": {
+        "source": { "path": "main.cpp" },
+        "breakpoints": [{ "line": 8 }]
+      }
+    },
+    {
+      "type": "response",
+      "body": {
+        "breakpoints": {
+          "$array.contains": [{ "line": 8, "verified": true }]
+        }
+      }
+    },
+    {
+      "type": "request",
+      "command": "configurationDone",
+      "arguments": {}
+    },
+    {
+      "type": "event",
+      "event": "stopped",
+      "body": {
+        "reason": "breakpoint",
+        "threadId": "${{thread}}"
+      }
+    },
+    {
+      "type": "request",
+      "command": "stackTrace",
+      "arguments": { "threadId": "{{thread}}" }
+    },
+    {
+      "type": "response",
+      "body": {
+        "stackFrames": {
+          "$array.contains": [{ "name": "main", "id": "${{mainFrame}}" }]
+        }
+      }
+    },
+    {
+      "type": "request",
+      "command": "scopes",
+      "arguments": { "frameId": "{{mainFrame}}" }
+    },
+    {
+      "type": "response",
+      "body": {
+        "scopes": {
+          "$array.contains": [
+            { "name": "Locals", "variablesReference": "${{locals}}" }
+          ]
+        }
+      }
+    },
+    {
+      "type": "request",
+      "command": "variables",
+      "arguments": { "variablesReference": "{{locals}}" }
+    },
+    // Intentionally permissive: we don't yet know the exact value strings
+    // lldb-dap will emit — those are precisely what we want to read off
+    // the captured log.
+    {
+      "type": "response",
+      "body": {
+        "variables": {
+          "$array.contains": [
+            { "name": "empty", "variablesReference": "${{empty}}" },
+            { "name": "sso", "variablesReference": "${{sso}}" },
+            { "name": "heap", "variablesReference": "${{heap}}" },
+            { "name": "with_quotes", "variablesReference": "${{wq}}" }
+          ]
+        }
+      }
+    },
+    // Drill into each string to see whether lldb-dap exposes children.
+    {
+      "type": "request",
+      "command": "variables",
+      "arguments": { "variablesReference": "{{empty}}" }
+    },
+    { "type": "response", "body": {} },
+    {
+      "type": "request",
+      "command": "variables",
+      "arguments": { "variablesReference": "{{sso}}" }
+    },
+    { "type": "response", "body": {} },
+    {
+      "type": "request",
+      "command": "variables",
+      "arguments": { "variablesReference": "{{heap}}" }
+    },
+    { "type": "response", "body": {} },
+    {
+      "type": "request",
+      "command": "variables",
+      "arguments": { "variablesReference": "{{wq}}" }
+    },
+    { "type": "response", "body": {} },
+    {
+      "type": "request",
+      "command": "continue",
+      "arguments": { "threadId": "{{thread}}" }
+    }
+  ]
+}

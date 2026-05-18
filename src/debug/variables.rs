@@ -369,7 +369,7 @@ impl Variable {
     }
 }
 
-fn read_main_memory(info: &DebugInfo, address: u64, len: usize) -> Vec<u8> {
+pub(crate) fn read_main_memory(info: &DebugInfo, address: u64, len: usize) -> Vec<u8> {
     let buffer = info.memory.memory.buffer();
     let buffer = buffer.unchecked_ref::<js_sys::ArrayBuffer>();
     let total = buffer.byte_length() as usize;
