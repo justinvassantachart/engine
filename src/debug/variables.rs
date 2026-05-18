@@ -7,7 +7,7 @@ use crate::{
         dwarf::{Die, R, Visit},
         formatters::{ChildCounts, VariableFormatter},
     },
-    types::{DebugInfo, GlobalAddress},
+    types::GlobalAddress,
     util::WeakRef,
 };
 
@@ -110,7 +110,7 @@ impl Variable {
     }
 
     /// Duplicates the variable with a new name, contents, and type.
-    fn copy(&self, name: String, pieces: Vec<gimli::Piece<R>>, ty: Type) -> Self {
+    pub(crate) fn copy(&self, name: String, pieces: Vec<gimli::Piece<R>>, ty: Type) -> Self {
         Self {
             debugger: self.debugger.clone(),
             name,
@@ -120,8 +120,12 @@ impl Variable {
         }
     }
 
-    fn debugger(&self) -> Option<&Debugger> {
+    pub(crate) fn debugger(&self) -> Option<&Debugger> {
         self.debugger.as_deref()
+    }
+
+    pub(crate) fn debugger_reference(&self) -> WeakRef<Debugger> {
+        self.debugger.clone()
     }
 
     pub fn name(&self) -> &str {
@@ -148,9 +152,10 @@ impl Variable {
         // TODO: Handling for multi-piece value, not just `first()`
         let piece = self.pieces.first()?;
         let mut bytes = match &piece.location {
-            gimli::Location::Address { address } => {
-                read_main_memory(self.debugger()?.info(), *address, len)
-            }
+            gimli::Location::Address { address } => self
+                .debugger()?
+                .memory()
+                .read_memory(GlobalAddress(*address), len),
             gimli::Location::Value { value } => value_to_le_bytes(*value, len),
             gimli::Location::Bytes { value } => value.to_slice().ok()?.to_vec(),
             _ => Vec::default(),
@@ -377,24 +382,6 @@ fn compute_default_indexed_children(_var: &Variable) -> Vec<Variable> {
     Vec::new()
 }
 
-pub(crate) fn read_main_memory(info: &DebugInfo, address: u64, len: usize) -> Vec<u8> {
-    let buffer = info.memory.memory.buffer();
-    let buffer = buffer.unchecked_ref::<js_sys::ArrayBuffer>();
-    let total = buffer.byte_length() as usize;
-    if address as usize >= total {
-        return vec![0; len];
-    }
-    let avail = (total - address as usize).min(len);
-    let view = js_sys::Uint8Array::new_with_byte_offset_and_length(
-        &buffer.into(),
-        address as u32,
-        avail as u32,
-    );
-    let mut out = vec![0u8; len];
-    view.copy_to(&mut out[..avail]);
-    out
-}
-
 fn value_to_le_bytes(value: gimli::Value, len: usize) -> Vec<u8> {
     let raw: u64 = match value {
         gimli::Value::Generic(v) => v,
@@ -413,10 +400,6 @@ fn value_to_le_bytes(value: gimli::Value, len: usize) -> Vec<u8> {
     let copy = len.min(8);
     out[..copy].copy_from_slice(&bytes[..copy]);
     out
-}
-
-pub(super) fn read_ptr(info: &DebugInfo, addr: u64) -> u64 {
-    u32::from_le_bytes(read_main_memory(info, addr, 4).try_into().unwrap_or([0; 4])) as u64
 }
 
 pub(super) fn addr_piece(address: u64) -> gimli::Piece<R> {

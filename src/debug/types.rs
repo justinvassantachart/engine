@@ -148,7 +148,30 @@ impl Type {
         }
     }
 
+    /// Discard any typedef or modifiers and return the underlying type.
+    pub fn discard_modifiers(&self) -> Option<Type> {
+        self.graph()?;
+        let mut ty = self.clone();
+        while let Some(TypeDeclaration::ModifiedType { inner, .. }) = ty.resolved() {
+            ty = ty.child(*inner);
+        }
+        Some(ty)
+    }
+
+    /// For structural types, return the type of a direct member with this member name.
+    pub fn member(&self, name: &str) -> Option<Type> {
+        let TypeDeclaration::Structure { members, .. } = self.resolved()? else {
+            return None;
+        };
+        if let Some(member) = members.iter().find(|m| m.name.as_deref() == Some(name)) {
+            return Some(self.child(member.ty));
+        }
+        None
+    }
+
     /// Walks past `typedef`/cv-qualifier modifiers and returns the underlying declaration.
+    ///
+    /// Equivalent to the [TypeDeclaration] of [Type::discard_modifiers].
     pub fn resolved(&self) -> Option<&TypeDeclaration> {
         let graph = self.graph()?;
         let mut current = graph.decl(self.root)?;
@@ -217,7 +240,7 @@ impl Type {
                 return None;
             }
 
-            let id = die.die_ref();
+            let id = child.die_ref();
             if graph.contains(&id) {
                 Some(graph.get(id))
             } else {

@@ -1,7 +1,9 @@
 use crate::debug::dwarf::Location;
 use crate::debug::formatters::VariableFormatter;
 use crate::debug::{TypeGraph, Variable, get_location, get_variables as debug_get_variables};
-use crate::types::{BreakpointMode, DebugFunction, DebugInfo, GlobalAddress, WasmLocation};
+use crate::types::{
+    BreakpointMode, DebugFunction, DebugInfo, GlobalAddress, MemoryDescriptor, WasmLocation,
+};
 use crate::util::{Ref, WeakRef};
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::JsCast;
@@ -311,6 +313,10 @@ impl Debugger {
     /// peek at memory or DWARF without owning the debugger.
     pub fn info(&self) -> &DebugInfo {
         &self.info
+    }
+
+    pub fn memory(&self) -> &MemoryDescriptor {
+        &self.info.memory
     }
 
     fn notify_resume(&self) {
