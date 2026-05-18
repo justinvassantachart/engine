@@ -11,7 +11,8 @@ pub struct StdVectorFormatter;
 
 impl StdVectorFormatter {
     fn data(value: &Variable) -> Result<(Variable, usize)> {
-        let children = value.children();
+        let counts = value.num_children()?;
+        let children = value.named_children(0..counts.named)?;
         let begin = children
             .find("__begin_")
             .context("std::vector is missing __begin_")?;
@@ -61,7 +62,7 @@ impl VariableFormatter for StdVectorFormatter {
         let (begin, count) = Self::data(value)?;
         let start = range.start.min(count);
         let end = range.end.min(count);
-        Ok(begin.raw_indexed_children(start..end))
+        begin.indexed_children(start..end)
     }
 
     fn named_children(&self, _value: &Variable, _range: Range<usize>) -> Result<Vec<Variable>> {

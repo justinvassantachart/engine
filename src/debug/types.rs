@@ -51,7 +51,7 @@ pub struct Type {
 
 pub struct TypeGraph {
     me: WeakRef<Self>,
-    dbg: WeakRef<Debugger>,
+    debugger: WeakRef<Debugger>,
     types: HashMap<TypeId, TypeDeclaration>,
 }
 
@@ -260,7 +260,7 @@ impl TypeGraph {
             }
             TypeGraph {
                 me: me.clone(),
-                dbg: debugger.clone(),
+                debugger: debugger.clone(),
                 types,
             }
         })

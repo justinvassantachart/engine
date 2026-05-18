@@ -175,7 +175,7 @@ impl DapState {
     fn variable_response(&mut self, var: &Variable) -> Result<Value> {
         // Only ask for child counts here. If the variable is expandable, store the
         // parent as the next handle instead of eagerly materializing its children.
-        let counts = var.num_children()?;
+        let counts = var.formatted_num_children()?;
         let sub_ref = if counts.is_empty() {
             0
         } else {
@@ -274,11 +274,11 @@ fn requested_children(args: &Value, reference: &VariableReference) -> Result<Vec
         VariableReference::Variable { var, counts } => match filter {
             Some("indexed") => {
                 let range = requested_range(args, counts.indexed);
-                var.indexed_children(range)
+                var.formatted_indexed_children(range)
             }
             Some("named") => {
                 let range = requested_range(args, counts.named);
-                var.named_children(range)
+                var.formatted_named_children(range)
             }
             None => requested_mixed_children(args, var, counts),
             Some(filter) => Err(anyhow!("Invalid variable filter: '{:?}'", filter)),
@@ -300,8 +300,8 @@ fn requested_mixed_children(
     let indexed_start = range.start.saturating_sub(counts.named).min(counts.indexed);
     let indexed_end = range.end.saturating_sub(counts.named).min(counts.indexed);
 
-    let mut children = var.named_children(named_start..named_end)?;
-    children.extend(var.indexed_children(indexed_start..indexed_end)?);
+    let mut children = var.formatted_named_children(named_start..named_end)?;
+    children.extend(var.formatted_indexed_children(indexed_start..indexed_end)?);
     Ok(children)
 }
 

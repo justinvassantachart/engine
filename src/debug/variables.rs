@@ -10,6 +10,8 @@ use crate::{
     util::WeakRef,
 };
 
+use anyhow::{Result, anyhow};
+
 use gimli::Reader;
 use gimli::read::Expression;
 use wasm_bindgen::JsCast;
@@ -65,21 +67,21 @@ pub fn get_location(die: &Die<'_>, pc: GlobalAddress) -> Option<Expression<R>> {
 /// register, …); `ty` describes how to interpret them.
 #[derive(Clone)]
 pub struct Variable {
-    pub(crate) dbg: WeakRef<Debugger>,
+    pub(crate) debugger: WeakRef<Debugger>,
     pub(crate) name: String,
     pub(crate) pieces: Vec<gimli::Piece<R>>,
     pub(crate) ty: Type,
 }
 
 impl Variable {
-    fn dbg(&self) -> Option<&Debugger> {
-        self.dbg.as_deref()
+    pub(crate) fn debugger(&self) -> Option<&Debugger> {
+        self.debugger.as_deref()
     }
 
     /// Duplicates the variable with a new name, contents, and type.
     fn copy(&self, name: String, pieces: Vec<gimli::Piece<R>>, ty: Type) -> Self {
         Self {
-            dbg: self.dbg.clone(),
+            debugger: self.debugger.clone(),
             name,
             pieces,
             ty,
@@ -92,14 +94,6 @@ impl Variable {
 
     pub fn ty(&self) -> &Type {
         &self.ty
-    }
-
-    fn formatter(&self) -> Option<&dyn VariableFormatter> {
-        self.dbg()?
-            .formatters
-            .iter()
-            .find(|formatter| formatter.matches(self))
-            .map(|formatter| formatter.as_ref())
     }
 
     /// Returns the address of this variable.
@@ -119,7 +113,7 @@ impl Variable {
         let piece = self.pieces.first()?;
         let mut bytes = match &piece.location {
             gimli::Location::Address { address } => {
-                read_main_memory(self.dbg()?.info(), *address, len)
+                read_main_memory(self.debugger()?.info(), *address, len)
             }
             gimli::Location::Value { value } => value_to_le_bytes(*value, len),
             gimli::Location::Bytes { value } => value.to_slice().ok()?.to_vec(),
@@ -151,18 +145,68 @@ impl Variable {
             None
         }
     }
+}
 
-    /// Renders this value to a string using the default logic.
-    /// Use [Self::formatted_display] to use any matching [VariableFormatter] instead.
-    pub fn display(&self) -> String {
-        match self.ty().resolved() {
+/// Expands a variable into its default child list (structure members, dereferenced
+/// referents, and so on).
+fn default_children(var: &Variable) -> Vec<Variable> {
+    match var.ty.resolved() {
+        Some(TypeDeclaration::Structure { members, .. }) => {
+            // TODO: What is structure not located in memory? E.g. stored in pieces instead
+            let Some(base) = var.address() else {
+                return Vec::new();
+            };
+            let mut out = Vec::with_capacity(members.len());
+            for member in members {
+                let Some(name) = member.name.clone() else {
+                    continue;
+                };
+                let offset = match &member.location {
+                    Some(super::Value::Constant(o)) => *o,
+                    None => 0,
+                    Some(super::Value::Expr(_)) => continue,
+                };
+                let addr = (base.0 as i64).wrapping_add(offset) as u64;
+                out.push(var.copy(name, vec![addr_piece(addr)], var.ty.child(member.ty)));
+            }
+            out
+        }
+        Some(TypeDeclaration::Referential { target, kind, .. }) => {
+            let is_ptr = matches!(kind, ReferenceKind::Pointer);
+            let Some(addr) = var.pointer_value() else {
+                return Vec::new();
+            };
+            if is_ptr && addr.is_null() {
+                return Vec::new();
+            }
+            let target_type = var.ty.child(*target);
+            if is_ptr && matches!(target_type.resolved(), Some(TypeDeclaration::Scalar { .. })) {
+                return vec![var.copy(format!("*{}", var.name), addr.pieces(), target_type)];
+            }
+            default_children(&var.copy(var.name.clone(), addr.pieces(), target_type))
+        }
+        _ => Vec::new(),
+    }
+}
+
+impl Variable {
+    fn formatter(&self) -> Option<&dyn VariableFormatter> {
+        self.debugger()?
+            .formatters
+            .iter()
+            .find(|formatter| formatter.matches(self))
+            .map(|formatter| formatter.as_ref())
+    }
+
+    pub fn display(&self) -> Result<String> {
+        Ok(match self.ty().resolved() {
             Some(TypeDeclaration::Scalar {
                 byte_size,
                 encoding,
                 ..
             }) => {
                 let Some(bytes) = self.read(*byte_size as usize) else {
-                    return "<unavailable>".into();
+                    return Ok("<unavailable>".to_string());
                 };
                 format_scalar(&bytes, *encoding, *byte_size)
             }
@@ -180,66 +224,18 @@ impl Variable {
                 },
                 ReferenceKind::Reference | ReferenceKind::Temporary => {
                     let Some(addr) = self.pointer_value() else {
-                        return "<unavailable>".into();
+                        return Ok("<unavailable>".into());
                     };
-                    self.copy(self.name.clone(), addr.pieces(), self.ty.child(*target))
-                        .display()
+                    return self
+                        .copy(self.name.clone(), addr.pieces(), self.ty.child(*target))
+                        .display();
                 }
             },
             _ => "<unavailable>".into(),
-        }
+        })
     }
 
-    /// Expands this variable into its raw children using the default logic.
-    /// Use [Self::formatted_children] to use any matching [VariableFormatter] instead.
-    pub fn children(&self) -> Vec<Variable> {
-        match self.ty.resolved() {
-            Some(TypeDeclaration::Structure { members, .. }) => {
-                // TODO: What is structure not located in memory? E.g. stored in pieces instead
-                let Some(base) = self.address() else {
-                    return Vec::new();
-                };
-                let mut out = Vec::with_capacity(members.len());
-                for member in members {
-                    let Some(name) = member.name.clone() else {
-                        continue;
-                    };
-                    let offset = match &member.location {
-                        Some(super::Value::Constant(o)) => *o,
-                        None => 0,
-                        Some(super::Value::Expr(_)) => continue,
-                    };
-                    let addr = (base.0 as i64).wrapping_add(offset) as u64;
-                    out.push(self.copy(name, vec![addr_piece(addr)], self.ty.child(member.ty)));
-                }
-                out
-            }
-            Some(TypeDeclaration::Referential { target, kind, .. }) => {
-                let is_ptr = matches!(kind, ReferenceKind::Pointer);
-                let Some(addr) = self.pointer_value() else {
-                    return Vec::new();
-                };
-                if is_ptr && addr.is_null() {
-                    return Vec::new();
-                }
-                let target_type = self.ty.child(*target);
-                if is_ptr && matches!(target_type.resolved(), Some(TypeDeclaration::Scalar { .. }))
-                {
-                    return vec![self.copy(format!("*{}", self.name), addr.pieces(), target_type)];
-                }
-                self.copy(self.name.clone(), addr.pieces(), target_type)
-                    .children()
-            }
-            _ => Vec::new(),
-        }
-    }
-
-    /// Returns the number of children this variable has.
-    pub fn num_children(&self) -> anyhow::Result<ChildCounts> {
-        if let Some(formatter) = self.formatter() {
-            return formatter.num_children(self);
-        }
-
+    pub fn num_children(&self) -> Result<ChildCounts> {
         Ok(match self.ty.resolved() {
             Some(TypeDeclaration::Structure { members, .. }) => ChildCounts::named(
                 members
@@ -247,54 +243,37 @@ impl Variable {
                     .filter(|member| member.name.is_some())
                     .count(),
             ),
-            _ => ChildCounts::named(self.children().len()),
+            _ => ChildCounts::named(default_children(self).len()),
         })
     }
 
-    /// Returns the raw named children for this variable within `range`.
-    fn raw_named_children(&self, range: Range<usize>) -> Vec<Variable> {
-        self.children()
-            .into_iter()
-            .skip(range.start)
-            .take(range.end.saturating_sub(range.start))
-            .collect()
-    }
-
-    /// Returns the raw indexed children for this variable within `range`.
-    ///
-    /// Fewer elements may be returned if the debugger is unable to fetch that many
-    /// due to OOB accesses or known array bounds.
-    ///
-    /// For pointer types, this will treat a `T*` as if it were a `T[]`.
-    pub(crate) fn raw_indexed_children(&self, range: Range<usize>) -> Vec<Variable> {
+    pub fn indexed_children(&self, range: Range<usize>) -> Result<Vec<Variable>> {
         match self.ty.resolved() {
             Some(TypeDeclaration::Referential { target, kind, .. })
                 if matches!(kind, ReferenceKind::Pointer) =>
             {
                 let Some(base) = self.pointer_value() else {
-                    return Vec::new();
+                    return Ok(Vec::new());
                 };
-
                 if base.is_null() {
-                    return Vec::new();
+                    return Ok(Vec::new());
                 }
 
                 let elem_ty = self.ty.child(*target);
                 let Some(elem_size) = elem_ty.byte_size() else {
-                    return Vec::new();
+                    return Ok(Vec::new());
                 };
 
                 let elem_size = elem_size as usize;
                 if elem_size == 0 {
-                    return Vec::new();
+                    return Ok(Vec::new());
                 }
 
-                let Some(dbg) = self.dbg() else {
-                    return Vec::new();
+                let Some(dbg) = self.debugger() else {
+                    return Ok(Vec::new());
                 };
 
                 let mut result = Vec::new();
-
                 for i in range {
                     let Some(offset) = i
                         .checked_mul(elem_size)
@@ -303,7 +282,6 @@ impl Variable {
                         break;
                     };
 
-                    // Ensure that entire element is in-bounds
                     if offset.saturating_add(elem_size) > dbg.info().memory.byte_size() {
                         break;
                     }
@@ -315,55 +293,46 @@ impl Variable {
                     ));
                 }
 
-                result
+                Ok(result)
             }
-            _ => {
-                // For all other types, let's simply query the children and return a slice.
-                // Note that this will be inefficient for large arrays, but simpler to implement
-                let children = self.children();
-                children
-                    .into_iter()
-                    .skip(range.start)
-                    .take(range.end.saturating_sub(range.start))
-                    .collect()
-            }
+            _ => self.named_children(range),
         }
     }
 
-    /// Renders this variable to a string using any matching [VariableFormatter].
-    ///
-    /// Be careful calling this inside of a [VariableFormatter::display] implementation
-    /// that you do not cause an infinite loop.
-    pub fn formatted_display(&self) -> anyhow::Result<String> {
-        if let Some(formatter) = self.formatter() {
-            return formatter.display(self);
-        }
-
-        Ok(self.display())
+    pub fn named_children(&self, range: Range<usize>) -> Result<Vec<Variable>> {
+        Ok(default_children(self)
+            .into_iter()
+            .skip(range.start)
+            .take(range.end.saturating_sub(range.start))
+            .collect())
     }
 
-    /// Returns indexed children within `range`.
-    ///
-    /// Be careful calling this inside of a [VariableFormatter::indexed_children] implementation
-    /// that you do not cause an infinite loop.
-    pub fn indexed_children(&self, range: Range<usize>) -> anyhow::Result<Vec<Variable>> {
-        if let Some(formatter) = self.formatter() {
-            return formatter.indexed_children(self, range);
+    pub fn formatted_display(&self) -> Result<String> {
+        match self.formatter() {
+            Some(formatter) => formatter.display(self),
+            None => self.display(),
         }
-
-        Ok(self.raw_indexed_children(range))
     }
 
-    /// Returns named children within `range`.
-    ///
-    /// Be careful calling this inside of a [VariableFormatter::named_children] implementation
-    /// that you do not cause an infinite loop.
-    pub fn named_children(&self, range: Range<usize>) -> anyhow::Result<Vec<Variable>> {
-        if let Some(formatter) = self.formatter() {
-            return formatter.named_children(self, range);
+    pub fn formatted_num_children(&self) -> Result<ChildCounts> {
+        match self.formatter() {
+            Some(formatter) => formatter.num_children(self),
+            None => self.num_children(),
         }
+    }
 
-        Ok(self.raw_named_children(range))
+    pub fn formatted_indexed_children(&self, range: Range<usize>) -> Result<Vec<Variable>> {
+        match self.formatter() {
+            Some(formatter) => formatter.indexed_children(self, range),
+            None => self.indexed_children(range),
+        }
+    }
+
+    pub fn formatted_named_children(&self, range: Range<usize>) -> Result<Vec<Variable>> {
+        match self.formatter() {
+            Some(formatter) => formatter.named_children(self, range),
+            None => self.named_children(range),
+        }
     }
 }
 

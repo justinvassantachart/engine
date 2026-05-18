@@ -297,7 +297,7 @@ impl Debugger {
             };
 
             let variable = Variable {
-                dbg: self.me.clone(),
+                debugger: self.me.clone(),
                 name,
                 pieces,
                 ty: self.types.get(type_id),
