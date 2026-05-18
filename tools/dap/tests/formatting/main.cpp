@@ -1,6 +1,6 @@
 #include <vector>
 
 int main() {
-  std::vector<int> v = {10, 20, 30};
-  return v[0] + v[1] + v[2] - 60;
+  std::vector<int> v = {10, 20, 30, 40, 50, 60};
+  return 0;
 }
