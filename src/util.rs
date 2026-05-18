@@ -126,6 +126,10 @@ impl<T> WeakRef<T> {
     pub fn as_deref(&self) -> Option<&T> {
         let ptr = self.0.as_ptr();
         if ptr.is_null() {
+            warning!(
+                "Attempt to access {} beyond its lifetime",
+                std::any::type_name::<T>()
+            );
             return None;
         }
         Some(unsafe { &**ptr })

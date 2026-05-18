@@ -1,3 +1,5 @@
+use anyhow::{Context, Result};
+
 use crate::{
     debug::{
         Debugger,
@@ -182,15 +184,47 @@ impl Type {
         }
     }
 
-    pub fn ns(&self) -> NamespaceHierarchy {
+    pub fn ns(&self) -> &NamespaceHierarchy {
         match self.resolved() {
             Some(TypeDeclaration::Scalar { ns, .. })
             | Some(TypeDeclaration::Array { ns, .. })
             | Some(TypeDeclaration::Referential { ns, .. })
             | Some(TypeDeclaration::Structure { ns, .. })
-            | Some(TypeDeclaration::ModifiedType { ns, .. }) => ns.clone(),
-            None => NamespaceHierarchy::default(),
+            | Some(TypeDeclaration::ModifiedType { ns, .. }) => ns,
+            None => panic!("Unhandled namespace case"),
         }
+    }
+
+    pub fn die(&self) -> Result<Die<'_>> {
+        let graph = self.graph().context("Could not access type graph")?;
+        let debugger = graph
+            .debugger
+            .as_deref()
+            .context("Could not access debugger")?;
+
+        self.root.deref(&debugger.info().dwarf)
+    }
+
+    pub fn direct_nested_type_with_name(&self, name: &str) -> Result<Type> {
+        let graph = self.graph().context("Could not access graph")?;
+        let die = self.die()?;
+        die.find_children(|child| {
+            let Some(child_name) = child.name() else {
+                return None;
+            };
+
+            if child_name != name {
+                return None;
+            }
+
+            let id = die.die_ref();
+            if graph.contains(&id) {
+                Some(graph.get(id))
+            } else {
+                None
+            }
+        })
+        .context(format!("No such type named {name}"))
     }
 }
 
@@ -275,6 +309,10 @@ impl TypeGraph {
             root: id,
             graph: self.me.clone(),
         }
+    }
+
+    pub fn contains(&self, id: &TypeId) -> bool {
+        return self.types.contains_key(id);
     }
 }
 
