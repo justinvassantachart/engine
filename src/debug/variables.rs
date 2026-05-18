@@ -169,6 +169,11 @@ impl Variable {
         Some(bytes)
     }
 
+    pub fn u64_value(&self) -> Option<u64> {
+        let bytes = self.read(8)?;
+        Some(u64::from_le_bytes(bytes.try_into().ok()?))
+    }
+
     /// Returns the actual address stored by a pointer.
     ///
     /// For example, in the following snippet:

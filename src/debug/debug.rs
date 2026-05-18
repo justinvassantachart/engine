@@ -319,6 +319,12 @@ impl Debugger {
         &self.info.memory
     }
 
+    /// Returns the pointer size in bytes on the current platform.
+    pub fn pointer_size(&self) -> u64 {
+        // TODO: Can this ever change?
+        4
+    }
+
     fn notify_resume(&self) {
         js_sys::Atomics::store(&self.state, 0, 0).unwrap();
         js_sys::Atomics::notify(&self.state, 0).unwrap();

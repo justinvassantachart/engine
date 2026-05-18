@@ -1,4 +1,7 @@
 //! `std::map` and `std::set` formatters (`std::__tree`).
+//!
+//! See the corresponding [LLDB formatter code](https://github.com/llvm/llvm-project/blob/main/lldb/source/Plugins/Language/CPlusPlus/LibCxxMap.cpp)
+//! for reference.
 
 use std::ops::Range;
 
@@ -10,7 +13,6 @@ use crate::debug::formatters::{ChildCounts, VariableFormatter};
 use crate::types::GlobalAddress;
 use crate::util::WeakRef;
 
-const PTR_SIZE: u64 = 4;
 const TREE_NODE_VALUE_OFFSET: u64 = 16;
 
 #[derive(Clone)]
@@ -26,6 +28,13 @@ impl TreeEntry {
 
     fn null(self) -> bool {
         self.addr == 0
+    }
+
+    fn ptr_size(&self) -> u64 {
+        self.debugger
+            .as_deref()
+            .map(|dbg| dbg.pointer_size())
+            .unwrap_or(4)
     }
 
     fn read_ptr(self, offset: u64) -> u64 {
@@ -44,11 +53,13 @@ impl TreeEntry {
     }
 
     fn right(self) -> Self {
-        Self::new(self.read_ptr(PTR_SIZE), self.debugger)
+        let ptr_size = self.ptr_size();
+        Self::new(self.read_ptr(ptr_size), self.debugger)
     }
 
     fn parent(self) -> Self {
-        Self::new(self.read_ptr(2 * PTR_SIZE), self.debugger)
+        let ptr_size = self.ptr_size();
+        Self::new(self.read_ptr(2 * ptr_size), self.debugger)
     }
 }
 
@@ -151,7 +162,7 @@ impl<'a> LibcxxTree<'a> {
             .pointer_value()
             .context("std::__tree __begin_node_ is unavailable")?
             .0;
-        let count = tree_size(&tree)?;
+        let count = tree_size(&tree)? as usize;
         let value_ty = node_value_type(&tree)?;
         Ok(Self {
             value,
@@ -194,12 +205,10 @@ impl<'a> LibcxxTree<'a> {
     }
 }
 
-fn tree_size(tree: &Variable) -> Result<usize> {
-    let size = tree.named_child("__size_")?;
-    let bytes = size
-        .read(PTR_SIZE as usize)
-        .context("std::__tree __size_ is unavailable")?;
-    Ok(u32::from_le_bytes(bytes.try_into().unwrap_or([0; 4])) as usize)
+fn tree_size(tree: &Variable) -> Result<u64> {
+    tree.named_child("__size_")?
+        .u64_value()
+        .context("Could not read u64 value")
 }
 
 fn node_value_type(tree: &Variable) -> Result<crate::debug::Type> {
