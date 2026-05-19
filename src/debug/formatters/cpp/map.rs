@@ -169,7 +169,7 @@ impl<'a> LibcxxTree<'a> {
             .context("std::__tree __begin_node_ is unavailable")?
             .0;
         let count = tree_size(&tree)? as usize;
-        let value_ty = node_value_type(value, &tree)?;
+        let value_ty = node_value_type(&tree)?;
         Ok(Self {
             value,
             begin,
@@ -217,12 +217,12 @@ fn tree_size(tree: &Variable) -> Result<u64> {
         .context("Could not read u64 value")
 }
 
-fn node_value_type(container: &Variable, tree: &Variable) -> Result<crate::debug::Type> {
-    tree.ty()
+fn node_value_type(tree: &Variable) -> Result<crate::debug::Type> {
+    Ok(tree
+        .ty()
         .discard_modifiers()
-        .context("std::__tree type is unavailable")?
-        .direct_nested_type_with_name("value_type")
-        .context("std::__tree is missing value_type")
+        .direct_nested_type_with_name("value_type")?
+        .discard_modifiers())
 }
 
 fn tree_indexed_children(value: &Variable, range: Range<usize>) -> Result<Vec<Variable>> {

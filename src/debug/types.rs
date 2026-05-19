@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use wasm_bindgen::JsValue;
 
 use crate::{
     debug::{
@@ -149,13 +150,15 @@ impl Type {
     }
 
     /// Discard any typedef or modifiers and return the underlying type.
-    pub fn discard_modifiers(&self) -> Option<Type> {
-        self.graph()?;
+    pub fn discard_modifiers(&self) -> Type {
         let mut ty = self.clone();
-        while let Some(TypeDeclaration::ModifiedType { inner, .. }) = ty.resolved() {
+        let Some(graph) = self.graph() else {
+            return ty;
+        };
+        while let Some(TypeDeclaration::ModifiedType { inner, .. }) = graph.decl(ty.root) {
             ty = ty.child(*inner);
         }
-        Some(ty)
+        ty
     }
 
     /// Walks past `typedef`/cv-qualifier modifiers and returns the underlying declaration.
