@@ -11,8 +11,12 @@ pub struct StdVectorFormatter;
 
 impl StdVectorFormatter {
     fn data(value: &Variable) -> Result<(Variable, usize)> {
-        let begin = value.named_child("__begin_")?;
-        let end = value.named_child("__end_")?;
+        let begin = value
+            .named_child("__begin_")
+            .context("No child named '__begin_'")?;
+        let end = value
+            .named_child("__end_")
+            .context("No child named '__end_'")?;
 
         let begin_addr = begin
             .pointer_value()

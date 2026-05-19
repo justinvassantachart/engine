@@ -11,7 +11,7 @@ use crate::{
     util::WeakRef,
 };
 
-use anyhow::Result;
+use anyhow::{Result, bail};
 
 use gimli::Reader;
 use gimli::read::Expression;
@@ -287,14 +287,12 @@ impl Variable {
         Ok(self.cache.named(self)[range].to_vec())
     }
 
-    pub fn named_child(&self, name: &str) -> Result<Variable> {
-        let children = self.cache.named(self);
-        for child in children {
-            if child.name() == name {
-                return Ok(child.clone());
-            }
-        }
-        Err(anyhow::anyhow!("No child named '{}'", name))
+    pub fn named_child(&self, name: &str) -> Option<Variable> {
+        self.cache
+            .named(self)
+            .into_iter()
+            .find(|child| child.name() == name)
+            .cloned()
     }
 
     fn formatter(&self) -> Option<&dyn VariableFormatter> {

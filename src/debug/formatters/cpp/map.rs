@@ -14,13 +14,6 @@ use crate::types::GlobalAddress;
 
 const VALUE_OFFSET: u64 = 16;
 
-/// True for `std::map<...>` / `std::set<...>` container instantiations, not nested names
-/// like `std::map<...>::value_type` (which also start with `std::map<`).
-fn is_container(value: &Variable, container: &str) -> bool {
-    let name = value.ty().name();
-    name.starts_with(&format!("std::{container}<")) && !name.contains(">::")
-}
-
 struct LibcxxTree<'a> {
     value: &'a Variable,
     node: Variable,
@@ -32,8 +25,12 @@ struct LibcxxTree<'a> {
 
 impl<'a> LibcxxTree<'a> {
     fn new(value: &'a Variable) -> Result<Self> {
-        let tree = value.named_child("__tree_")?;
-        let node = tree.named_child("__begin_node_")?;
+        let tree = value
+            .named_child("__tree_")
+            .context("No child named '__tree_'")?;
+        let node = tree
+            .named_child("__begin_node_")
+            .context("No child named '__begin_node_'")?;
         let pos = node.pointer_value().map(|a| a.0).unwrap_or(0);
         let ptr_size = node.debugger().map(|d| d.pointer_size()).unwrap_or(4);
         let value_ty = tree
@@ -46,7 +43,8 @@ impl<'a> LibcxxTree<'a> {
             node,
             pos,
             count: tree
-                .named_child("__size_")?
+                .named_child("__size_")
+                .context("No child named '__size_'")?
                 .u64_value()
                 .context("Could not read __size_")? as usize,
             value_ty,
@@ -156,15 +154,16 @@ impl<'a> TreeIter<'a> {
     }
 }
 
-fn tree_children(value: &Variable, range: Range<usize>) -> Result<Vec<Variable>> {
-    LibcxxTree::new(value)?.indexed_children(range)
+fn is_container(value: &Variable, container: &str) -> bool {
+    let name = value.ty().name();
+    name.starts_with(&format!("std::{container}<")) && !name.contains(">::")
 }
 
 pub struct StdMapFormatter;
 
 impl VariableFormatter for StdMapFormatter {
     fn matches(&self, value: &Variable) -> bool {
-        is_container(value, "map")
+        is_container(value, "map") || is_container(value, "set")
     }
     fn display(&self, value: &Variable) -> Result<String> {
         value.display()
@@ -173,27 +172,7 @@ impl VariableFormatter for StdMapFormatter {
         Ok(ChildCounts::indexed(LibcxxTree::new(value)?.count))
     }
     fn indexed_children(&self, value: &Variable, range: Range<usize>) -> Result<Vec<Variable>> {
-        tree_children(value, range)
-    }
-    fn named_children(&self, _: &Variable, _: Range<usize>) -> Result<Vec<Variable>> {
-        Ok(Vec::new())
-    }
-}
-
-pub struct StdSetFormatter;
-
-impl VariableFormatter for StdSetFormatter {
-    fn matches(&self, value: &Variable) -> bool {
-        is_container(value, "set")
-    }
-    fn display(&self, value: &Variable) -> Result<String> {
-        value.display()
-    }
-    fn num_children(&self, value: &Variable) -> Result<ChildCounts> {
-        Ok(ChildCounts::indexed(LibcxxTree::new(value)?.count))
-    }
-    fn indexed_children(&self, value: &Variable, range: Range<usize>) -> Result<Vec<Variable>> {
-        tree_children(value, range)
+        LibcxxTree::new(value)?.indexed_children(range)
     }
     fn named_children(&self, _: &Variable, _: Range<usize>) -> Result<Vec<Variable>> {
         Ok(Vec::new())
