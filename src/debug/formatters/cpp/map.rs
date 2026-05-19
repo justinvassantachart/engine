@@ -7,79 +7,64 @@ use std::ops::Range;
 
 use anyhow::{Context, Result};
 
-use crate::debug::Type;
-use crate::debug::Variable;
+use crate::debug::{Type, Variable};
 use crate::debug::formatters::{ChildCounts, VariableFormatter};
-use crate::types::GlobalAddress;
 
-const VALUE_OFFSET: u64 = 16;
+const VALUE_OFFSET: usize = 16;
 
-struct LibcxxTree<'a> {
-    value: &'a Variable,
-    node: Variable,
-    pos: u64,
-    count: usize,
+struct LibcxxTree {
+    begin_node: Variable,
     value_ty: Type,
-    ptr_size: u64,
+    count: usize,
+    ptr_size: usize,
 }
 
-impl<'a> LibcxxTree<'a> {
-    fn new(value: &'a Variable) -> Result<Self> {
+impl LibcxxTree {
+    fn new(value: &Variable) -> Result<Self> {
         let tree = value
             .child_with_name("__tree_")
             .context("No child named '__tree_'")?;
-        let node = tree
+        let begin_node = tree
             .child_with_name("__begin_node_")
             .context("No child named '__begin_node_'")?;
-        let pos = node.pointer_value().map(|a| a.0).unwrap_or(0);
-        let ptr_size = node.debugger().map(|d| d.pointer_size()).unwrap_or(4);
         let value_ty = tree
             .ty()
             .discard_modifiers()
             .direct_nested_type_with_name("value_type")?
             .discard_modifiers();
+        let ptr_size = begin_node
+            .debugger()
+            .map(|debugger| debugger.pointer_size())
+            .unwrap_or(4) as usize;
         Ok(Self {
-            value,
-            node,
-            pos,
+            begin_node,
+            value_ty,
             count: tree
                 .child_with_name("__size_")
                 .context("No child named '__size_'")?
                 .u64_value()
                 .context("Could not read __size_")? as usize,
-            value_ty,
             ptr_size,
         })
-    }
-
-    fn link(&self, node: u64, offset: u64) -> u64 {
-        if node == 0 {
-            return 0;
-        }
-        self.node
-            .debugger()
-            .map(|dbg| dbg.memory().read_pointer(GlobalAddress(node + offset)).0)
-            .unwrap_or(0)
     }
 
     fn indexed_children(&self, range: Range<usize>) -> Result<Vec<Variable>> {
         let end = range.end.min(self.count);
         let mut iter = TreeIter::new(self);
-        let Some(mut pos) = iter.nth(range.start) else {
-            return Ok(Vec::new());
-        };
+        for _ in 0..range.start {
+            if !iter.advance() {
+                return Ok(Vec::new());
+            }
+        }
         let mut out = Vec::with_capacity(end - range.start);
-        for i in range.start..end {
-            out.push(self.value.copy(
-                format!("[{i}]"),
-                GlobalAddress(pos + VALUE_OFFSET).pieces(),
-                self.value_ty.clone(),
-            ));
-            if i + 1 < end {
-                let Some(next) = iter.next() else {
-                    break;
-                };
-                pos = next;
+        for index in range.start..end {
+            out.push(
+                iter.value()
+                    .with_name(&format!("[{index}]"))
+                    .with_type(&self.value_ty),
+            );
+            if index + 1 < end && !iter.advance() {
+                break;
             }
         }
         Ok(out)
@@ -87,70 +72,101 @@ impl<'a> LibcxxTree<'a> {
 }
 
 struct TreeIter<'a> {
-    tree: &'a LibcxxTree<'a>,
-    pos: u64,
+    tree: &'a LibcxxTree,
+    /// A `__node_pointer` to the current tree node.
+    current: Variable,
     steps: usize,
     done: bool,
 }
 
 impl<'a> TreeIter<'a> {
-    fn new(tree: &'a LibcxxTree<'a>) -> Self {
+    fn new(tree: &'a LibcxxTree) -> Self {
         Self {
             tree,
-            pos: tree.pos,
+            current: tree.begin_node.clone(),
             steps: 0,
             done: false,
         }
     }
 
-    fn nth(&mut self, n: usize) -> Option<u64> {
-        for _ in 0..n {
-            self.next()?;
-        }
-        (self.pos != 0).then_some(self.pos)
+    fn left(&self) -> Option<Variable> {
+        self.link(0)
     }
 
-    fn next(&mut self) -> Option<u64> {
-        if self.done || self.pos == 0 {
+    fn right(&self) -> Option<Variable> {
+        self.link(self.tree.ptr_size)
+    }
+
+    fn parent(&self) -> Option<Variable> {
+        self.link(2 * self.tree.ptr_size)
+    }
+
+    fn link(&self, offset: usize) -> Option<Variable> {
+        let link = self.current.child_at_offset(offset);
+        let address = link.pointer_value()?;
+        if address.is_null() {
             return None;
         }
-        let t = self.tree;
-        let ptr_size = t.ptr_size;
-        let right = t.link(self.pos, ptr_size);
-        if right != 0 {
-            self.pos = self.min(right);
-            return (self.pos != 0).then_some(self.pos);
-        }
-        while !self.is_left_child(self.pos) {
-            self.pos = t.link(self.pos, 2 * ptr_size);
-            self.steps += 1;
-            if self.pos == 0 || self.steps > t.count {
-                self.done = true;
-                return None;
-            }
-        }
-        self.pos = t.link(self.pos, 2 * ptr_size);
-        (self.pos != 0).then_some(self.pos)
+        Some(link.child_at_offset(0))
     }
 
-    fn min(&mut self, mut x: u64) -> u64 {
-        loop {
-            let left = self.tree.link(x, 0);
-            if left == 0 {
-                return x;
+    fn value(&self) -> Variable {
+        self.current.child_at_offset(VALUE_OFFSET)
+    }
+
+    fn advance(&mut self) -> bool {
+        if self.done || self.current.pointer_value().is_none_or(|address| address.is_null()) {
+            return false;
+        }
+        if let Some(right) = self.right() {
+            self.current = right;
+            while let Some(left) = self.left() {
+                self.current = left;
+                self.steps += 1;
+                if self.steps > self.tree.count {
+                    self.done = true;
+                    return false;
+                }
             }
-            x = left;
+            return true;
+        }
+        while !self.is_left_child() {
+            let Some(parent) = self.parent() else {
+                self.done = true;
+                return false;
+            };
+            self.current = parent;
             self.steps += 1;
             if self.steps > self.tree.count {
                 self.done = true;
-                return 0;
+                return false;
+            }
+        }
+        match self.parent() {
+            Some(next) => {
+                self.current = next;
+                true
+            }
+            None => {
+                self.done = true;
+                false
             }
         }
     }
 
-    fn is_left_child(&self, node: u64) -> bool {
-        let parent = self.tree.link(node, 2 * self.tree.ptr_size);
-        parent != 0 && self.tree.link(parent, 0) == node
+    fn is_left_child(&self) -> bool {
+        let here = self.current.address();
+        let Some(parent) = self.parent() else {
+            return false;
+        };
+        Self {
+            tree: self.tree,
+            current: parent,
+            steps: 0,
+            done: false,
+        }
+        .left()
+        .is_some_and(|left| left.address() == here)
     }
 }
 
