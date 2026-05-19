@@ -1,5 +1,4 @@
 use anyhow::{Context, Result};
-use wasm_bindgen::JsValue;
 
 use crate::{
     debug::{

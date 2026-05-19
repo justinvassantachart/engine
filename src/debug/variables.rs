@@ -11,7 +11,7 @@ use crate::{
     util::WeakRef,
 };
 
-use anyhow::{Result, bail};
+use anyhow::Result;
 
 use gimli::Reader;
 use gimli::read::Expression;
@@ -108,17 +108,6 @@ impl Variable {
         }
     }
 
-    /// Duplicates the variable with a new name, contents, and type.
-    pub(crate) fn copy(&self, name: String, pieces: Vec<gimli::Piece<R>>, ty: Type) -> Self {
-        Self {
-            debugger: self.debugger.clone(),
-            name,
-            pieces,
-            ty,
-            cache: Default::default(),
-        }
-    }
-
     pub(crate) fn debugger(&self) -> Option<&Debugger> {
         self.debugger.as_deref()
     }
@@ -129,6 +118,23 @@ impl Variable {
 
     pub fn ty(&self) -> &Type {
         &self.ty
+    }
+
+    /// Changes the name of this variable.
+    pub fn with_name(self, name: &str) -> Self {
+        Self {
+            name: name.to_owned(),
+            ..self
+        }
+    }
+
+    /// Changes the type of this variable.
+    pub fn with_type(self, ty: &Type) -> Self {
+        Self {
+            ty: ty.clone(),
+            cache: Default::default(),
+            ..self
+        }
     }
 
     /// Returns the address of this variable.
@@ -144,6 +150,13 @@ impl Variable {
     /// Reads `len` bytes from the start of this variable's value.
     /// If exactly `len` bytes cannot be read, returns [None].
     pub fn read(&self, len: usize) -> Option<Vec<u8>> {
+        // TODO: This function is very important, albeit poorly tested/understood.
+        // It will fail under optimizing compilers, which may store values as collections of pieces
+        // rather than the simple formats that this method assumes.
+        //
+        // More cases should be added for multi-piece values.
+        // These should be rigorously tested under a test harness.
+
         // TODO: Handling for multi-piece value, not just `first()`
         let piece = self.pieces.first()?;
         let mut bytes = match &piece.location {
@@ -212,11 +225,9 @@ impl Variable {
                     None => "<unavailable>".into(),
                 },
                 ReferenceKind::Reference | ReferenceKind::Temporary => {
-                    let Some(addr) = self.pointer_value() else {
-                        return Ok("<unavailable>".into());
-                    };
                     return self
-                        .copy(self.name.clone(), addr.pieces(), self.ty.child(*target))
+                        .child_at_offset(0)
+                        .with_type(&self.ty.child(*target))
                         .display();
                 }
             },
@@ -253,28 +264,13 @@ impl Variable {
                     return Ok(Vec::new());
                 }
 
-                let Some(dbg) = self.debugger() else {
-                    return Ok(Vec::new());
-                };
-
                 let mut result = Vec::new();
                 for i in range {
-                    let Some(offset) = i
-                        .checked_mul(elem_size)
-                        .and_then(|offset| (base.0 as usize).checked_add(offset))
-                    else {
-                        break;
-                    };
-
-                    if offset.saturating_add(elem_size) > dbg.info().memory.byte_size() {
-                        break;
-                    }
-
-                    result.push(self.copy(
-                        format!("[{i}]"),
-                        GlobalAddress(offset as u64).pieces(),
-                        elem_ty.clone(),
-                    ));
+                    result.push(
+                        self.child_at_offset(i * elem_size)
+                            .with_name(&format!("[{i}]"))
+                            .with_type(&elem_ty),
+                    );
                 }
 
                 Ok(result)
@@ -287,12 +283,73 @@ impl Variable {
         Ok(self.cache.named(self)[range].to_vec())
     }
 
-    pub fn named_child(&self, name: &str) -> Option<Variable> {
+    /// Gets a child named `name` in this variable.
+    ///
+    /// For example, for structural types, `name` might be the name of a member within this variable.
+    ///
+    /// Returns [None] if no such child is found.
+    pub fn child_with_name(&self, name: &str) -> Option<Variable> {
         self.cache
             .named(self)
             .into_iter()
             .find(|child| child.name() == name)
             .cloned()
+    }
+
+    /// Returns a child of this variable with byte offset `offset`.
+    ///
+    /// The returned variable will have an empty name and the same type as this one.
+    /// You may change the resulting name and type using [Variable::with_name] and [Variable::with_type].
+    ///
+    /// Roughly speaking, the offsets correspond to the same as "space" as the variable's children.
+    /// E.g. an `int* ptr`'s `child_at_offset(0)` would return `ptr[0]`, a structured variable
+    /// `my_struct_t x`'s `child_at_offset(0)` would return the first member, and so on.
+    pub fn child_at_offset(&self, offset: usize) -> Variable {
+        // TODO: This function is very important, albeit poorly tested/understood.
+        // It will fail under optimizing compilers, which may store values as collections of pieces
+        // rather than the simple formats that this method assumes.
+        //
+        // More cases should be added for multi-piece values.
+        // These should be rigorously tested under a test harness.
+
+        // Dereference pointer types
+        let mut pieces = match self.ty.resolved() {
+            Some(TypeDeclaration::Referential { .. }) => self
+                .pointer_value()
+                .filter(|a| !a.is_null())
+                .map(|a| a.pieces())
+                .unwrap_or_default(),
+            _ => self.pieces.clone(),
+        };
+
+        // Skip `ofs` bytes through the piece vector
+        let mut ofs = offset as u64;
+        while let Some(p) = pieces.first() {
+            let Some(bits) = p.size_in_bits else { break };
+            let piece_bytes = ((bits) + 7) / 8;
+            if ofs < piece_bytes {
+                break;
+            }
+            ofs -= piece_bytes;
+            pieces.remove(0);
+        }
+
+        // Add `ofs` bytes to the first piece
+        if let Some(p) = pieces.first_mut() {
+            match &mut p.location {
+                gimli::Location::Address { address } => *address += ofs,
+                _ => p.bit_offset = Some(p.bit_offset.unwrap_or(0) + ofs * 8),
+            }
+        }
+
+        // Clone the variable with the new contents
+        Self {
+            debugger: self.debugger.clone(),
+            name: Default::default(),
+            pieces,
+            ty: self.ty.clone(),
+            cache: Default::default(),
+        }
     }
 
     fn formatter(&self) -> Option<&dyn VariableFormatter> {
@@ -336,10 +393,6 @@ impl Variable {
 fn compute_default_named_children(var: &Variable) -> Vec<Variable> {
     match var.ty.resolved() {
         Some(TypeDeclaration::Structure { members, .. }) => {
-            // TODO: What is structure not located in memory? E.g. stored in pieces instead
-            let Some(base) = var.address() else {
-                return Vec::new();
-            };
             let mut out = Vec::with_capacity(members.len());
             for member in members {
                 let Some(name) = member.name.clone() else {
@@ -350,8 +403,11 @@ fn compute_default_named_children(var: &Variable) -> Vec<Variable> {
                     None => 0,
                     Some(super::Value::Expr(_)) => continue,
                 };
-                let addr = (base.0 as i64).wrapping_add(offset) as u64;
-                out.push(var.copy(name, vec![addr_piece(addr)], var.ty.child(member.ty)));
+                out.push(
+                    var.child_at_offset(offset as usize)
+                        .with_name(&name)
+                        .with_type(&var.ty.child(member.ty)),
+                );
             }
             out
         }
@@ -365,10 +421,17 @@ fn compute_default_named_children(var: &Variable) -> Vec<Variable> {
             }
             let target_type = var.ty.child(*target);
             if is_ptr && matches!(target_type.resolved(), Some(TypeDeclaration::Scalar { .. })) {
-                return vec![var.copy(format!("*{}", var.name), addr.pieces(), target_type)];
+                return vec![
+                    var.child_at_offset(0)
+                        .with_name(&format!("*{}", var.name))
+                        .with_type(&target_type),
+                ];
             }
 
-            let inner = var.copy(var.name.clone(), addr.pieces(), target_type);
+            let inner = var
+                .child_at_offset(0)
+                .with_name(var.name())
+                .with_type(&target_type);
             compute_default_named_children(&inner)
         }
         _ => Vec::new(),

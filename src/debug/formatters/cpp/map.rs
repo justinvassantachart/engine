@@ -26,10 +26,10 @@ struct LibcxxTree<'a> {
 impl<'a> LibcxxTree<'a> {
     fn new(value: &'a Variable) -> Result<Self> {
         let tree = value
-            .named_child("__tree_")
+            .child_with_name("__tree_")
             .context("No child named '__tree_'")?;
         let node = tree
-            .named_child("__begin_node_")
+            .child_with_name("__begin_node_")
             .context("No child named '__begin_node_'")?;
         let pos = node.pointer_value().map(|a| a.0).unwrap_or(0);
         let ptr_size = node.debugger().map(|d| d.pointer_size()).unwrap_or(4);
@@ -43,7 +43,7 @@ impl<'a> LibcxxTree<'a> {
             node,
             pos,
             count: tree
-                .named_child("__size_")
+                .child_with_name("__size_")
                 .context("No child named '__size_'")?
                 .u64_value()
                 .context("Could not read __size_")? as usize,

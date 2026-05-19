@@ -79,7 +79,7 @@ pub trait VariableFormatter {
 /// Registers the built-in formatters on `dbg`.
 pub fn register_defaults(dbg: &mut Debugger) {
     dbg.add_formatter(Box::new(cpp::StdStringFormatter));
-    dbg.add_formatter(Box::new(cpp::StdMapFormatter));
+    // dbg.add_formatter(Box::new(cpp::StdMapFormatter));
     dbg.add_formatter(Box::new(cpp::StdVectorFormatter));
 }
 
