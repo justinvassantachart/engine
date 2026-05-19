@@ -273,7 +273,8 @@ impl MemoryDescriptor {
 
     pub fn read_memory(&self, addr: GlobalAddress, len: usize) -> Vec<u8> {
         let offset = addr.0 as usize;
-        let buffer = self.memory.buffer().unchecked_ref::<js_sys::ArrayBuffer>();
+        let memory_buffer = self.memory.buffer();
+        let buffer = memory_buffer.unchecked_ref::<js_sys::ArrayBuffer>();
         let mut out = vec![0u8; len];
         let n = (buffer.byte_length() as usize)
             .saturating_sub(offset)

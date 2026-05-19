@@ -15,6 +15,12 @@ use crate::util::WeakRef;
 
 const TREE_NODE_VALUE_OFFSET: u64 = 16;
 
+/// True for `std::map<...>` / `std::set<...>` container instantiations, not nested names
+/// like `std::map<...>::value_type` (which also start with `std::map<`).
+fn is_container_instantiation(name: &str, container: &str) -> bool {
+    name.starts_with(&format!("std::{container}<")) && !name.contains(">::")
+}
+
 #[derive(Clone)]
 struct TreeEntry {
     addr: u64,
@@ -26,7 +32,7 @@ impl TreeEntry {
         Self { addr, debugger }
     }
 
-    fn null(self) -> bool {
+    fn null(&self) -> bool {
         self.addr == 0
     }
 
@@ -37,7 +43,7 @@ impl TreeEntry {
             .unwrap_or(4)
     }
 
-    fn read_ptr(self, offset: u64) -> u64 {
+    fn read_ptr(&self, offset: u64) -> u64 {
         self.debugger
             .as_deref()
             .map(|dbg| {
@@ -48,18 +54,18 @@ impl TreeEntry {
             .unwrap_or(0)
     }
 
-    fn left(self) -> Self {
-        Self::new(self.read_ptr(0), self.debugger)
+    fn left(&self) -> Self {
+        Self::new(self.read_ptr(0), self.debugger.clone())
     }
 
-    fn right(self) -> Self {
+    fn right(&self) -> Self {
         let ptr_size = self.ptr_size();
-        Self::new(self.read_ptr(ptr_size), self.debugger)
+        Self::new(self.read_ptr(ptr_size), self.debugger.clone())
     }
 
-    fn parent(self) -> Self {
+    fn parent(&self) -> Self {
         let ptr_size = self.ptr_size();
-        Self::new(self.read_ptr(2 * ptr_size), self.debugger)
+        Self::new(self.read_ptr(2 * ptr_size), self.debugger.clone())
     }
 }
 
@@ -103,7 +109,7 @@ impl TreeIter {
             return;
         }
         let mut steps = 0;
-        while !self.is_left_child(self.entry) {
+        while !self.is_left_child(&self.entry) {
             self.entry = self.entry.parent();
             steps += 1;
             if steps > self.max_depth {
@@ -116,7 +122,7 @@ impl TreeIter {
 
     fn tree_min(&mut self, mut x: TreeEntry) -> TreeEntry {
         if x.null() {
-            return TreeEntry::new(0, x.debugger);
+            return TreeEntry::new(0, x.debugger.clone());
         }
         let mut steps = 0;
         loop {
@@ -128,12 +134,12 @@ impl TreeIter {
             steps += 1;
             if steps > self.max_depth {
                 self.error = true;
-                return TreeEntry::new(0, x.debugger);
+                return TreeEntry::new(0, x.debugger.clone());
             }
         }
     }
 
-    fn is_left_child(&self, x: TreeEntry) -> bool {
+    fn is_left_child(&self, x: &TreeEntry) -> bool {
         if x.null() {
             return false;
         }
@@ -163,7 +169,7 @@ impl<'a> LibcxxTree<'a> {
             .context("std::__tree __begin_node_ is unavailable")?
             .0;
         let count = tree_size(&tree)? as usize;
-        let value_ty = node_value_type(&tree)?;
+        let value_ty = node_value_type(value, &tree)?;
         Ok(Self {
             value,
             begin,
@@ -211,16 +217,12 @@ fn tree_size(tree: &Variable) -> Result<u64> {
         .context("Could not read u64 value")
 }
 
-fn node_value_type(tree: &Variable) -> Result<crate::debug::Type> {
+fn node_value_type(container: &Variable, tree: &Variable) -> Result<crate::debug::Type> {
     tree.ty()
         .discard_modifiers()
         .context("std::__tree type is unavailable")?
-        .direct_nested_type_with_name("__node_pointer")
-        .context("std::__tree is missing __node_pointer")?
-        .pointee()
-        .context("std::__tree __node_pointer has no pointee")?
-        .member("__value_")
-        .context("std::__tree_node is missing __value_")
+        .direct_nested_type_with_name("value_type")
+        .context("std::__tree is missing value_type")
 }
 
 fn tree_indexed_children(value: &Variable, range: Range<usize>) -> Result<Vec<Variable>> {
@@ -232,7 +234,8 @@ pub struct StdMapFormatter;
 impl VariableFormatter for StdMapFormatter {
     fn matches(&self, value: &Variable) -> bool {
         let name = value.ty().name();
-        value.ty().ns().matches("std") && (name == "std::map" || name.starts_with("std::map<"))
+        value.ty().ns().matches("std")
+            && (name == "std::map" || is_container_instantiation(&name, "map"))
     }
 
     fn display(&self, value: &Variable) -> Result<String> {
@@ -258,7 +261,8 @@ pub struct StdSetFormatter;
 impl VariableFormatter for StdSetFormatter {
     fn matches(&self, value: &Variable) -> bool {
         let name = value.ty().name();
-        value.ty().ns().matches("std") && (name == "std::set" || name.starts_with("std::set<"))
+        value.ty().ns().matches("std")
+            && (name == "std::set" || is_container_instantiation(&name, "set"))
     }
 
     fn display(&self, value: &Variable) -> Result<String> {

@@ -15,7 +15,6 @@ use anyhow::Result;
 
 use gimli::Reader;
 use gimli::read::Expression;
-use wasm_bindgen::JsCast;
 
 /// Gets all live variables at the given PC.
 ///

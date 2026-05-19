@@ -158,17 +158,6 @@ impl Type {
         Some(ty)
     }
 
-    /// For structural types, return the type of a direct member with this member name.
-    pub fn member(&self, name: &str) -> Option<Type> {
-        let TypeDeclaration::Structure { members, .. } = self.resolved()? else {
-            return None;
-        };
-        if let Some(member) = members.iter().find(|m| m.name.as_deref() == Some(name)) {
-            return Some(self.child(member.ty));
-        }
-        None
-    }
-
     /// Walks past `typedef`/cv-qualifier modifiers and returns the underlying declaration.
     ///
     /// Equivalent to the [TypeDeclaration] of [Type::discard_modifiers].
