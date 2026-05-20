@@ -46,7 +46,7 @@ async function run(label: string, cmd: string, args: string[], env?: Record<stri
       cwd: ROOT,
       env: { ...process.env, ...env },
       stdio: ['ignore', 'pipe', 'pipe'],
-      shell: true,
+      shell: true
     });
 
     activeProcess = proc;
@@ -123,6 +123,9 @@ function startWasmServer() {
         'access-control-allow-origin': '*',
         'access-control-allow-methods': 'GET,OPTIONS',
         'access-control-allow-headers': '*',
+        'cache-control': 'no-store, no-cache, must-revalidate',
+        pragma: 'no-cache',
+        expires: '0'
       };
       if (req.method === 'OPTIONS')
         return new Response(null, { status: 204, headers: corsHeaders });
@@ -134,12 +137,12 @@ function startWasmServer() {
       try {
         const body = await readFile(file);
         return new Response(new Uint8Array(body), {
-          headers: { ...corsHeaders, 'content-type': 'application/wasm' },
+          headers: { ...corsHeaders, 'content-type': 'application/wasm' }
         });
       } catch {
         return new Response('Not found', { status: 404, headers: corsHeaders });
       }
-    },
+    }
   });
   return server.port!;
 }
