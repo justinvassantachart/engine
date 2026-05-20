@@ -3,7 +3,7 @@ use std::ops::Range;
 use anyhow::Result;
 
 use super::Debugger;
-use crate::debug::Variable;
+use crate::debug::{Type, Variable};
 
 mod cpp;
 
@@ -60,8 +60,8 @@ impl ChildCounts {
 /// child counts, and child slices so a client can ask for a small range without
 /// materializing a large container.
 pub trait VariableFormatter {
-    /// Returns whether this formatter can present `value`.
-    fn matches(&self, value: &Variable) -> bool;
+    /// Returns whether this formatter can present a value with type `ty`.
+    fn matches(&self, ty: &Type) -> bool;
 
     /// Renders the value for display in the variables view.
     fn display(&self, value: &Variable) -> Result<String>;

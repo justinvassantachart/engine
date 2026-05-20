@@ -116,7 +116,7 @@ impl TreeIterator {
         let size = tree
             .child_with_name("__size_")
             .context("No child named '__size_'")?
-            .u64_value()
+            .unsigned_value()
             .context("Could not read __size_")? as usize;
 
         Ok(Self {
@@ -129,6 +129,10 @@ impl TreeIterator {
     fn value(&self) -> Variable {
         // Note: 16 is the offset from the start of the node to
         // the beginning of its stored value
+        //
+        // TODO: We should not assume this offset, instead it would
+        // be better to cast to the node type and do `child_with_name`
+        // like LLDB does
         self.current.0.child_at_offset(16)
     }
 
@@ -187,16 +191,16 @@ impl TreeIterator {
 // │ StdMapFormatter                                                          │
 // ╰──────────────────────────────────────────────────────────────────────────╯
 
-fn is_container(value: &Variable, container: &str) -> bool {
-    let name = value.ty().name();
+fn is_container(ty: &Type, container: &str) -> bool {
+    let name = ty.name();
     name.starts_with(&format!("std::{container}<")) && !name.contains(">::")
 }
 
 pub struct StdMapFormatter;
 
 impl VariableFormatter for StdMapFormatter {
-    fn matches(&self, value: &Variable) -> bool {
-        is_container(value, "map") || is_container(value, "set")
+    fn matches(&self, ty: &Type) -> bool {
+        is_container(ty, "map") || is_container(ty, "set")
     }
 
     fn display(&self, value: &Variable) -> Result<String> {

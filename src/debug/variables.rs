@@ -398,7 +398,7 @@ impl Variable {
         self.debugger()?
             .formatters
             .iter()
-            .find(|formatter| formatter.matches(self))
+            .find(|formatter| formatter.matches(self.ty()))
             .map(|formatter| formatter.as_ref())
     }
 

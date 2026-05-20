@@ -4,8 +4,8 @@ use std::ops::Range;
 
 use anyhow::{Context, Result};
 
-use crate::debug::Variable;
 use crate::debug::formatters::{ChildCounts, VariableFormatter};
+use crate::debug::{Type, Variable};
 
 pub struct StdVectorFormatter;
 
@@ -40,10 +40,9 @@ impl StdVectorFormatter {
 }
 
 impl VariableFormatter for StdVectorFormatter {
-    fn matches(&self, value: &Variable) -> bool {
-        let name = value.ty().name();
-        value.ty().ns().matches("std")
-            && (name == "std::vector" || name.starts_with("std::vector<"))
+    fn matches(&self, ty: &Type) -> bool {
+        let name = ty.name();
+        ty.ns().matches("std") && (name == "std::vector" || name.starts_with("std::vector<"))
     }
 
     fn display(&self, value: &Variable) -> Result<String> {

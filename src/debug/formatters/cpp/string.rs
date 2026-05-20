@@ -4,15 +4,15 @@ use std::ops::Range;
 
 use anyhow::Result;
 
-use crate::debug::Variable;
 use crate::debug::formatters::{ChildCounts, VariableFormatter};
+use crate::debug::{Type, Variable};
 
 pub struct StdStringFormatter;
 
 impl VariableFormatter for StdStringFormatter {
-    fn matches(&self, value: &Variable) -> bool {
-        let name = value.ty().name();
-        value.ty().ns().matches("std") && (name == "std::string" || name.starts_with("std::string"))
+    fn matches(&self, ty: &Type) -> bool {
+        let name = ty.name();
+        ty.ns().matches("std") && (name == "std::string" || name.starts_with("std::string"))
     }
 
     fn display(&self, _value: &Variable) -> Result<String> {
