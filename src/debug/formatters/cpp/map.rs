@@ -3,172 +3,189 @@
 //! See the corresponding [LLDB formatter code](https://github.com/llvm/llvm-project/blob/main/lldb/source/Plugins/Language/CPlusPlus/LibCxxMap.cpp)
 //! for reference.
 
+// The flattened layout of the std::__tree_iterator::__ptr_ looks
+// as follows:
+//
+// The following shows the contiguous block of memory:
+//
+//        +-----------------------------+ class __tree_end_node
+// __ptr_ | pointer __left_;            |
+//        +-----------------------------+ class __tree_node_base
+//        | pointer __right_;           |
+//        | __parent_pointer __parent_; |
+//        | bool __is_black_;           |
+//        +-----------------------------+ class __tree_node
+//        | __node_value_type __value_; | <<< our key/value pair
+//        +-----------------------------+
+//
+// where __ptr_ has type __iter_pointer.
+
 use std::ops::Range;
 
 use anyhow::{Context, Result};
 
-use crate::debug::{Type, Variable};
 use crate::debug::formatters::{ChildCounts, VariableFormatter};
+use crate::debug::{Type, Variable};
 
-const VALUE_OFFSET: usize = 16;
+// ╭──────────────────────────────────────────────────────────────────────────╮
+// │ MapEntry                                                                 │
+// ╰──────────────────────────────────────────────────────────────────────────╯
 
-struct LibcxxTree {
-    begin_node: Variable,
-    value_ty: Type,
-    count: usize,
-    ptr_size: usize,
+/// Wraps a variable representing a pointer to a tree node.
+#[derive(Clone)]
+struct MapEntry(Variable);
+
+impl MapEntry {
+    fn value(&self) -> u64 {
+        self.0.unsigned_value().unwrap_or(0)
+    }
+
+    fn null(&self) -> bool {
+        self.value() == 0
+    }
+
+    fn left(&self) -> Option<MapEntry> {
+        if self.null() {
+            return None;
+        };
+
+        Some(MapEntry(self.0.child_at_offset(0)))
+    }
+
+    fn right(&self) -> Option<MapEntry> {
+        if self.null() {
+            return None;
+        };
+
+        let addr_size = self.0.debugger()?.address_size();
+        Some(MapEntry(self.0.child_at_offset(addr_size)))
+    }
+
+    fn parent(&self) -> Option<MapEntry> {
+        if self.null() {
+            return None;
+        };
+
+        let addr_size = self.0.debugger()?.address_size();
+        Some(MapEntry(self.0.child_at_offset(2 * addr_size)))
+    }
+
+    fn is_left_child(&self) -> bool {
+        if self.null() {
+            return false;
+        }
+
+        let Some(parent) = self.parent() else {
+            return false;
+        };
+
+        let Some(left) = parent.left() else {
+            return false;
+        };
+
+        self.value() == left.value()
+    }
 }
 
-impl LibcxxTree {
-    fn new(value: &Variable) -> Result<Self> {
-        let tree = value
+// ╭──────────────────────────────────────────────────────────────────────────╮
+// │ TreeIterator                                                             │
+// ╰──────────────────────────────────────────────────────────────────────────╯
+
+struct TreeIterator {
+    current: MapEntry,
+    value_type: Type,
+    size: usize,
+}
+
+impl TreeIterator {
+    fn new(container: &Variable) -> Result<Self> {
+        let tree = container
             .child_with_name("__tree_")
             .context("No child named '__tree_'")?;
+
         let begin_node = tree
             .child_with_name("__begin_node_")
             .context("No child named '__begin_node_'")?;
-        let value_ty = tree
+
+        let value_type = tree
             .ty()
             .discard_modifiers()
             .direct_nested_type_with_name("value_type")?
             .discard_modifiers();
-        let ptr_size = begin_node
-            .debugger()
-            .map(|debugger| debugger.pointer_size())
-            .unwrap_or(4) as usize;
+
+        let size = tree
+            .child_with_name("__size_")
+            .context("No child named '__size_'")?
+            .u64_value()
+            .context("Could not read __size_")? as usize;
+
         Ok(Self {
-            begin_node,
-            value_ty,
-            count: tree
-                .child_with_name("__size_")
-                .context("No child named '__size_'")?
-                .u64_value()
-                .context("Could not read __size_")? as usize,
-            ptr_size,
+            current: MapEntry(begin_node),
+            value_type,
+            size,
         })
     }
 
-    fn indexed_children(&self, range: Range<usize>) -> Result<Vec<Variable>> {
-        let end = range.end.min(self.count);
-        let mut iter = TreeIter::new(self);
-        for _ in 0..range.start {
-            if !iter.advance() {
-                return Ok(Vec::new());
+    fn value(&self) -> Variable {
+        // Note: 16 is the offset from the start of the node to
+        // the beginning of its stored value
+        self.current.0.child_at_offset(16)
+    }
+
+    fn next(&mut self) {
+        if self.current.null() {
+            return;
+        }
+
+        let right = self.current.right();
+
+        if let Some(right) = right {
+            if !right.null() {
+                self.current = self.tree_min(&right);
+                return;
             }
         }
-        let mut out = Vec::with_capacity(end - range.start);
-        for index in range.start..end {
-            out.push(
-                iter.value()
-                    .with_name(&format!("[{index}]"))
-                    .with_type(&self.value_ty),
-            );
-            if index + 1 < end && !iter.advance() {
+
+        let mut steps = 0;
+        while !self.current.is_left_child() {
+            let Some(parent) = self.current.parent() else {
+                return;
+            };
+            self.current = parent;
+            steps += 1;
+            if steps > self.size {
+                return;
+            }
+        }
+
+        if let Some(parent) = self.current.parent() {
+            self.current = parent;
+        }
+    }
+
+    fn tree_min(&self, entry: &MapEntry) -> MapEntry {
+        let mut curr = entry.clone();
+
+        if entry.null() {
+            return curr;
+        }
+
+        let mut steps = 0;
+        while let Some(left) = curr.left().filter(|e| !e.null()) {
+            curr = left;
+            steps += 1;
+            if steps > self.size {
                 break;
             }
         }
-        Ok(out)
+
+        curr
     }
 }
 
-struct TreeIter<'a> {
-    tree: &'a LibcxxTree,
-    /// A `__node_pointer` to the current tree node.
-    current: Variable,
-    steps: usize,
-    done: bool,
-}
-
-impl<'a> TreeIter<'a> {
-    fn new(tree: &'a LibcxxTree) -> Self {
-        Self {
-            tree,
-            current: tree.begin_node.clone(),
-            steps: 0,
-            done: false,
-        }
-    }
-
-    fn left(&self) -> Option<Variable> {
-        self.link(0)
-    }
-
-    fn right(&self) -> Option<Variable> {
-        self.link(self.tree.ptr_size)
-    }
-
-    fn parent(&self) -> Option<Variable> {
-        self.link(2 * self.tree.ptr_size)
-    }
-
-    fn link(&self, offset: usize) -> Option<Variable> {
-        let link = self.current.child_at_offset(offset);
-        let address = link.pointer_value()?;
-        if address.is_null() {
-            return None;
-        }
-        Some(link.child_at_offset(0))
-    }
-
-    fn value(&self) -> Variable {
-        self.current.child_at_offset(VALUE_OFFSET)
-    }
-
-    fn advance(&mut self) -> bool {
-        if self.done || self.current.pointer_value().is_none_or(|address| address.is_null()) {
-            return false;
-        }
-        if let Some(right) = self.right() {
-            self.current = right;
-            while let Some(left) = self.left() {
-                self.current = left;
-                self.steps += 1;
-                if self.steps > self.tree.count {
-                    self.done = true;
-                    return false;
-                }
-            }
-            return true;
-        }
-        while !self.is_left_child() {
-            let Some(parent) = self.parent() else {
-                self.done = true;
-                return false;
-            };
-            self.current = parent;
-            self.steps += 1;
-            if self.steps > self.tree.count {
-                self.done = true;
-                return false;
-            }
-        }
-        match self.parent() {
-            Some(next) => {
-                self.current = next;
-                true
-            }
-            None => {
-                self.done = true;
-                false
-            }
-        }
-    }
-
-    fn is_left_child(&self) -> bool {
-        let here = self.current.address();
-        let Some(parent) = self.parent() else {
-            return false;
-        };
-        Self {
-            tree: self.tree,
-            current: parent,
-            steps: 0,
-            done: false,
-        }
-        .left()
-        .is_some_and(|left| left.address() == here)
-    }
-}
+// ╭──────────────────────────────────────────────────────────────────────────╮
+// │ StdMapFormatter                                                          │
+// ╰──────────────────────────────────────────────────────────────────────────╯
 
 fn is_container(value: &Variable, container: &str) -> bool {
     let name = value.ty().name();
@@ -181,15 +198,34 @@ impl VariableFormatter for StdMapFormatter {
     fn matches(&self, value: &Variable) -> bool {
         is_container(value, "map") || is_container(value, "set")
     }
+
     fn display(&self, value: &Variable) -> Result<String> {
         value.display()
     }
+
     fn num_children(&self, value: &Variable) -> Result<ChildCounts> {
-        Ok(ChildCounts::indexed(LibcxxTree::new(value)?.count))
+        let tree = TreeIterator::new(value)?;
+        Ok(ChildCounts::indexed(tree.size))
     }
+
     fn indexed_children(&self, value: &Variable, range: Range<usize>) -> Result<Vec<Variable>> {
-        LibcxxTree::new(value)?.indexed_children(range)
+        let mut iter = TreeIterator::new(value)?;
+        let end = range.end.min(iter.size);
+        for _ in 0..range.start {
+            iter.next();
+        }
+        Ok((range.start..end)
+            .map(|i| {
+                let child = iter
+                    .value()
+                    .with_name(&format!("[{i}]"))
+                    .with_type(&iter.value_type);
+                iter.next();
+                child
+            })
+            .collect())
     }
+
     fn named_children(&self, _: &Variable, _: Range<usize>) -> Result<Vec<Variable>> {
         Ok(Vec::new())
     }

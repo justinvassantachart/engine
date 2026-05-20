@@ -177,9 +177,51 @@ impl Variable {
         Some(bytes)
     }
 
-    pub fn u64_value(&self) -> Option<u64> {
-        let bytes = self.read(8)?;
-        Some(u64::from_le_bytes(bytes.try_into().ok()?))
+    /// Get the unsigned value of this variable.
+    /// If the value cannot be represented as an unsigned value, returns [None].
+    ///
+    /// * For signed integral types, returns [None] for negative values.
+    /// * For character types, returns the unsigned value of the code point.
+    /// * For floating point types, returns [None].
+    /// * For pointer types, returns the pointer's value.
+    pub fn unsigned_value(&self) -> Option<u64> {
+        match self.ty.resolved()? {
+            TypeDeclaration::Scalar {
+                byte_size,
+                encoding,
+                ..
+            } => {
+                let size = *byte_size as usize;
+                let bytes = self.read(size)?;
+                match *encoding {
+                    gimli::DW_ATE_signed | gimli::DW_ATE_signed_char => {
+                        let signed = match size {
+                            1 => i64::from(bytes[0] as i8),
+                            2 => i64::from(i16::from_le_bytes(bytes[..2].try_into().ok()?)),
+                            4 => i64::from(i32::from_le_bytes(bytes[..4].try_into().ok()?)),
+                            8 => i64::from(i64::from_le_bytes(bytes[..8].try_into().ok()?)),
+                            _ => return None,
+                        };
+                        u64::try_from(signed).ok()
+                    }
+                    gimli::DW_ATE_unsigned | gimli::DW_ATE_unsigned_char => match size {
+                        1 => Some(bytes[0] as u64),
+                        2 => Some(u16::from_le_bytes(bytes[..2].try_into().ok()?) as u64),
+                        4 => Some(u32::from_le_bytes(bytes[..4].try_into().ok()?) as u64),
+                        8 => Some(u64::from_le_bytes(bytes[..8].try_into().ok()?)),
+                        _ => None,
+                    },
+                    gimli::DW_ATE_UTF | gimli::DW_ATE_ASCII if size == 1 => Some(bytes[0] as u64),
+                    gimli::DW_ATE_float | gimli::DW_ATE_boolean => None,
+                    _ => None,
+                }
+            }
+            TypeDeclaration::Referential {
+                kind: ReferenceKind::Pointer,
+                ..
+            } => self.pointer_value().map(u64::from),
+            _ => None,
+        }
     }
 
     /// Returns the actual address stored by a pointer.

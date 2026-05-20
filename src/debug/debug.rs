@@ -319,8 +319,8 @@ impl Debugger {
         &self.info.memory
     }
 
-    /// Returns the pointer size in bytes on the current platform.
-    pub fn pointer_size(&self) -> u64 {
+    /// Returns the size of an address in bytes on the current platform.
+    pub fn address_size(&self) -> usize {
         // TODO: Can this ever change?
         4
     }

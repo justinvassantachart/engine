@@ -5,14 +5,14 @@
       "command": "setBreakpoints",
       "arguments": {
         "source": { "path": "main.cpp" },
-        "breakpoints": [{ "line": 7 }]
+        "breakpoints": [{ "line": 10 }]
       }
     },
     {
       "type": "response",
       "body": {
         "breakpoints": {
-          "$array.contains": [{ "line": 7, "verified": true }]
+          "$array.contains": [{ "line": 10, "verified": true }]
         }
       }
     },
@@ -66,7 +66,7 @@
         "variables": {
           "$array.contains": [
             { "name": "s", "indexedVariables": 3, "variablesReference": "${{set}}" },
-            { "name": "m", "indexedVariables": 3, "variablesReference": "${{map}}" }
+            { "name": "m", "indexedVariables": 20, "variablesReference": "${{map}}" }
           ]
         }
       }
@@ -94,10 +94,66 @@
     {
       "type": "response",
       "body": {
+        "variables": {
+          "$array.contains": [
+            { "name": "[0]", "type": "std::pair<const int, int>", "variablesReference": "${{map0}}" },
+            { "name": "[19]", "type": "std::pair<const int, int>", "variablesReference": "${{map19}}" }
+          ]
+        }
+      }
+    },
+    {
+      "type": "request",
+      "command": "variables",
+      "arguments": {
+        "variablesReference": "{{map}}",
+        "filter": "indexed",
+        "start": 7,
+        "count": 4
+      }
+    },
+    {
+      "type": "response",
+      "body": {
         "variables": [
-          { "name": "[0]", "type": "std::pair<const int, int>", "variablesReference": "${{map0}}" },
-          { "name": "[1]", "type": "std::pair<const int, int>", "variablesReference": "${{map1}}" },
-          { "name": "[2]", "type": "std::pair<const int, int>", "variablesReference": "${{map2}}" }
+          { "name": "[7]", "type": "std::pair<const int, int>", "variablesReference": "${{map7}}" },
+          { "name": "[8]", "type": "std::pair<const int, int>" },
+          { "name": "[9]", "type": "std::pair<const int, int>" },
+          { "name": "[10]", "type": "std::pair<const int, int>" }
+        ]
+      }
+    },
+    {
+      "type": "request",
+      "command": "variables",
+      "arguments": { "variablesReference": "{{map7}}" }
+    },
+    {
+      "type": "response",
+      "body": {
+        "variables": [
+          { "name": "first", "value": "8", "variablesReference": 0 },
+          { "name": "second", "value": "800", "variablesReference": 0 }
+        ]
+      }
+    },
+    {
+      "type": "request",
+      "command": "variables",
+      "arguments": {
+        "variablesReference": "{{map}}",
+        "filter": "indexed",
+        "start": 17,
+        "count": 10
+      }
+    },
+    {
+      "type": "response",
+      "body": {
+        "variables": [
+          { "name": "[17]", "type": "std::pair<const int, int>" },
+          { "name": "[18]", "type": "std::pair<const int, int>" },
+          { "name": "[19]", "type": "std::pair<const int, int>" }
         ]
       }
     },
@@ -112,6 +168,20 @@
         "variables": [
           { "name": "first", "value": "1", "variablesReference": 0 },
           { "name": "second", "value": "100", "variablesReference": 0 }
+        ]
+      }
+    },
+    {
+      "type": "request",
+      "command": "variables",
+      "arguments": { "variablesReference": "{{map19}}" }
+    },
+    {
+      "type": "response",
+      "body": {
+        "variables": [
+          { "name": "first", "value": "20", "variablesReference": 0 },
+          { "name": "second", "value": "2000", "variablesReference": 0 }
         ]
       }
     },
