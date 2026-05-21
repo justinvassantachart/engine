@@ -103,78 +103,92 @@ async fn start(msg: WorkerStart) {
 
     let exec = Execution::new(msg.stdin_buffer);
 
-    // Build clang args, conditional on is_debug
-    let mut clang_args = vec![
-        "-cc1",
-        "-triple",
-        "wasm32-wasip1",
-        "-Werror",
-        "-emit-obj",
-        "-disable-free",
-        "-isysroot",
-        "/",
-        "-internal-isystem",
-        "/include/c++/v1",
-        "-internal-isystem",
-        "/include",
-        "-internal-isystem",
-        "/include/wasm32-wasip1",
-        "-ferror-limit",
-        "4",
-        "-fcolor-diagnostics",
-        "-x",
-        "c++",
-        "-std=c++23",
-        "-o",
-        "/main.o",
-    ];
-
-    if msg.is_debug {
-        clang_args.push("-O0");
-        // because of the -cc1 flag
-        clang_args.push("-debug-info-kind=standalone");
-        clang_args.push("-dwarf-version=5");
-    }
+    // One `-cc1` call per source: it emits a single `-o` per invocation.
+    let mut obj_paths: Vec<String> = Vec::with_capacity(sources.len());
+    let mut union_fs: Option<Box<dyn FileSystem>> = Some(Box::new(fs));
 
     for source in &sources {
-        clang_args.push(source);
-    }
+        let obj_path = format!("{source}.o");
 
-    let exit = exec
-        .step("clang")
-        // from @yowasp
-        .binary("https://fabioibanez.github.io/website/llvm.core.wasm")
-        .sysroot("https://fabioibanez.github.io/website/llvm-resources.tar.gz")
-        .fs(Box::new(fs))
-        .args(&clang_args)
-        .run()
-        .await
-        .expect("Compilation succeeded");
+        // Build clang args, conditional on is_debug
+        let mut clang_args = vec![
+            "-cc1",
+            "-triple",
+            "wasm32-wasip1",
+            "-Werror",
+            "-emit-obj",
+            "-disable-free",
+            "-isysroot",
+            "/",
+            "-internal-isystem",
+            "/include/c++/v1",
+            "-internal-isystem",
+            "/include",
+            "-internal-isystem",
+            "/include/wasm32-wasip1",
+            "-ferror-limit",
+            "4",
+            "-fcolor-diagnostics",
+            "-x",
+            "c++",
+            "-std=c++23",
+            "-o",
+            obj_path.as_str(),
+        ];
 
-    if !exit.is_success() {
-        return WorkerOut::Stop {
-            exit_code: exit.raw(),
+        if msg.is_debug {
+            clang_args.push("-O0");
+            // because of the -cc1 flag
+            clang_args.push("-debug-info-kind=standalone");
+            clang_args.push("-dwarf-version=5");
         }
-        .send();
+
+        clang_args.push(source);
+
+        let mut step = exec
+            .step("clang")
+            // from @yowasp
+            .binary("https://fabioibanez.github.io/website/llvm.core.wasm")
+            .args(&clang_args);
+        if let Some(fs) = union_fs.take() {
+            step = step
+                .sysroot("https://fabioibanez.github.io/website/llvm-resources.tar.gz")
+                .fs(fs);
+        }
+        let exit = step.run().await.expect("Compilation succeeded");
+
+        if !exit.is_success() {
+            return WorkerOut::Stop {
+                exit_code: exit.raw(),
+            }
+            .send();
+        }
+        obj_paths.push(obj_path);
     }
+
+    let mut link_args: Vec<&str> = vec![
+        "--export-dynamic",
+        "-z",
+        "stack-size=1048576",
+        "-L/lib/wasm32-wasip1",
+        "/lib/wasm32-wasip1/crt1.o",
+    ];
+    for obj in &obj_paths {
+        link_args.push(obj);
+    }
+    link_args.extend_from_slice(&[
+        "-lc++",
+        "-lc++abi",
+        "/lib/wasm32-unknown-wasip1/libclang_rt.builtins.a",
+        "-lc",
+        "-o",
+        "/main.wasm",
+    ]);
 
     let exit = exec
         .step("wasm-ld")
         .binary("https://fabioibanez.github.io/website/llvm.core.wasm")
-        .args(&[
-            "--export-dynamic",
-            "-z",
-            "stack-size=1048576",
-            "-L/lib/wasm32-wasip1",
-            "/lib/wasm32-wasip1/crt1.o",
-            "/main.o",
-            "-lc++",
-            "-lc++abi",
-            "/lib/wasm32-unknown-wasip1/libclang_rt.builtins.a",
-            "-lc",
-            "-o",
-            "/main.wasm",
-        ])
+        .args(&link_args)
         .run()
         .await
         .expect("Linking succeeded");
