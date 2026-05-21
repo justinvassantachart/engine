@@ -1,0 +1,84 @@
+// Regression: two-source project must link. main.cpp calls a function
+// defined in helper.cpp, and we verify the cross-translation-unit call
+// actually resolved (the local `answer` should hold helper.cpp's return
+// value at the breakpoint). Before the multi-source clang loop, the
+// link step errored out and the program never reached this point.
+{
+  "steps": [
+    {
+      "type": "request",
+      "command": "setBreakpoints",
+      "arguments": {
+        "source": { "path": "main.cpp" },
+        "breakpoints": [{ "line": 5 }]
+      }
+    },
+    {
+      "type": "response",
+      "body": {
+        "breakpoints": {
+          "$array.contains": [{ "line": 5, "verified": true }]
+        }
+      }
+    },
+    {
+      "type": "request",
+      "command": "configurationDone",
+      "arguments": {}
+    },
+    {
+      "type": "event",
+      "event": "stopped",
+      "body": {
+        "reason": "breakpoint",
+        "threadId": "${{thread}}"
+      }
+    },
+    {
+      "type": "request",
+      "command": "stackTrace",
+      "arguments": { "threadId": "{{thread}}" }
+    },
+    {
+      "type": "response",
+      "body": {
+        "stackFrames": {
+          "$array.contains": [{ "id": "${{mainFrame}}", "name": "main" }]
+        }
+      }
+    },
+    {
+      "type": "request",
+      "command": "scopes",
+      "arguments": { "frameId": "{{mainFrame}}" }
+    },
+    {
+      "type": "response",
+      "body": {
+        "scopes": {
+          "$array.contains": [
+            { "name": "Locals", "variablesReference": "${{locals}}" }
+          ]
+        }
+      }
+    },
+    {
+      "type": "request",
+      "command": "variables",
+      "arguments": { "variablesReference": "{{locals}}" }
+    },
+    {
+      "type": "response",
+      "body": {
+        "variables": {
+          "$array.contains": [{ "name": "answer", "value": "42", "type": "int" }]
+        }
+      }
+    },
+    {
+      "type": "request",
+      "command": "continue",
+      "arguments": { "threadId": "{{thread}}" }
+    }
+  ]
+}
