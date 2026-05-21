@@ -24,6 +24,7 @@ use std::ops::Range;
 
 use anyhow::{Context, Result};
 
+use crate::debug::formatters::default::StructureFormatter;
 use crate::debug::formatters::{ChildCounts, VariableFormatter};
 use crate::debug::{Type, Variable};
 
@@ -204,7 +205,7 @@ impl VariableFormatter for StdMapFormatter {
     }
 
     fn display(&self, value: &Variable) -> Result<String> {
-        value.display()
+        StructureFormatter.display(value)
     }
 
     fn num_children(&self, value: &Variable) -> Result<ChildCounts> {

@@ -1,6 +1,8 @@
+use std::rc::Rc;
+
 use crate::debug::dwarf::Location;
-use crate::debug::formatters::VariableFormatter;
-use crate::debug::{TypeGraph, Variable, get_location, get_variables as debug_get_variables};
+use crate::debug::formatters::{self, VariableFormatter};
+use crate::debug::{Type, TypeGraph, Variable, get_location, get_variables as debug_get_variables};
 use crate::types::{
     BreakpointMode, DebugFunction, DebugInfo, GlobalAddress, MemoryDescriptor, WasmLocation,
 };
@@ -17,6 +19,20 @@ pub struct StackFrame {
     pub source: Option<String>,
 }
 
+/// Represents a category of formatters.
+///
+/// When determining which formatter to use for a variable,
+/// the debugger will exhaust all possibilities *within* a category
+/// before moving onto the next one. This is a (somewhat naive)
+/// simplification of LLDB's behaviour, which can be extended upon.
+///
+/// This allows us to, for example, try all user formatters before trying
+/// all standard library formatters before all core formatters, etc.
+pub struct FormatterCategory {
+    name: &'static str,
+    formatters: Vec<Rc<dyn VariableFormatter>>,
+}
+
 // ╭──────────────────────────────────────────────────────────────────────────╮
 // │ Main-thread Debugger                                                     │
 // ╰──────────────────────────────────────────────────────────────────────────╯
@@ -28,7 +44,7 @@ pub struct Debugger {
     info: DebugInfo,
     types: Ref<TypeGraph>,
     state: js_sys::Int32Array,
-    pub(crate) formatters: Vec<Box<dyn VariableFormatter>>,
+    formatters: Vec<FormatterCategory>,
 }
 
 impl Debugger {
@@ -36,23 +52,55 @@ impl Debugger {
         Ref::new_cyclic(|me| {
             let state = info.get_bp_state();
             let types = TypeGraph::new(me, &info.dwarf);
-            let mut dbg = Self {
+            Self {
                 me: me.clone(),
                 info,
                 state,
                 types,
-                formatters: Vec::new(),
-            };
-            crate::debug::formatters::register_defaults(&mut dbg);
-            dbg
+                formatters: vec![
+                    FormatterCategory {
+                        name: "default",
+                        formatters: vec![
+                            Rc::new(formatters::default::ScalarFormatter),
+                            Rc::new(formatters::default::ReferentialFormatter),
+                            Rc::new(formatters::default::StructureFormatter),
+                        ],
+                    },
+                    FormatterCategory {
+                        name: "cpp",
+                        formatters: vec![
+                            Rc::new(formatters::cpp::StdStringFormatter),
+                            Rc::new(formatters::cpp::StdMapFormatter),
+                            Rc::new(formatters::cpp::StdVectorFormatter),
+                        ],
+                    },
+                    FormatterCategory {
+                        name: "user",
+                        formatters: vec![],
+                    },
+                ],
+            }
         })
     }
 
-    /// Registers a [`VariableFormatter`]. Formatters are consulted in registration
-    /// order; the first whose `matches()` predicate accepts the variable owns the
-    /// formatted view for that variable.
-    pub fn add_formatter(&mut self, formatter: Box<dyn VariableFormatter>) {
-        self.formatters.push(formatter);
+    /// Computes the formatter for a given type, if any
+    ///
+    /// Within a category, we will try to first match the exact type of the variable
+    /// before trying the type after all modifiers have been removed.
+    pub fn formatter_for(&self, ty: &Type) -> Option<Rc<dyn VariableFormatter>> {
+        let stripped = ty.discard_modifiers();
+
+        for category in self.formatters.iter().rev() {
+            let formatters = &category.formatters;
+            if let Some(formatter) = formatters.iter().rev().find(|f| f.matches(ty)) {
+                return Some(formatter.clone());
+            }
+            if let Some(formatter) = formatters.iter().rev().find(|f| f.matches(&stripped)) {
+                return Some(formatter.clone());
+            }
+        }
+
+        None
     }
 
     fn read_wasm_value(

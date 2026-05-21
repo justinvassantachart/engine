@@ -4,11 +4,12 @@ use crate::{
     debug::{
         Debugger,
         dwarf::{Die, DieReference, Dwarf, R},
+        formatters::VariableFormatter,
     },
     util::{Ref, WeakRef},
 };
 
-use std::collections::HashMap;
+use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
 pub type TypeId = DieReference;
 
@@ -55,6 +56,9 @@ pub struct TypeGraph {
     me: WeakRef<Self>,
     debugger: WeakRef<Debugger>,
     types: HashMap<TypeId, TypeDeclaration>,
+
+    /// Cached computations of the formatter for a given type.
+    formatters: RefCell<HashMap<TypeId, Option<Rc<dyn VariableFormatter>>>>,
 }
 
 /// Represents a value that can either hold a constant integer value
@@ -128,6 +132,27 @@ impl Type {
         self.graph.as_deref()
     }
 
+    /// Gets the formatter for this type, if any exist.
+    ///
+    /// If we have previously called this method on a type, the cached result for that type is returned.
+    pub fn formatter(&self) -> Option<Rc<dyn VariableFormatter>> {
+        let graph = self.graph()?;
+
+        if let Some(cached) = graph.formatters.borrow().get(&self.root) {
+            return cached.clone();
+        }
+
+        let debugger = graph.debugger.as_deref()?;
+        let formatter = debugger.formatter_for(self);
+
+        graph
+            .formatters
+            .borrow_mut()
+            .insert(self.root, formatter.clone());
+
+        formatter
+    }
+
     /// Returns a [`Type`] over the same graph, rooted at `id`.
     pub fn child(&self, id: TypeId) -> Type {
         Type {
@@ -137,12 +162,10 @@ impl Type {
     }
 
     /// For pointer types, returns the target type.
-    /// For array types, returns the element type.
     ///
     /// Modifiers are excluded, e.g. `const int*` returns `int`.
     pub fn pointee(&self) -> Option<Type> {
         match self.resolved()? {
-            TypeDeclaration::Array { element_type, .. } => Some(self.child(*element_type)),
             TypeDeclaration::Referential { target, .. } => Some(self.child(*target)),
             _ => None,
         }
@@ -310,6 +333,7 @@ impl TypeGraph {
                 me: me.clone(),
                 debugger: debugger.clone(),
                 types,
+                formatters: Default::default(),
             }
         })
     }

@@ -1,11 +1,10 @@
-use std::cell::OnceCell;
 use std::ops::Range;
 
 use crate::{
     debug::{
         Debugger, ReferenceKind, Type, TypeDeclaration,
         dwarf::{Die, R, Visit},
-        formatters::{ChildCounts, VariableFormatter},
+        formatters::ChildCounts,
     },
     types::GlobalAddress,
     util::WeakRef,
@@ -71,25 +70,6 @@ pub struct Variable {
     name: String,
     pieces: Vec<gimli::Piece<R>>,
     ty: Type,
-    cache: VariableCache,
-}
-
-#[derive(Clone, Default)]
-struct VariableCache {
-    named: OnceCell<Vec<Variable>>,
-    indexed: OnceCell<Vec<Variable>>,
-}
-
-impl VariableCache {
-    pub fn named(&self, var: &Variable) -> &Vec<Variable> {
-        self.named
-            .get_or_init(|| compute_default_named_children(var))
-    }
-
-    pub fn indexed(&self, var: &Variable) -> &Vec<Variable> {
-        self.indexed
-            .get_or_init(|| compute_default_indexed_children(var))
-    }
 }
 
 impl Variable {
@@ -104,7 +84,6 @@ impl Variable {
             name,
             pieces,
             ty,
-            cache: Default::default(),
         }
     }
 
@@ -132,7 +111,6 @@ impl Variable {
     pub fn with_type(self, ty: &Type) -> Self {
         Self {
             ty: ty.clone(),
-            cache: Default::default(),
             ..self
         }
     }
@@ -242,103 +220,37 @@ impl Variable {
         }
     }
 
-    pub fn display(&self) -> Result<String> {
-        Ok(match self.ty().resolved() {
-            Some(TypeDeclaration::Scalar {
-                byte_size,
-                encoding,
-                ..
-            }) => {
-                let Some(bytes) = self.read(*byte_size as usize) else {
-                    return Ok("<unavailable>".into());
-                };
-                format_scalar(&bytes, *encoding, *byte_size)
-            }
-            Some(TypeDeclaration::Structure { .. }) => {
-                if let Some(addr) = self.address() {
-                    format!("@{addr}")
-                } else {
-                    String::default()
-                }
-            }
-            Some(TypeDeclaration::Referential { target, kind, .. }) => match kind {
-                ReferenceKind::Pointer => match self.address() {
-                    Some(addr) => addr.to_string(),
-                    None => "<unavailable>".into(),
-                },
-                ReferenceKind::Reference | ReferenceKind::Temporary => {
-                    return self
-                        .child_at_offset(0)
-                        .with_type(&self.ty.child(*target))
-                        .display();
-                }
-            },
-            _ => "<unavailable>".into(),
-        })
-    }
-
-    pub fn num_children(&self) -> Result<ChildCounts> {
-        Ok(ChildCounts::mixed(
-            self.cache.indexed(self).len(),
-            self.cache.named(self).len(),
-        ))
-    }
-
-    pub fn indexed_children(&self, range: Range<usize>) -> Result<Vec<Variable>> {
-        match self.ty.resolved() {
-            Some(TypeDeclaration::Referential { target, kind, .. })
-                if matches!(kind, ReferenceKind::Pointer) =>
-            {
-                let Some(base) = self.pointer_value() else {
-                    return Ok(Vec::new());
-                };
-                if base.is_null() {
-                    return Ok(Vec::new());
-                }
-
-                let elem_ty = self.ty.child(*target);
-                let Some(elem_size) = elem_ty.byte_size() else {
-                    return Ok(Vec::new());
-                };
-
-                let elem_size = elem_size as usize;
-                if elem_size == 0 {
-                    return Ok(Vec::new());
-                }
-
-                let mut result = Vec::new();
-                for i in range {
-                    result.push(
-                        self.child_at_offset(i * elem_size)
-                            .with_name(&format!("[{i}]"))
-                            .with_type(&elem_ty),
-                    );
-                }
-
-                Ok(result)
-            }
-            _ => Ok(self.cache.indexed(self)[range].to_vec()),
-        }
-    }
-
-    pub fn named_children(&self, range: Range<usize>) -> Result<Vec<Variable>> {
-        Ok(self.cache.named(self)[range].to_vec())
-    }
-
-    /// Gets a child named `name` in this variable.
+    /// Gets a raw child named `name` in this variable.
+    /// This method uses the raw variable format, ignoring any formatters.
     ///
     /// For example, for structural types, `name` might be the name of a member within this variable.
     ///
     /// Returns [None] if no such child is found.
     pub fn child_with_name(&self, name: &str) -> Option<Variable> {
-        self.cache
-            .named(self)
-            .into_iter()
-            .find(|child| child.name() == name)
-            .cloned()
+        let member = match self.ty.resolved() {
+            Some(TypeDeclaration::Structure { members, .. }) => members
+                .iter()
+                .find(|member| member.name.as_deref() == Some(name))?,
+            _ => return None,
+        };
+
+        // TODO: This code is duplicated by the structure formatter
+        // Eventually might want to coalesce this somehow if the logic gets more complicated
+        let offset = match &member.location {
+            Some(super::Value::Constant(o)) => *o,
+            None => 0,
+            Some(super::Value::Expr(_)) => return None,
+        };
+
+        Some(
+            self.child_at_offset(offset as usize)
+                .with_name(name)
+                .with_type(&self.ty().child(member.ty)),
+        )
     }
 
     /// Returns a child of this variable with byte offset `offset`.
+    /// This method uses the raw variable format, ignoring any formatters.
     ///
     /// The returned variable will have an empty name and the same type as this one.
     /// You may change the resulting name and type using [Variable::with_name] and [Variable::with_type].
@@ -390,99 +302,36 @@ impl Variable {
             name: Default::default(),
             pieces,
             ty: self.ty.clone(),
-            cache: Default::default(),
         }
     }
 
-    fn formatter(&self) -> Option<&dyn VariableFormatter> {
-        self.debugger()?
-            .formatters
-            .iter()
-            .find(|formatter| formatter.matches(self.ty()))
-            .map(|formatter| formatter.as_ref())
-    }
-
-    pub fn formatted_display(&self) -> Result<String> {
-        match self.formatter() {
+    pub fn display(&self) -> Result<String> {
+        match self.ty.formatter() {
             Some(formatter) => formatter.display(self),
-            None => self.display(),
+            None => Ok("<unknown>".into()),
         }
     }
 
-    pub fn formatted_num_children(&self) -> Result<ChildCounts> {
-        match self.formatter() {
+    pub fn num_children(&self) -> Result<ChildCounts> {
+        match self.ty.formatter() {
             Some(formatter) => formatter.num_children(self),
-            None => self.num_children(),
+            None => Ok(Default::default()),
         }
     }
 
-    pub fn formatted_indexed_children(&self, range: Range<usize>) -> Result<Vec<Variable>> {
-        match self.formatter() {
+    pub fn indexed_children(&self, range: Range<usize>) -> Result<Vec<Variable>> {
+        match self.ty.formatter() {
             Some(formatter) => formatter.indexed_children(self, range),
-            None => self.indexed_children(range),
+            None => Ok(Default::default()),
         }
     }
 
-    pub fn formatted_named_children(&self, range: Range<usize>) -> Result<Vec<Variable>> {
-        match self.formatter() {
+    pub fn named_children(&self, range: Range<usize>) -> Result<Vec<Variable>> {
+        match self.ty.formatter() {
             Some(formatter) => formatter.named_children(self, range),
-            None => self.named_children(range),
+            None => Ok(Default::default()),
         }
     }
-}
-
-/// Computes the default named children of a variable.
-fn compute_default_named_children(var: &Variable) -> Vec<Variable> {
-    match var.ty.resolved() {
-        Some(TypeDeclaration::Structure { members, .. }) => {
-            let mut out = Vec::with_capacity(members.len());
-            for member in members {
-                let Some(name) = member.name.clone() else {
-                    continue;
-                };
-                let offset = match &member.location {
-                    Some(super::Value::Constant(o)) => *o,
-                    None => 0,
-                    Some(super::Value::Expr(_)) => continue,
-                };
-                out.push(
-                    var.child_at_offset(offset as usize)
-                        .with_name(&name)
-                        .with_type(&var.ty.child(member.ty)),
-                );
-            }
-            out
-        }
-        Some(TypeDeclaration::Referential { target, kind, .. }) => {
-            let is_ptr = matches!(kind, ReferenceKind::Pointer);
-            let Some(addr) = var.pointer_value() else {
-                return Vec::new();
-            };
-            if is_ptr && addr.is_null() {
-                return Vec::new();
-            }
-            let target_type = var.ty.child(*target);
-            if is_ptr && matches!(target_type.resolved(), Some(TypeDeclaration::Scalar { .. })) {
-                return vec![
-                    var.child_at_offset(0)
-                        .with_name(&format!("*{}", var.name))
-                        .with_type(&target_type),
-                ];
-            }
-
-            let inner = var
-                .child_at_offset(0)
-                .with_name(var.name())
-                .with_type(&target_type);
-            compute_default_named_children(&inner)
-        }
-        _ => Vec::new(),
-    }
-}
-
-/// Computes the default indexed children of a variable.
-fn compute_default_indexed_children(_var: &Variable) -> Vec<Variable> {
-    Vec::new()
 }
 
 fn value_to_le_bytes(value: gimli::Value, len: usize) -> Vec<u8> {
@@ -503,51 +352,6 @@ fn value_to_le_bytes(value: gimli::Value, len: usize) -> Vec<u8> {
     let copy = len.min(8);
     out[..copy].copy_from_slice(&bytes[..copy]);
     out
-}
-
-pub(super) fn addr_piece(address: u64) -> gimli::Piece<R> {
-    gimli::Piece {
-        size_in_bits: None,
-        bit_offset: None,
-        location: gimli::Location::Address { address },
-    }
-}
-
-fn format_scalar(bytes: &[u8], encoding: gimli::DwAte, byte_size: u64) -> String {
-    let size = byte_size as usize;
-    if bytes.len() < size {
-        return "<truncated>".into();
-    }
-    match encoding {
-        gimli::DW_ATE_signed | gimli::DW_ATE_signed_char => match size {
-            1 => (bytes[0] as i8).to_string(),
-            2 => i16::from_le_bytes(bytes[..2].try_into().unwrap()).to_string(),
-            4 => i32::from_le_bytes(bytes[..4].try_into().unwrap()).to_string(),
-            8 => i64::from_le_bytes(bytes[..8].try_into().unwrap()).to_string(),
-            _ => "<unsupported size>".into(),
-        },
-        gimli::DW_ATE_unsigned | gimli::DW_ATE_unsigned_char => match size {
-            1 => bytes[0].to_string(),
-            2 => u16::from_le_bytes(bytes[..2].try_into().unwrap()).to_string(),
-            4 => u32::from_le_bytes(bytes[..4].try_into().unwrap()).to_string(),
-            8 => u64::from_le_bytes(bytes[..8].try_into().unwrap()).to_string(),
-            _ => "<unsupported size>".into(),
-        },
-        gimli::DW_ATE_boolean => {
-            let v = bytes.iter().take(size).any(|&b| b != 0);
-            (if v { "true" } else { "false" }).into()
-        }
-        gimli::DW_ATE_float => match size {
-            4 => f32::from_le_bytes(bytes[..4].try_into().unwrap()).to_string(),
-            8 => f64::from_le_bytes(bytes[..8].try_into().unwrap()).to_string(),
-            _ => "<unsupported float size>".into(),
-        },
-        gimli::DW_ATE_UTF | gimli::DW_ATE_ASCII => match size {
-            1 => format!("{:?}", bytes[0] as char),
-            _ => "<unsupported char size>".into(),
-        },
-        _ => "<unsupported encoding>".into(),
-    }
 }
 
 impl GlobalAddress {

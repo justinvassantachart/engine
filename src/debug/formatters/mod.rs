@@ -2,10 +2,10 @@ use std::ops::Range;
 
 use anyhow::Result;
 
-use super::Debugger;
 use crate::debug::{Type, Variable};
 
-mod cpp;
+pub mod cpp;
+pub mod default;
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct ChildCounts {
@@ -24,24 +24,29 @@ pub struct ChildCounts {
 
 impl ChildCounts {
     /// Children counts for a variable with `indexed` indexed children and `named` named children.
-    pub fn mixed(indexed: usize, named: usize) -> ChildCounts {
-        ChildCounts { indexed, named }
+    pub fn mixed(indexed: usize, named: usize) -> Self {
+        Self { indexed, named }
     }
 
     /// Children counts for a variable with `count` indexed children and no named children.
-    pub fn indexed(count: usize) -> ChildCounts {
-        ChildCounts {
+    pub fn indexed(count: usize) -> Self {
+        Self {
             indexed: count,
             named: 0,
         }
     }
 
     /// Children counts for a variable with `count` named children and no indexed children.
-    pub fn named(count: usize) -> ChildCounts {
-        ChildCounts {
+    pub fn named(count: usize) -> Self {
+        Self {
             indexed: 0,
             named: count,
         }
+    }
+
+    /// Children counts for a variable with no children.
+    pub fn none() -> Self {
+        Self::default()
     }
 
     pub fn total(&self) -> usize {
@@ -74,22 +79,4 @@ pub trait VariableFormatter {
 
     /// Returns named children in `range`.
     fn named_children(&self, value: &Variable, range: Range<usize>) -> Result<Vec<Variable>>;
-}
-
-/// Registers the built-in formatters on `dbg`.
-pub fn register_defaults(dbg: &mut Debugger) {
-    dbg.add_formatter(Box::new(cpp::StdStringFormatter));
-    dbg.add_formatter(Box::new(cpp::StdMapFormatter));
-    dbg.add_formatter(Box::new(cpp::StdVectorFormatter));
-}
-
-// Reusable for formatters that inspect raw structure fields.
-pub trait VariableSliceExt {
-    fn find(&self, name: &str) -> Option<&Variable>;
-}
-
-impl VariableSliceExt for [Variable] {
-    fn find(&self, name: &str) -> Option<&Variable> {
-        self.iter().find(|v| v.name() == name)
-    }
 }
