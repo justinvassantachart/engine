@@ -1,6 +1,7 @@
 use console_error_panic_hook;
 use instant::Instant;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use wasm_bindgen::prelude::*;
 use wasmer_wasix::virtual_fs::{AsyncWriteExt, FileSystem, create_dir_all, mem_fs};
 use web_sys::{DedicatedWorkerGlobalScope, MessageEvent};
@@ -12,7 +13,7 @@ pub(crate) mod execution;
 mod io;
 mod runtime;
 
-use execution::{Execution, fetch_bytes};
+use execution::{Execution, extract_tar_gz, fetch_bytes};
 
 // ╭──────────────────────────────────────────────────────────────────────────╮
 // │ Helpers                                                                  │
@@ -223,6 +224,14 @@ async fn start_cpp(
     exec: Execution,
     fs: mem_fs::FileSystem,
 ) {
+    // These three files add exception support without replacing the fetched sysroot.
+    let exceptions =
+        extract_tar_gz(include_bytes!("../../assets/cpp-exceptions/runtime.tar.gz").to_vec())
+            .await
+            .expect("embedded C++ exception runtime");
+    let exceptions: Arc<dyn FileSystem + Send + Sync> = Arc::new(exceptions);
+    exec.fs.union(&exceptions);
+
     let mut obj_paths: Vec<String> = Vec::with_capacity(sources.len());
     let mut union_fs: Option<Box<dyn FileSystem>> = Some(Box::new(fs));
 
@@ -250,6 +259,15 @@ async fn start_cpp(
             "-x",
             "c++",
             "-std=c++23",
+            "-fexceptions",
+            "-fcxx-exceptions",
+            "-exception-model=wasm",
+            "-target-feature",
+            "+exception-handling",
+            "-mllvm",
+            "-wasm-enable-eh",
+            "-mllvm",
+            "-wasm-use-legacy-eh=true",
             "-o",
             obj_path.as_str(),
         ];
@@ -288,8 +306,11 @@ async fn start_cpp(
         link_args.push(obj);
     }
     link_args.extend_from_slice(&[
+        "/lib/wasm32-wasip1/cxa_exception.cpp.o",
+        "/lib/wasm32-wasip1/cxa_personality.cpp.o",
         "-lc++",
         "-lc++abi",
+        "-lunwind",
         "/lib/wasm32-unknown-wasip1/libclang_rt.builtins.a",
         "-lc",
         "-o",

@@ -46,6 +46,12 @@ await engine.run();
 
 > Programs compile in **debug mode** by default, so a [DAP](https://microsoft.github.io/debug-adapter-protocol/) handshake is required before `run()` will proceed — see the [integration guide](./docs/integration.md#debugger-dap). To skip it, set `engine.debugger.enabled = false`.
 
+C++ source `throw`/`catch` and RAII work in Run and Debug. Prebuilt libc++ error
+helpers can still abort instead of throwing. The worker embeds a small LLVM
+exception supplement; compiler/sysroot URLs stay unchanged. Exact upstream
+notices and payload provenance are in `share/licenses/cpp-exceptions/` inside
+[runtime.tar.gz](./assets/cpp-exceptions/runtime.tar.gz).
+
 ---
 
 ## Full API

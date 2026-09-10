@@ -26,7 +26,8 @@
     }
   },
   "files": [
-    "dist"
+    "dist",
+    "assets/cpp-exceptions/runtime.tar.gz"
   ],
   "scripts": {
     "build:rs": "wasm-pack build --target web",
