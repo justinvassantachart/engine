@@ -110,10 +110,21 @@ pub enum Lang {
 pub struct WorkerStart {
     pub fs: HashMap<String, FsNode>,
 
+    #[serde(default)]
+    pub host_device: Option<HostDeviceStart>,
+
     #[serde(with = "serde_wasm_bindgen::preserve")]
     pub stdin_buffer: js_sys::SharedArrayBuffer,
     pub is_debug: bool,
     pub lang: Lang,
+}
+
+#[derive(Debug, Tsify, Deserialize)]
+pub struct HostDeviceStart {
+    #[serde(with = "serde_wasm_bindgen::preserve")]
+    pub guest_to_host: js_sys::SharedArrayBuffer,
+    #[serde(with = "serde_wasm_bindgen::preserve")]
+    pub host_to_guest: js_sys::SharedArrayBuffer,
 }
 
 #[derive(Clone, Copy, Debug, Tsify, Serialize_repr)]
@@ -178,6 +189,8 @@ pub enum WorkerOut<'a> {
     /// failed to load) — distinct from the user's program exiting non-zero.
     #[serde(rename = "error")]
     Error { message: String },
+    #[serde(rename = "host_wake")]
+    HostWake,
 }
 
 impl<'a> WorkerOut<'a> {

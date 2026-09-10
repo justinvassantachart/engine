@@ -57,6 +57,7 @@ engine.fs; // DirNode  — virtual filesystem, set before run()
 engine.stdout; // Stdout   — .on('data', (chunk: Uint8Array) => …) / .off(...)
 engine.stderr; // Stdout
 engine.stdin; // Stdin    — .write(string | Uint8Array): Promise<void>
+engine.hostDevice; // Optional C/C++ duplex byte device — see below
 engine.debugger; // Debugger — DAP interface; set .enabled = false to skip the handshake
 engine.lang; // Lang
 
@@ -85,6 +86,14 @@ await engine.stdin.write(new TextEncoder().encode('42\n'));
 ```
 
 ---
+
+For C/C++ host I/O, set `engine.hostDevice` to a synchronous opener receiving
+`{ signal, onData, write }`; return an optional synchronous cleanup function. The guest opens
+`HOST_DEVICE_PATH` with `O_RDWR` for blocking reads/writes; polling is unsupported.
+`write` snapshots bytes; await each write. Stop/exit aborts the per-run signal,
+rejects pending writes and calls cleanup once. Terminal I/O stays separate.
+
+Test after building: `npx -y bun tools/host-device/run.ts`.
 
 ## Example project
 

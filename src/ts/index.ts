@@ -4,8 +4,12 @@ import { prefetch_urls, StdoutMode, WorkerOut, WorkerStart } from '../../pkg/eng
 import init from '../../pkg/engine';
 import wasmBinary from '../../pkg/engine_bg.wasm';
 import { Debugger } from './debugger';
+import { HostDeviceOpener, HostDeviceSession } from './host-device';
 import { errorResult, Internals } from './util';
 import RustWorker from './worker?worker&inline';
+
+// Concurrent Engine.create calls must share wasm-bindgen's initialization.
+let initialization: ReturnType<typeof init> | undefined;
 
 export type Lang = 'c' | 'python' | 'rust';
 
@@ -42,6 +46,7 @@ export class Engine {
 
   /** The ongoing `run` promise, if any */
   private promise?: Promise<RunResult>;
+  private runActive = false;
 
   /**
    * The programming language of this engine.
@@ -56,8 +61,15 @@ export class Engine {
    */
   public fs: DirNode = {};
 
+  /** Optional C/C++ byte device. The opener is captured once at the start of each run. */
+  public hostDevice?: HostDeviceOpener;
+
   static async create(lang: Lang): Promise<Engine> {
-    await init({ module_or_path: wasmBinary });
+    initialization ??= init({ module_or_path: wasmBinary }).catch((error: unknown) => {
+      initialization = undefined;
+      throw error;
+    });
+    await initialization;
     if (typeof window !== 'undefined' && typeof fetch !== 'undefined')
       for (const url of prefetch_urls(lang)) void fetch(url, { cache: 'force-cache' });
     return new Engine(lang);
@@ -82,77 +94,101 @@ export class Engine {
    */
   public async run(): Promise<RunResult> {
     if (this.promise) return this.promise;
+    if (this.runActive) throw new Error('Run setup is already active');
+    this.runActive = true;
     this.promise = this.execute();
     try {
       return await this.promise;
     } finally {
       this.promise = undefined;
+      this.runActive = false;
     }
   }
 
   private async execute(): Promise<RunResult> {
     const totalStart = performance.now();
-    const worker = new RustWorker();
-
-    /* Set up handling for stdout/stderr */
-    this.stdout[Internals].attach(worker);
-    this.stderr[Internals].attach(worker);
-    this.debugger[Internals].attach(worker);
-
+    const opener = this.hostDevice;
+    let worker: Worker | undefined;
+    let device: HostDeviceSession | undefined;
+    let removeListeners: (() => void) | undefined;
+    let cleanupError: Error | undefined;
+    let result: RunResult;
     try {
-      return await new Promise<RunResult>(async (resolve, reject) => {
+      if (opener !== undefined) {
+        if (this.lang !== 'c')
+          throw new TypeError('Host devices are supported only for C/C++ execution');
+        if (typeof opener !== 'function') throw new TypeError('hostDevice must be a function');
+      }
+      result = await new Promise<RunResult>((resolve, reject) => {
         this.rejector = () => reject('stopped');
-
-        /** If the worker ever errors, we crash this promise */
-        worker.addEventListener('error', (evt) => reject(evt.error));
-
-        /* Wait for the worker to send us a Ready message */
-        await new Promise<void>((resolveReady) => {
-          const callback = (message: MessageEvent<WorkerOut>) => {
-            if (message.data.type === 'ready') {
-              worker.removeEventListener('message', callback);
-              resolveReady();
+        worker = new RustWorker();
+        const currentWorker = worker;
+        this.stdout[Internals].attach(worker);
+        this.stderr[Internals].attach(worker);
+        this.debugger[Internals].attach(worker);
+        let ready = false;
+        const onError = (event: ErrorEvent) =>
+          reject(event.error ?? new Error(event.message || 'Execution worker failed'));
+        const onMessageError = () =>
+          reject(new Error('Execution worker emitted an unreadable message'));
+        const onMessage = (event: MessageEvent<WorkerOut>) => {
+          const message = event.data;
+          try {
+            if (message.type === 'ready' && !ready) {
+              ready = true;
+              const start: WorkerStart = {
+                fs: this.fs,
+                lang: this.lang,
+                stdin_buffer: this.stdin[Internals].buffer,
+                is_debug: this.debugger.enabled,
+                ...(device ? { host_device: device.workerStart } : {})
+              };
+              currentWorker.postMessage(start);
+            } else if (message.type === 'stop') {
+              resolve({
+                type: 'completed',
+                exitCode: message.exit_code,
+                timing: {
+                  totalMs: performance.now() - totalStart,
+                  buildMs: message.build_ms,
+                  runMs: message.run_ms
+                }
+              });
+            } else if (message.type === 'error') {
+              resolve({ type: 'error', error: { type: 'EngineError', message: message.message } });
             }
-          };
-          worker.addEventListener('message', callback);
-        });
-
-        worker.addEventListener('message', (message: MessageEvent<WorkerOut>) => {
-          if (message.data.type === 'stop')
-            resolve({
-              type: 'completed',
-              exitCode: message.data.exit_code,
-              timing: {
-                totalMs: performance.now() - totalStart,
-                buildMs: message.data.build_ms,
-                runMs: message.data.run_ms
-              }
-            });
-          else if (message.data.type === 'error')
-            resolve({
-              type: 'error',
-              error: { type: 'EngineError', message: message.data.message }
-            });
-        });
-
-        const message: WorkerStart = {
-          fs: this.fs,
-          lang: this.lang,
-          stdin_buffer: this.stdin[Internals].buffer,
-          is_debug: this.debugger.enabled
+          } catch (error) {
+            reject(error);
+          }
         };
-        worker.postMessage(message);
+        worker.addEventListener('message', onMessage);
+        worker.addEventListener('error', onError);
+        worker.addEventListener('messageerror', onMessageError);
+        removeListeners = () => {
+          currentWorker.removeEventListener('message', onMessage);
+          currentWorker.removeEventListener('error', onError);
+          currentWorker.removeEventListener('messageerror', onMessageError);
+        };
+        if (opener !== undefined) {
+          device = new HostDeviceSession(reject);
+          device.attach(worker);
+          device.open(opener);
+        }
       });
     } catch (err: unknown) {
-      if (err === 'stopped') return { type: 'stopped' };
-      return errorResult(err);
+      result = err === 'stopped' ? { type: 'stopped' } : errorResult(err);
     } finally {
       this.rejector = undefined;
-      this.stdout[Internals].detach(worker);
-      this.stderr[Internals].detach(worker);
-      this.stdin[Internals].clear();
-      worker.terminate();
+      removeListeners?.();
+      cleanupError = device?.close();
+      if (worker) {
+        this.stdout[Internals].detach(worker);
+        this.stderr[Internals].detach(worker);
+        this.stdin[Internals].clear();
+        worker.terminate();
+      }
     }
+    return cleanupError ? errorResult(cleanupError) : result;
   }
 }
 
@@ -259,3 +295,5 @@ export class Stdin {
 }
 
 export * from './debugger';
+export { HOST_DEVICE_PATH } from './host-device';
+export type { HostDevice, HostDeviceOpener } from './host-device';
