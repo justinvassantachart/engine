@@ -213,6 +213,9 @@ impl<'a> Step<'a> {
         }
 
         for (path, file) in self.device_files {
+            if let Some(parent) = path.parent() {
+                create_dir_all(&self.exec.fs, parent).ensure("Created device parent directory")?;
+            }
             self.exec
                 .fs
                 .new_open_options_ext()
