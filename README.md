@@ -4,8 +4,10 @@ A browser-based execution engine powered by WebAssembly. Compile and run C/C++ a
 
 ## Installation
 
+This is the WebIDE fork build `0.3.15-webide.0.4.0.1`, not an upstream npm release: `npm install debugger-sh` resolves to the upstream package. Install the fork from the release tarball published by this repository (see [docs/fork-release.md](./docs/fork-release.md)):
+
 ```bash
-npm install debugger-sh
+npm install https://github.com/justinvassantachart/engine/releases/download/debugger-sh-v0.3.15-webide.0.4.0.1/debugger-sh-0.3.15-webide.0.4.0.1.tgz
 ```
 
 > **Requires** these response headers (the engine uses `SharedArrayBuffer` for stdin):
