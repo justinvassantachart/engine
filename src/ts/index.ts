@@ -1,6 +1,6 @@
 import EventEmitter from 'events';
 
-import { prefetch_urls, StdoutMode, WorkerOut, WorkerStart } from '../../pkg/engine';
+import { prefetch_urls, WorkerOut, WorkerStart } from '../../pkg/engine';
 import init from '../../pkg/engine';
 import wasmBinary from '../../pkg/engine_bg.wasm';
 import { Debugger } from './debugger';
@@ -12,6 +12,14 @@ import RustWorker from './worker?worker&inline';
 let initialization: ReturnType<typeof init> | undefined;
 
 export type Lang = 'c' | 'python' | 'rust';
+type StdoutMode = 1 | 2;
+
+/** Optional inputs produced by the same C++ toolchain as this engine. */
+export interface CppArtifacts {
+  sources?: string[] | null;
+  archives?: string[] | null;
+  precompiledHeader?: string | null;
+}
 
 /** Wall-clock timing for a run, in milliseconds. */
 export type Timing = {
@@ -61,6 +69,10 @@ export class Engine {
    */
   public fs: DirNode = {};
 
+  /** Optional binary build inputs, addressed by absolute virtual paths. */
+  public binaryFiles: Record<string, Uint8Array> = {};
+  public cppArtifacts?: CppArtifacts;
+
   /** Optional C/C++ byte device. The opener is captured once at the start of each run. */
   public hostDevice?: HostDeviceOpener;
 
@@ -71,7 +83,11 @@ export class Engine {
     });
     await initialization;
     if (typeof window !== 'undefined' && typeof fetch !== 'undefined')
-      for (const url of prefetch_urls(lang)) void fetch(url, { cache: 'force-cache' });
+      // Drain prefetches so an unread response cannot hold the browser cache entry open.
+      for (const url of prefetch_urls(lang))
+        void fetch(url, { cache: 'force-cache' })
+          .then((response) => response.arrayBuffer())
+          .catch(() => {});
     return new Engine(lang);
   }
 
@@ -108,6 +124,8 @@ export class Engine {
   private async execute(): Promise<RunResult> {
     const totalStart = performance.now();
     const opener = this.hostDevice;
+    const binaryFiles = structuredClone(this.binaryFiles);
+    const cppArtifacts = structuredClone(this.cppArtifacts);
     let worker: Worker | undefined;
     let device: HostDeviceSession | undefined;
     let removeListeners: (() => void) | undefined;
@@ -138,6 +156,8 @@ export class Engine {
               ready = true;
               const start: WorkerStart = {
                 fs: this.fs,
+                binary_files: binaryFiles,
+                cpp_artifacts: cppArtifacts ?? null,
                 lang: this.lang,
                 stdin_buffer: this.stdin[Internals].buffer,
                 is_debug: this.debugger.enabled,
