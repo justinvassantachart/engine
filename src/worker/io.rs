@@ -72,6 +72,11 @@ impl AsyncRead for Stdin {
         _cx: &mut Context<'_>,
         buf: &mut wasmer_wasix::virtual_fs::ReadBuf<'_>,
     ) -> Poll<io::Result<()>> {
+        // Empty reads must complete without waiting for stdin data.
+        if buf.remaining() == 0 {
+            return Poll::Ready(Ok(()));
+        }
+
         let read_idx =
             js_sys::Atomics::load(&self.indices, READ_IDX).expect("Loaded read_idx") as u32;
         let write_idx =
