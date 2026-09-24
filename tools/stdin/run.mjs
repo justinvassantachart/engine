@@ -105,6 +105,7 @@ try {
   await page.waitForFunction(() => window.probe.state.done, undefined, { timeout: 15_000 });
   assert.equal((await page.evaluate(() => window.probe.state)).result.type, 'stopped');
   await begin('python', 'print("RERUN", flush=True)');
+  await output('RERUN');
   assert.match((await completed('stop blocked input and rerun')).stdout, /RERUN/);
 
   await page.evaluate(() => window.probe.create('c'));
