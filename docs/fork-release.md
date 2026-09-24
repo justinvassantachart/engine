@@ -42,6 +42,16 @@ Record with each release: Node/npm/Rust/wasm-pack versions, the source commit an
 tarball's size and SHA-256/SHA-512, and the SHA-256 of both the standalone `dist/engine_bg.wasm` and
 the WASM embedded in `dist/debugger-sh.js` (they must match `pkg/engine_bg.wasm`).
 
+The stdin regression uses an existing Playwright installation and its Chromium browser:
+
+```bash
+PLAYWRIGHT_MODULE=/absolute/path/to/playwright/index.mjs node tools/stdin/run.mjs
+```
+
+An optional first argument selects the public `dist/debugger-sh.js` from an unpacked tarball.
+The test covers empty reads without input, sequential Python input, C++ input and stopping a
+blocked read before rerunning. It starts an isolated loopback server and closes its browser.
+
 ## Notices
 
 `assets/cpp-exceptions/runtime.tar.gz` ships verbatim and carries the upstream LLVM
