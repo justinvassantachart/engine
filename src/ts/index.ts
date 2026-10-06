@@ -61,7 +61,7 @@ export class Engine {
    */
   public fs: DirNode = {};
 
-  /** Optional C/C++ byte device. The opener is captured once at the start of each run. */
+  /** Optional C/C++ and Python byte device. The opener is captured once at the start of each run. */
   public hostDevice?: HostDeviceOpener;
 
   static async create(lang: Lang): Promise<Engine> {
@@ -115,8 +115,8 @@ export class Engine {
     let result: RunResult;
     try {
       if (opener !== undefined) {
-        if (this.lang !== 'c')
-          throw new TypeError('Host devices are supported only for C/C++ execution');
+        if (this.lang !== 'c' && this.lang !== 'python')
+          throw new TypeError('Host devices are supported only for C/C++ and Python execution');
         if (typeof opener !== 'function') throw new TypeError('hostDevice must be a function');
       }
       result = await new Promise<RunResult>((resolve, reject) => {

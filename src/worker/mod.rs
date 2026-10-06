@@ -9,7 +9,7 @@ use crate::types::{FsNode, Lang, WorkerOut, WorkerStart};
 
 mod debuggee;
 pub(crate) mod execution;
-mod host_device;
+pub(crate) mod host_device;
 mod io;
 mod runtime;
 
@@ -176,9 +176,9 @@ pub(crate) fn stop(exit_code: i32, build_start: Instant, run_start: Option<Insta
 }
 
 async fn start(msg: WorkerStart) {
-    if msg.host_device.is_some() && msg.lang != Lang::C {
+    if msg.host_device.is_some() && !matches!(msg.lang, Lang::C | Lang::Python) {
         return WorkerOut::Error {
-            message: "Host devices are supported only for C/C++ execution".into(),
+            message: "Host devices are supported only for C/C++ and Python execution".into(),
         }
         .send();
     }
