@@ -4,10 +4,10 @@ A browser-based execution engine powered by WebAssembly. Compile and run C/C++ a
 
 ## Installation
 
-This is the WebIDE fork build `0.3.15-webide.0.4.0.1`, not an upstream npm release: `npm install debugger-sh` resolves to the upstream package. Install the fork from the release tarball published by this repository (see [docs/fork-release.md](./docs/fork-release.md)):
+This is the WebIDE fork build `0.3.15-webide.0.7.3.1`, not an upstream npm release: `npm install debugger-sh` resolves to the upstream package. Install the fork from the release tarball published by this repository (see [docs/fork-release.md](./docs/fork-release.md)):
 
 ```bash
-npm install https://github.com/justinvassantachart/engine/releases/download/debugger-sh-v0.3.15-webide.0.4.0.1/debugger-sh-0.3.15-webide.0.4.0.1.tgz
+npm install https://github.com/justinvassantachart/engine/releases/download/debugger-sh-v0.3.15-webide.0.7.3.1/debugger-sh-0.3.15-webide.0.7.3.1.tgz
 ```
 
 > **Requires** these response headers (the engine uses `SharedArrayBuffer` for stdin):
@@ -65,7 +65,7 @@ engine.fs; // DirNode  — virtual filesystem, set before run()
 engine.stdout; // Stdout   — .on('data', (chunk: Uint8Array) => …) / .off(...)
 engine.stderr; // Stdout
 engine.stdin; // Stdin    — .write(string | Uint8Array): Promise<void>
-engine.hostDevice; // Optional C/C++ duplex byte device — see below
+engine.hostDevice; // Optional C/C++ and Python duplex byte device — see below
 engine.debugger; // Debugger — DAP interface; set .enabled = false to skip the handshake
 engine.lang; // Lang
 
@@ -95,11 +95,17 @@ await engine.stdin.write(new TextEncoder().encode('42\n'));
 
 ---
 
-For C/C++ host I/O, set `engine.hostDevice` to a synchronous opener receiving
+For C/C++ or Python host I/O, set `engine.hostDevice` to a synchronous opener receiving
 `{ signal, onData, write }`; return an optional synchronous cleanup function. The guest opens
 `HOST_DEVICE_PATH` with `O_RDWR` for blocking reads/writes; polling is unsupported.
 `write` snapshots bytes; await each write. Stop/exit aborts the per-run signal,
 rejects pending writes and calls cleanup once. Terminal I/O stays separate.
+
+Python uses the same device through `os.open("/dev/debugger-sh-host", os.O_RDWR)`,
+`os.read(fd, size)`, and `os.write(fd, data)`. Reads and writes may be partial;
+loop until a complete application-defined message has transferred. The device
+is a byte stream: framing, request/response matching, and graphics or AI behavior
+belong to the application. It is absent when no opener is supplied.
 
 Test after building: `npx -y bun tools/host-device/run.ts`.
 
