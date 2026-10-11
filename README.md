@@ -103,6 +103,17 @@ npm run build   # wasm-pack build --target web && vite build
 npm run dev     # local development
 ```
 
+After building, run the stdin browser regression checks with an installed Playwright
+module and Chromium browser:
+
+```bash
+PLAYWRIGHT_MODULE=/absolute/path/to/playwright/index.mjs node tools/stdin/run.mjs
+```
+
+The checks cover an empty read without input, sequential Python input across reruns,
+stopping blocked input, and C++ input. Pass a built or unpacked release's
+`dist/debugger-sh.js` as the first argument to test that artifact.
+
 To test against the reference IDE, clone [debugger-sh/debugger.sh](https://github.com/debugger-sh/debugger.sh) alongside this repo and link:
 
 ```bash
