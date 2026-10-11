@@ -110,10 +110,28 @@ pub enum Lang {
 pub struct WorkerStart {
     pub fs: HashMap<String, FsNode>,
 
+    #[serde(default)]
+    #[tsify(type = "Record<string, Uint8Array>")]
+    pub binary_files: HashMap<String, serde_bytes::ByteBuf>,
+    #[serde(default)]
+    pub cpp_artifacts: Option<CppArtifacts>,
+
     #[serde(with = "serde_wasm_bindgen::preserve")]
     pub stdin_buffer: js_sys::SharedArrayBuffer,
     pub is_debug: bool,
     pub lang: Lang,
+}
+
+/// Optional inputs produced by the same C++ toolchain as this engine.
+#[derive(Default, Debug, Tsify, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CppArtifacts {
+    #[serde(default)]
+    pub sources: Option<Vec<String>>,
+    #[serde(default)]
+    pub archives: Option<Vec<String>>,
+    #[serde(default)]
+    pub precompiled_header: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Tsify, Serialize_repr)]

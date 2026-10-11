@@ -5,7 +5,7 @@ use wasm_bindgen::prelude::*;
 use wasmer_wasix::virtual_fs::{AsyncWriteExt, FileSystem, create_dir_all, mem_fs};
 use web_sys::{DedicatedWorkerGlobalScope, MessageEvent};
 
-use crate::types::{FsNode, Lang, WorkerOut, WorkerStart};
+use crate::types::{CppArtifacts, FsNode, Lang, WorkerOut, WorkerStart};
 
 mod debuggee;
 pub(crate) mod execution;
@@ -174,6 +174,9 @@ pub(crate) fn stop(exit_code: i32, build_start: Instant, run_start: Option<Insta
 }
 
 async fn start(msg: WorkerStart) {
+    if msg.lang != Lang::C && (msg.cpp_artifacts.is_some() || !msg.binary_files.is_empty()) {
+        return WorkerOut::Error { message: "Binary build inputs require C/C++".into() }.send();
+    }
     match msg.lang {
         Lang::Python => crate::python::worker::start(msg).await,
         Lang::C | Lang::Rust => start_native(msg).await,
@@ -184,6 +187,18 @@ async fn start_native(msg: WorkerStart) {
     let build_start = Instant::now();
     let mut sources = Vec::new();
     collect_dir_sources(&msg.fs, &PathBuf::from("/"), msg.lang, &mut sources);
+    let mut artifacts = msg.cpp_artifacts.unwrap_or_default();
+    if let Some(selected) = artifacts.sources.take() {
+        if selected.is_empty() || selected.iter().any(|path| !sources.contains(path)) {
+            return WorkerOut::Error { message: "C++ sources must select existing source files".into() }.send();
+        }
+        sources = selected;
+    }
+    for path in artifacts.archives.iter().flatten().chain(artifacts.precompiled_header.iter()) {
+        if !msg.binary_files.contains_key(path) {
+            return WorkerOut::Error { message: format!("Missing binary build input: {path}") }.send();
+        }
+    }
     sources.sort();
 
     let lang_name = match msg.lang {
@@ -200,6 +215,20 @@ async fn start_native(msg: WorkerStart) {
         .await
         .expect("created user files filesystem");
 
+    for (path, bytes) in msg.binary_files {
+        if !path.starts_with('/') || path.split('/').skip(1).any(|part| matches!(part, "" | "." | "..")) {
+            return WorkerOut::Error { message: format!("Invalid binary input path: {path}") }.send();
+        }
+        let written = async {
+            create_dir_all(&fs, Path::new(&path).parent().unwrap())?;
+            let mut file = fs.new_open_options().write(true).create_new(true).open(&path)?;
+            file.write_all(&bytes).await
+        }.await;
+        if let Err(error) = written {
+            return WorkerOut::Error { message: format!("Cannot mount binary input {path}: {error}") }.send();
+        }
+    }
+
     let exec = Execution::new(msg.stdin_buffer);
     let is_debug = msg.is_debug;
 
@@ -209,7 +238,7 @@ async fn start_native(msg: WorkerStart) {
             exec.write_bytes("/llvm.core.wasm", &llvm)
                 .await
                 .expect("toolchain");
-            start_cpp(is_debug, build_start, sources, exec, fs).await;
+            start_cpp(is_debug, build_start, sources, exec, fs, artifacts).await;
         }
         Lang::Rust => start_rust(is_debug, build_start, sources, exec, fs).await,
         Lang::Python => unreachable!(),
@@ -222,6 +251,7 @@ async fn start_cpp(
     sources: Vec<String>,
     exec: Execution,
     fs: mem_fs::FileSystem,
+    artifacts: CppArtifacts,
 ) {
     let mut obj_paths: Vec<String> = Vec::with_capacity(sources.len());
     let mut union_fs: Option<Box<dyn FileSystem>> = Some(Box::new(fs));
@@ -260,6 +290,9 @@ async fn start_cpp(
             clang_args.push("-dwarf-version=5");
         }
 
+        if let Some(pch) = &artifacts.precompiled_header {
+            clang_args.extend(["-include-pch", pch, "-fvalidate-ast-input-files-content"]);
+        }
         clang_args.push(source);
 
         let mut step = exec
@@ -286,6 +319,9 @@ async fn start_cpp(
     ];
     for obj in &obj_paths {
         link_args.push(obj);
+    }
+    for archive in artifacts.archives.iter().flatten() {
+        link_args.push(archive);
     }
     link_args.extend_from_slice(&[
         "-lc++",
