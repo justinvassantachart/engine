@@ -1,0 +1,36 @@
+{
+  "schema": 1,
+  "status": "unmodified-control-reproduction-candidate",
+  "packaging": {
+    "repository": "https://codeberg.org/YoWASP/clang",
+    "commit": "409b7dfdbd5ed12545eed706808fd423f1f692c6",
+    "sourceDateEpoch": 1773304814,
+    "recipeSha256": "f9ca5137f524cccb2fd18a191d09d552619cb8361442f08737e82af81e72d0e0"
+  },
+  "llvm": {
+    "repository": "https://codeberg.org/YoWASP/llvm-project",
+    "commit": "9560ae0f2cc440e4fc891fddbc119da6f56daa59"
+  },
+  "wasiLibc": {
+    "repository": "https://github.com/WebAssembly/wasi-libc",
+    "commit": "2fc32bc81b9f07f8d9525edea59bfbaf760c06d6"
+  },
+  "sdk": {
+    "version": 29,
+    "url": "https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-29/wasi-sdk-29.0-x86_64-linux.tar.gz",
+    "sha256": "87d1d1a2879d139cdc624b968efad3d4a97b8078cdff95e63ac88ecafd1a0171"
+  },
+  "build": {
+    "configuration": "MinSizeRel",
+    "assertions": true,
+    "lto": "full",
+    "target": "wasm32-wasip1"
+  },
+  "shippedControl": {
+    "package": "@yowasp/clang@22.0.0-git20542-10",
+    "url": "https://registry.npmjs.org/@yowasp/clang/-/clang-22.0.0-git20542-10.tgz",
+    "tarballSha256": "6230ea1afa9691fa065935cf68c01642ff9b31c183fe8ac64cdfda025df06009",
+    "compilerSha256": "24fbed474c7b5b4968fd73fc4827440b93fb351c1b6264516130300eff3e7bf5",
+    "resourceTarSha256": "79eef0c336fe55cf03ff8f5b42b784c8168f929a3603138b2c6301f4601e4c86"
+  }
+}

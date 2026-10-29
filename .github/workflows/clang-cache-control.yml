@@ -1,0 +1,45 @@
+name: Clang SDK29 reproduction control
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [codex/compiler-cache-overhaul]
+    paths:
+      - .github/workflows/clang-cache-control.yml
+      - toolchains/clang-cache-receipt/**
+
+permissions:
+  contents: read
+
+concurrency:
+  group: clang-sdk29-control-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  control:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Build frozen host environment
+        run: |
+          mkdir -p "$RUNNER_TEMP/clang-control/evidence"
+          docker build --progress=plain -t webide-clang-control toolchains/clang-cache-receipt 2>&1 | tee "$RUNNER_TEMP/clang-control/evidence/container-build.log"
+          docker image inspect webide-clang-control > "$RUNNER_TEMP/clang-control/evidence/container-image.json"
+      - name: Build unmodified source-backed control
+        run: |
+          docker run --rm \
+            -v "$GITHUB_WORKSPACE:/recipe:ro" \
+            -v "$RUNNER_TEMP/clang-control:/work" \
+            webide-clang-control \
+            bash /recipe/toolchains/clang-cache-receipt/build-control.sh /work
+      - name: Preserve control artifacts and failure evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: clang-sdk29-control-${{ github.sha }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/clang-control/evidence/
+            ${{ runner.temp }}/clang-control/artifacts/
+          if-no-files-found: error
+          retention-days: 30

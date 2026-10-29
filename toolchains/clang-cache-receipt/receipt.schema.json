@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "webide-object-cache-v1",
+  "title": "CompilerCacheReceiptV1",
+  "description": "A successful capture is provisional until the same silent cc1 object action exits successfully and the host validates its exact owned inputs and final relocatable object.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "capability", "completed", "source", "volatileBuiltins", "usesCounter", "unsupported", "dependencies", "includeProbes", "importedPchPaths", "pchMetadataIndependent"],
+  "properties": {
+    "schema": { "const": 1 },
+    "capability": { "const": "webide-object-cache-v1" },
+    "completed": { "const": true },
+    "source": { "$ref": "#/$defs/path" },
+    "volatileBuiltins": {
+      "type": "array", "uniqueItems": true, "maxItems": 3,
+      "items": { "enum": ["__DATE__", "__TIME__", "__TIMESTAMP__"] }
+    },
+    "usesCounter": { "type": "boolean" },
+    "unsupported": {
+      "type": "array", "uniqueItems": true, "maxItems": 64,
+      "items": { "type": "string", "minLength": 1, "maxLength": 128 }
+    },
+    "dependencies": {
+      "type": "array", "uniqueItems": true, "maxItems": 16384,
+      "items": { "$ref": "#/$defs/path" }
+    },
+    "includeProbes": {
+      "type": "array", "maxItems": 8192,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["name", "angled", "includer", "found"],
+        "properties": {
+          "name": { "type": "string", "minLength": 1, "maxLength": 4096 },
+          "angled": { "type": "boolean" },
+          "includer": { "$ref": "#/$defs/path" },
+          "found": { "oneOf": [{ "$ref": "#/$defs/path" }, { "type": "null" }] }
+        }
+      }
+    },
+    "importedPchPaths": {
+      "type": "array", "uniqueItems": true, "maxItems": 16,
+      "items": { "$ref": "#/$defs/path" }
+    },
+    "pchMetadataIndependent": { "type": "boolean" }
+  },
+  "$defs": {
+    "path": { "type": "string", "minLength": 1, "maxLength": 4096 }
+  }
+}
