@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "tools/breakpoints", "tools/cpp-cache-tests"]
+members = [".", "tools/breakpoints", "tools/cpp-cache-tests", "tools/cpp-receipt-tests"]
 
 [package]
 name = "engine"

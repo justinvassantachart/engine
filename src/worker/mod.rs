@@ -10,6 +10,12 @@ use crate::types::{CppArtifacts, CppCacheBypass, CppCacheEntry, CppCacheRequest,
 
 mod debuggee;
 mod cpp_cache;
+// Compiled and native-tested independently while receipt profile admission is
+// blocked on the actual patched compiler's compatibility/conformance gates.
+#[allow(dead_code)]
+mod cpp_receipt;
+#[allow(dead_code)]
+mod cpp_receipt_host;
 pub(crate) mod execution;
 pub(crate) mod host_device;
 mod io;

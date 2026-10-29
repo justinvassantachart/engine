@@ -1,0 +1,13 @@
+[package]
+name = "engine-cpp-receipt-tests"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+path = "../../src/worker/cpp_receipt.rs"
+
+[dependencies]
+sha2 = "0.10.9"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.149"

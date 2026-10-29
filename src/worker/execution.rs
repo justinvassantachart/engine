@@ -25,6 +25,7 @@ use crate::types::{StdoutMode, WorkerOut};
 
 use super::io::{Stdin, Stdout};
 use super::runtime::JsRuntime;
+use super::cpp_receipt_host::{InvocationCapture, ReceiptImport};
 
 use std::fmt::Debug;
 
@@ -104,6 +105,8 @@ pub struct Step<'a> {
     union_fs: Option<Box<dyn FileSystem>>,
     debug: bool,
     compiler: bool,
+    receipt_import: bool,
+    receipt_capture: Option<InvocationCapture>,
     envs: Vec<(String, String)>,
     device_files: Vec<(PathBuf, Box<dyn wasmer_wasix::virtual_fs::VirtualFile + Send + Sync>)>,
 }
@@ -131,6 +134,8 @@ impl Execution {
             union_fs: None,
             debug: false,
             compiler: false,
+            receipt_import: false,
+            receipt_capture: None,
             envs: Vec::new(),
             device_files: Vec::new(),
         }
@@ -169,6 +174,17 @@ impl<'a> Step<'a> {
     /// Only LLVM compiler/linker steps may use immutable compiler Module retention.
     pub fn compiler(mut self) -> Self {
         self.compiler = true;
+        self
+    }
+
+    /// Private future receipt-profile route. The caller must first match the
+    /// actual verified compiler digest to the build-fixed capability manifest.
+    /// None installs the declining adapter required by that profile's linker.
+    #[allow(dead_code)]
+    pub fn compiler_receipt(mut self, capture: Option<InvocationCapture>) -> Self {
+        self.compiler = true;
+        self.receipt_import = true;
+        self.receipt_capture = capture;
         self
     }
 
@@ -330,6 +346,12 @@ impl<'a> Step<'a> {
         for (k, v) in &self.envs {
             self.builder.add_env(k, v);
         }
+        if self.receipt_import {
+            // The receipt environment is enforced here, never inferred from
+            // WASI defaults or the student's interactive input queue.
+            self.builder.get_env_mut().clear();
+            self.builder.set_current_dir("/");
+        }
         let mut builder = self
             .builder
             .runtime(JsRuntime::instance())
@@ -337,6 +359,9 @@ impl<'a> Step<'a> {
             .stdout(Box::new(Stdout::new_counted(StdoutMode::Out, self.exec.output_bytes.clone())))
             .stderr(Box::new(Stdout::new_counted(StdoutMode::Err, self.exec.output_bytes.clone())))
             .stdin(Box::new(Stdin::new(&self.exec.stdin_buffer)));
+        if self.receipt_import {
+            builder = builder.stdin(Box::new(wasmer_wasix::virtual_fs::NullFile::default()));
+        }
 
         builder
             .add_preopen_dir("/")
@@ -360,6 +385,15 @@ impl<'a> Step<'a> {
                 .initialize(&mut store, instance.clone())
                 .ensure("Initialized WASI")?;
 
+            instance
+        } else if self.receipt_import {
+            let wasi_env = builder.build().ensure("Built compiler WASI environment")?;
+            let mut wasi_func_env = WasiFunctionEnv::new(&mut store, wasi_env);
+            let mut imports = wasi_func_env.import_object(&mut store, &module).ensure("Created compiler WASI imports")?;
+            let receipt = ReceiptImport::attach(&mut store, &mut imports, self.receipt_capture.take());
+            let instance = wasmer::Instance::new(&mut store, &module, &imports).ensure("Created compiler instance with receipt adapter")?;
+            ReceiptImport::bind(&receipt, &mut store, &instance);
+            wasi_func_env.initialize(&mut store, instance.clone()).ensure("Initialized compiler WASI")?;
             instance
         } else {
             let (instance, _env) = builder
