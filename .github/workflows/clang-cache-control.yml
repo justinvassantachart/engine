@@ -5,8 +5,9 @@ on:
   push:
     branches: [codex/compiler-cache-overhaul]
     paths:
-      - .github/workflows/clang-cache-control.yml
-      - toolchains/clang-cache-receipt/**
+      # Ordinary implementation and conformance commits must not queue another
+      # multi-hour control. A fresh build is an explicit request or dispatch.
+      - toolchains/clang-cache-receipt/build-request.json
 
 permissions:
   contents: read
