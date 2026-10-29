@@ -108,6 +108,14 @@ pub enum Lang {
 
 #[derive(Debug, Tsify, Deserialize)]
 pub struct WorkerStart {
+    #[serde(default)]
+    pub prepare_compiler: bool,
+    #[serde(default)]
+    pub scope_epoch: u32,
+    #[serde(default)]
+    pub operation_id: u32,
+    #[serde(default)]
+    pub cache_epoch: u32,
     pub fs: HashMap<String, FsNode>,
 
     #[serde(default)]
@@ -139,6 +147,17 @@ pub struct CppArtifacts {
     pub archives: Option<Vec<String>>,
     #[serde(default)]
     pub precompiled_header: Option<String>,
+    #[serde(default)]
+    pub required_toolchain: Option<CppToolchainIdentity>,
+}
+
+/// Optional companion expectation. It can reject a mismatched tuple, never grant trust.
+#[derive(Debug, Tsify, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CppToolchainIdentity {
+    pub compiler_sha256: String,
+    pub sysroot_sha256: String,
+    pub exceptions_sha256: String,
 }
 
 /// Internal, owned snapshots of this engine's memory-only translation-unit cache.
@@ -157,7 +176,7 @@ pub struct CppCacheEntry {
     pub object: serde_bytes::ByteBuf,
 }
 
-#[derive(Default, Debug, Tsify, Serialize)]
+#[derive(Clone, Default, Debug, Tsify, Serialize)]
 pub struct CppCacheStats {
     pub hits: u32,
     pub misses: u32,
@@ -170,7 +189,7 @@ pub struct CppCacheStats {
     pub link_ms: f64,
 }
 
-#[derive(Debug, Tsify, Serialize)]
+#[derive(Clone, Debug, Tsify, Serialize)]
 pub struct CppCacheBypass {
     pub source: String,
     pub reason: String,
@@ -232,6 +251,10 @@ pub enum WorkerOut<'a> {
         #[serde(with = "serde_bytes")]
         object: &'a [u8],
     },
+    #[serde(rename = "cpp_phase")]
+    CppPhase { phase: String, source_index: usize, source_count: usize },
+    #[serde(rename = "cpp_cache_abandon")]
+    CppCacheAbandon,
     #[serde(rename = "cpp_cache_stats")]
     CppCacheStats {
         generation: u32,
@@ -266,15 +289,26 @@ pub enum WorkerOut<'a> {
     HostWake,
 }
 
+thread_local! {
+    static OPERATION_IDENTITY: std::cell::Cell<(u32, u32, u32)> = const { std::cell::Cell::new((0, 0, 0)) };
+}
+
+pub fn set_operation_identity(scope: u32, operation: u32, cache: u32) {
+    OPERATION_IDENTITY.with(|identity| identity.set((scope, operation, cache)));
+}
+
 impl<'a> WorkerOut<'a> {
     pub fn send(&self) {
         let scope = DedicatedWorkerGlobalScope::from(JsValue::from(js_sys::global()));
+        let message = serde_wasm_bindgen::to_value(self).expect("serialization worked");
+        OPERATION_IDENTITY.with(|identity| {
+            let (scope, operation, cache) = identity.get();
+            for (key, value) in [("scopeEpoch", scope), ("operationId", operation), ("cacheEpoch", cache)] {
+                js_sys::Reflect::set(&message, &key.into(), &value.into()).expect("message identity");
+            }
+        });
         scope
-            .post_message(
-                &serde_wasm_bindgen::to_value(self)
-                    .expect("serialization worked")
-                    .into(),
-            )
+            .post_message(&message)
             .expect("post_message succeeded");
     }
 }

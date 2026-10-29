@@ -1,27 +1,31 @@
 import EventEmitter from 'events';
 
-import { prefetch_urls, WorkerOut, WorkerStart } from '../../pkg/engine';
+import { cpp_exception_hash, prefetch_urls, WorkerOut, WorkerStart } from '../../pkg/engine';
 import init from '../../pkg/engine';
 import wasmBinary from '../../pkg/engine_bg.wasm';
-import type {
-  CompilerModuleMessage,
-  CompilerModuleStats,
-  RetainedCompilerModule
-} from './compiler-module-cache.js';
+import type { CompilerModuleMessage, CompilerModuleStats } from './compiler-module-cache.js';
 import { CppCacheLimits, CppObjectCache, ObjectCacheStats } from './cpp-object-cache.js';
 import { Debugger } from './debugger.js';
 import { createEngineWorker } from './engine-worker';
 import { HostDeviceOpener, HostDeviceSession } from './host-device.js';
 import { errorResult, Internals } from './util.js';
+import { VerifiedToolchain } from './verified-toolchain.js';
 
 let initialization: ReturnType<typeof init> | undefined;
 export type Lang = 'c' | 'python' | 'rust';
 type StdoutMode = 1 | 2;
 
+export interface CppToolchainIdentity {
+  compilerSha256: string;
+  sysrootSha256: string;
+  exceptionsSha256: string;
+}
+
 export interface CppArtifacts {
   sources?: string[] | null;
   archives?: string[] | null;
   precompiledHeader?: string | null;
+  requiredToolchain?: CppToolchainIdentity | null;
 }
 
 /** Immutable ownership boundary. Create a new Engine when either identity changes. */
@@ -36,6 +40,8 @@ export interface CppPerformanceOptions {
   cacheCompilerModule?: boolean;
   /** Idle worker lifetime; defaults to 30 seconds, at most five minutes. */
   idleTimeoutMs?: number;
+  compilerLifetime?: 'idle' | 'project';
+  toolchainProfile?: 'legacy' | 'cache-receipt-v1';
 }
 export interface EngineOptions {
   cpp?: CppPerformanceOptions;
@@ -62,24 +68,52 @@ export interface CppTranslationUnitStatistics {
   compile_ms: number;
   link_ms: number;
 }
+export interface CompilerPhase {
+  phase: string;
+  sourceIndex: number;
+  sourceCount: number;
+  operationId: number;
+}
 export interface CppJobStatistics {
-  operation: 'compile' | 'run';
+  operation: 'prepare_compiler' | 'compile' | 'run';
   workerReadyMs: number;
   workerReused: boolean;
+  phase?: Readonly<CompilerPhase>;
   cache?: CppTranslationUnitStatistics;
   compilerModule?: CompilerModuleStats;
 }
 export interface CppCacheStatistics extends ObjectCacheStats {
   generation: number;
+  scopeEpoch: number;
+  operationId: number;
+  cacheEpoch: number;
+  toolchainProfile: 'legacy' | 'cache-receipt-v1';
+  toolchainIdentityBytes: number;
+  toolchainIngestions: number;
+  toolchainHashCount: number;
+  toolchainHashMs: number;
+  compilerModuleCloned: boolean;
   workerRetained: boolean;
   workerRetirements: number;
   compilerModuleIdentityBytes: number;
   latest?: CppJobStatistics;
 }
 
-type InternalMessage = WorkerOut | CompilerModuleMessage;
-interface Job {
+interface OperationIdentity {
+  scopeEpoch: number;
+  operationId: number;
+  cacheEpoch: number;
+}
+type InternalMessage = (
+  | WorkerOut
+  | CompilerModuleMessage
+  | { type: 'object_build_complete' | 'cpp_cache_abandon' }
+) &
+  Partial<OperationIdentity>;
+interface Job extends OperationIdentity {
   generation: number;
+  prepareOnly: boolean;
+  publication?: Promise<void>;
   settled: boolean;
   buildOnly: boolean;
   debug: boolean;
@@ -88,12 +122,12 @@ interface Job {
   device?: HostDeviceSession;
   startedAt: number;
   stats: CppJobStatistics;
-  staged: CppObjectCache;
   resolve: (result: RunResult) => void;
 }
 interface WorkerSlot {
   worker: Worker;
   ready: boolean;
+  toolchain?: VerifiedToolchain;
   remove: () => void;
 }
 
@@ -112,14 +146,33 @@ export class Engine {
   private readonly options?: Readonly<CppPerformanceOptions>;
   private readonly objects: CppObjectCache;
   private generation = 0;
+  private scopeEpoch = 0;
+  private operationId = 0;
   private disposed = false;
   private active?: Job;
   private promise?: Promise<RunResult>;
   private slot?: WorkerSlot;
   private idleTimer?: ReturnType<typeof setTimeout>;
-  private compilerModule?: RetainedCompilerModule;
+  private toolchain?: VerifiedToolchain;
+  private toolchainLoading?: Promise<VerifiedToolchain>;
+  private toolchainController?: AbortController;
+  private initializing = new Set<Promise<VerifiedToolchain>>();
+  private toolchainIdentity?: string;
+  private toolchainIngestions = 0;
+  private toolchainHashCount = 0;
+  private toolchainHashMs = 0;
+  private compilerModuleCloned = false;
+  private disposal?: Promise<void>;
+  private cancellationDraining?: Promise<void>;
+  private releaseDrain?: Promise<void>;
+  private releases = new Set<{
+    resolve: (value: 'released' | 'cancelled') => void;
+    signal?: AbortSignal;
+    abort: () => void;
+  }>();
   private retirements = 0;
   private latest?: CppJobStatistics;
+  private phaseObservers = new Set<(phase: Readonly<CompilerPhase>) => void>();
 
   static async create(lang: Lang, options: EngineOptions = {}): Promise<Engine> {
     const capturedOptions = structuredClone(options);
@@ -129,7 +182,7 @@ export class Engine {
     });
     await initialization;
     const engine = new Engine(lang, capturedOptions);
-    if (typeof window !== 'undefined' && typeof fetch !== 'undefined')
+    if (lang !== 'c' && typeof window !== 'undefined' && typeof fetch !== 'undefined')
       for (const url of prefetch_urls(lang))
         void fetch(url, { cache: 'force-cache' })
           .then((response) => response.arrayBuffer())
@@ -146,6 +199,10 @@ export class Engine {
       const idleTimeoutMs = cpp.idleTimeoutMs ?? 30_000;
       if (!Number.isSafeInteger(idleTimeoutMs) || idleTimeoutMs < 1 || idleTimeoutMs > 300_000)
         throw new RangeError('Compiler idle timeout must be between 1 and 300000 milliseconds');
+      if (cpp.compilerLifetime !== undefined && !['idle', 'project'].includes(cpp.compilerLifetime))
+        throw new TypeError('Invalid compiler lifetime');
+      if (cpp.toolchainProfile && cpp.toolchainProfile !== 'legacy')
+        throw new Error('The cache-receipt-v1 toolchain is not available in this build');
       this.scope = Object.freeze({ ...cpp.scope });
       this.options = Object.freeze({ ...cpp, scope: this.scope, idleTimeoutMs });
     }
@@ -158,35 +215,137 @@ export class Engine {
     return structuredClone({
       ...this.objects.stats(),
       generation: this.generation,
+      scopeEpoch: this.scopeEpoch,
+      operationId: this.operationId,
+      cacheEpoch: this.generation,
+      toolchainProfile: 'legacy',
+      toolchainIdentityBytes: this.toolchain?.identityBytes ?? 0,
+      toolchainIngestions: this.toolchainIngestions,
+      toolchainHashCount: this.toolchainHashCount,
+      toolchainHashMs: this.toolchainHashMs,
+      compilerModuleCloned: this.compilerModuleCloned,
       workerRetained: !!this.slot && !this.active,
       workerRetirements: this.retirements,
-      compilerModuleIdentityBytes: this.compilerModule?.bytes.byteLength ?? 0,
-      latest: this.latest
+      compilerModuleIdentityBytes: this.options?.cacheCompilerModule
+        ? (this.toolchain?.compilerBytes ?? 0)
+        : 0,
+      latest: this.active?.stats ?? this.latest
     });
+  }
+
+  /** Observe source-free progress. Observers cannot authorize cache publication. */
+  public observeCompiler(listener: (phase: Readonly<CompilerPhase>) => void): () => void {
+    if (this.disposed) return () => {};
+    this.phaseObservers.add(listener);
+    return () => this.phaseObservers.delete(listener);
   }
 
   /** Clears all retained code/objects. An active job may finish but cannot repopulate them. */
   public clearCaches(): void {
     this.generation++;
     this.objects.clear();
-    this.active?.staged.clear();
-    this.compilerModule = undefined;
+    this.toolchain = undefined;
+    if (!this.active) {
+      this.toolchainController?.abort();
+      this.toolchainLoading = undefined;
+    }
     if (!this.active) this.retireWorker();
   }
 
   /** Stops synchronously, drops retained resources, and resolves after job cleanup. */
   public stop(): Promise<void> {
     this.clearCaches();
-    const drain = this.promise;
-    this.retireWorker();
-    if (this.active) this.finish(this.active, { type: 'stopped' });
-    return drain ? drain.then(() => {}) : Promise.resolve();
+    return this.cancelCurrentOperation();
   }
 
-  /** Required on project/account replacement and teardown. This Engine cannot be reused. */
-  public async dispose(): Promise<void> {
+  /** Cancels execution without discarding committed immutable compiler resources. */
+  public cancelCurrentOperation(): Promise<void> {
+    if (this.cancellationDraining) return this.cancellationDraining;
+    this.operationId++;
+    const drain = this.promise;
+    const publication = this.active?.publication;
+    this.retireWorker();
+    this.objects.discardBatch();
+    if (this.active) this.finish(this.active, { type: 'stopped' });
+    const barrier = Promise.allSettled([drain, publication]).then(() => {
+      if (this.cancellationDraining === barrier) this.cancellationDraining = undefined;
+    });
+    this.cancellationDraining = barrier;
+    return barrier;
+  }
+
+  /** Release idle compiler resources, or defer behind an active guest without stopping it. */
+  public releaseCompilerResources(
+    options: { signal?: AbortSignal } = {}
+  ): Promise<'released' | 'cancelled'> {
+    const signal = options.signal;
+    if (signal?.aborted) return Promise.resolve('cancelled');
+    if (this.disposed) return Promise.resolve('released');
+    return new Promise((resolve) => {
+      const request = { resolve, signal, abort: () => this.settleRelease(request, 'cancelled') };
+      this.releases.add(request);
+      signal?.addEventListener('abort', request.abort, { once: true });
+      this.flushReleases();
+    });
+  }
+
+  private settleRelease(
+    request: {
+      resolve: (value: 'released' | 'cancelled') => void;
+      signal?: AbortSignal;
+      abort: () => void;
+    },
+    result: 'released' | 'cancelled'
+  ): void {
+    if (!this.releases.delete(request)) return;
+    request.signal?.removeEventListener('abort', request.abort);
+    request.resolve(result);
+  }
+
+  private flushReleases(): void {
+    if (this.active || !this.releases.size || this.releaseDrain) return;
+    if (this.initializing.size) {
+      this.toolchainController?.abort();
+      const pending = [...this.initializing];
+      this.toolchainLoading = undefined;
+      this.releaseDrain = Promise.allSettled(pending).then(() => {
+        this.releaseDrain = undefined;
+        this.flushReleases();
+      });
+      return;
+    }
+    this.retireWorker();
+    this.toolchainController?.abort();
+    this.toolchain = undefined;
+    this.toolchainLoading = undefined;
+    for (const request of this.releases) this.settleRelease(request, 'released');
+  }
+
+  /** Permanent synchronous fence and idempotent cleanup barrier. */
+  public dispose(): Promise<void> {
+    if (this.disposal) return this.disposal;
     this.disposed = true;
-    await this.stop();
+    this.scopeEpoch++;
+    this.phaseObservers.clear();
+    this.fs = {};
+    this.binaryFiles = {};
+    this.cppArtifacts = undefined;
+    this.hostDevice = undefined;
+    this.stdout.removeAllListeners();
+    this.stderr.removeAllListeners();
+    this.debugger.removeAllListeners();
+    const loading = [...this.initializing];
+    this.toolchainController?.abort();
+    this.disposal = Promise.allSettled([this.stop(), ...loading]).then(() => {
+      this.latest = undefined;
+      this.flushReleases();
+    });
+    return this.disposal;
+  }
+
+  /** Load compiler resources without any student source, TU, link, or guest action. */
+  public prepareCompiler(): Promise<RunResult> {
+    return this.submit(true, true);
   }
 
   /** Every Run links current objects and starts a fresh student runtime. */
@@ -199,20 +358,23 @@ export class Engine {
     return this.submit(true);
   }
 
-  private submit(buildOnly: boolean): Promise<RunResult> {
+  private submit(buildOnly: boolean, prepareOnly = false): Promise<RunResult> {
     if (this.disposed) return Promise.resolve(errorResult(new Error('Engine is disposed')));
-    if (this.active)
+    if (this.active || this.cancellationDraining)
       return Promise.resolve(errorResult(new Error('An engine job is already active')));
     if (buildOnly && this.lang !== 'c')
       return Promise.resolve(errorResult(new Error('Compile-only is supported for C/C++')));
     let snapshot: Pick<WorkerStart, 'fs' | 'binary_files' | 'cpp_artifacts'>;
     try {
       snapshot = {
-        fs: structuredClone(this.fs),
+        fs: prepareOnly ? {} : structuredClone(this.fs),
         binary_files: Object.fromEntries(
-          Object.entries(this.binaryFiles).map(([path, bytes]) => [path, new Uint8Array(bytes)])
+          Object.entries(prepareOnly ? {} : this.binaryFiles).map(([path, bytes]) => [
+            path,
+            new Uint8Array(bytes)
+          ])
         ),
-        cpp_artifacts: structuredClone(this.cppArtifacts) ?? null
+        cpp_artifacts: prepareOnly ? null : (structuredClone(this.cppArtifacts) ?? null)
       };
     } catch (error) {
       return Promise.resolve(errorResult(error));
@@ -227,7 +389,6 @@ export class Engine {
     clearTimeout(this.idleTimer);
     if (debug) {
       this.retireWorker();
-      this.compilerModule = undefined;
     }
     this.stdin[Internals].clear();
     const reused = !!this.slot;
@@ -238,31 +399,43 @@ export class Engine {
     this.promise = promise;
     const job: Job = {
       generation: this.generation,
+      scopeEpoch: this.scopeEpoch,
+      operationId: ++this.operationId,
+      cacheEpoch: this.generation,
+      prepareOnly,
       settled: false,
       buildOnly,
       debug,
       opener,
       startedAt: performance.now(),
       resolve,
-      staged: new CppObjectCache(this.objects.limits),
-      stats: { operation: buildOnly ? 'compile' : 'run', workerReadyMs: 0, workerReused: reused },
+      stats: {
+        operation: prepareOnly ? 'prepare_compiler' : buildOnly ? 'compile' : 'run',
+        workerReadyMs: 0,
+        workerReused: reused
+      },
       start: {
         ...snapshot,
         lang: this.lang,
+        prepare_compiler: prepareOnly,
+        scope_epoch: this.scopeEpoch,
+        operation_id: this.operationId,
+        cache_epoch: this.generation,
         is_debug: debug,
         build_only: buildOnly,
         stdin_buffer: this.stdin[Internals].buffer,
         cpp_cache:
-          this.options?.objectCache && !debug
+          this.options?.objectCache && !debug && !prepareOnly
             ? { generation: this.generation, entries: this.objects.snapshot() }
             : null
       }
     };
+    this.objects.beginBatch();
     this.active = job;
     try {
       if (!this.slot) this.makeWorker();
       if (!this.current(job)) return promise;
-      if (this.slot!.ready) this.dispatch(job);
+      if (this.slot!.ready) void this.dispatch(job);
     } catch (error) {
       this.finish(job, errorResult(error));
     }
@@ -285,15 +458,16 @@ export class Engine {
         if (slot.ready) return;
         slot.ready = true;
         if (job && this.current(job)) {
-          try {
-            this.dispatch(job);
-          } catch (error) {
-            this.finish(job, errorResult(error));
-          }
+          void this.dispatch(job);
         }
         return;
       }
       if (!job || !this.current(job)) return;
+      if (!slot.ready && message.type === 'error') {
+        this.finish(job, errorResult(new Error(message.message)));
+        return;
+      }
+      if (message.operationId !== job.operationId || message.scopeEpoch !== job.scopeEpoch) return;
       try {
         if (message.type === 'stop') {
           this.finish(job, {
@@ -312,16 +486,32 @@ export class Engine {
           message.generation === this.generation &&
           job.generation === this.generation
         ) {
-          job.staged.put(message);
+          try {
+            this.objects.stage(message);
+          } catch {
+            this.objects.abandonBatch();
+          }
         } else if (message.type === 'cpp_cache_stats' && message.generation === job.generation) {
           job.stats.cache = message.stats;
-        } else if (
-          message.type === 'compiler_module' &&
-          job.generation === this.generation &&
-          this.options?.cacheCompilerModule &&
-          !job.debug
-        ) {
-          this.compilerModule = message.value;
+        } else if (message.type === 'cpp_phase') {
+          const phase = Object.freeze({
+            phase: message.phase,
+            sourceIndex: message.source_index,
+            sourceCount: message.source_count,
+            operationId: job.operationId
+          });
+          job.stats.phase = phase;
+          for (const observer of this.phaseObservers) {
+            try {
+              observer(phase);
+            } catch {
+              /* Observation is optional. */
+            }
+          }
+        } else if (message.type === 'cpp_cache_abandon') {
+          this.objects.abandonBatch();
+        } else if (message.type === 'object_build_complete') {
+          job.publication ??= this.publishObjects(job, slot);
         } else if (message.type === 'compiler_module_stats') {
           job.stats.compilerModule = message;
         }
@@ -331,12 +521,10 @@ export class Engine {
     };
     const onError = (event: ErrorEvent) => {
       if (this.slot !== slot) return;
+      this.clearCaches();
       if (this.active)
         this.finish(this.active, errorResult(event.error ?? new Error(event.message)));
-      else {
-        this.retireWorker();
-        this.compilerModule = undefined;
-      }
+      else this.retireWorker();
     };
     const onMessageError = () =>
       onError({ message: 'Unreadable execution worker message' } as ErrorEvent);
@@ -353,28 +541,118 @@ export class Engine {
     };
   }
 
-  private dispatch(job: Job): void {
-    if (!this.current(job) || !this.slot) return;
-    const worker = this.slot.worker;
-    job.stats.workerReadyMs = performance.now() - job.startedAt;
-    this.stdout[Internals].attach(worker);
-    this.stderr[Internals].attach(worker);
-    this.debugger[Internals].beginRun();
-    if (job.opener) {
-      job.device = new HostDeviceSession((error) => this.finish(job, errorResult(error)));
-      job.device.attach(worker);
-      job.device.open(job.opener);
-      // Device openers are observable user callbacks and may synchronously Stop/dispose.
-      if (!this.current(job)) return;
-      job.start.host_device = job.device.workerStart;
+  private async publishObjects(job: Job, slot: WorkerSlot): Promise<void> {
+    let valid = false;
+    try {
+      valid = await this.objects.validateBatch();
+    } catch {
+      /* Cache failure is optional. */
     }
-    const cacheCompilerModule = !!this.options?.cacheCompilerModule && !job.debug;
-    worker.postMessage({
-      type: 'configure_cpp',
-      cacheCompilerModule,
-      compilerModule: cacheCompilerModule ? this.compilerModule : undefined
-    });
-    if (this.current(job)) worker.postMessage(job.start);
+    if (!this.current(job) || this.slot !== slot) return;
+    try {
+      if (valid && job.cacheEpoch === this.generation) this.objects.commitBatch();
+      else this.objects.abandonBatch();
+    } catch {
+      this.objects.abandonBatch();
+    }
+    if (this.current(job))
+      slot.worker.postMessage({
+        type: 'object_build_ack',
+        scopeEpoch: job.scopeEpoch,
+        operationId: job.operationId,
+        cacheEpoch: job.cacheEpoch
+      });
+  }
+
+  private async dispatch(job: Job): Promise<void> {
+    const slot = this.slot;
+    if (!this.current(job) || !slot) return;
+    try {
+      if (this.lang === 'c') {
+        const scopeEpoch = this.scopeEpoch;
+        const cacheEpoch = this.generation;
+        let pending = this.toolchainLoading;
+        if (!this.toolchain && !pending) {
+          this.toolchainController = new AbortController();
+          pending = VerifiedToolchain.load(
+            prefetch_urls('c'),
+            !!this.options?.cacheCompilerModule,
+            this.toolchainController.signal,
+            cpp_exception_hash()
+          );
+          this.toolchainLoading = pending;
+          this.initializing.add(pending);
+          void pending.then(
+            () => this.initializing.delete(pending!),
+            () => this.initializing.delete(pending!)
+          );
+        }
+        const toolchain = this.toolchain ?? (await pending!);
+        if (!this.current(job) || this.slot !== slot || scopeEpoch !== this.scopeEpoch) return;
+        const expectation = job.start.cpp_artifacts?.requiredToolchain;
+        if (expectation && !toolchain.matchesExpectation(expectation)) {
+          this.finish(job, {
+            type: 'error',
+            error: {
+              type: 'artifact-toolchain-integrity',
+              message: 'C++ artifacts require a different compiler, sysroot, or exception runtime'
+            }
+          });
+          return;
+        }
+        if (cacheEpoch === this.generation) {
+          if (this.toolchainIdentity && this.toolchainIdentity !== toolchain.identity) {
+            this.objects.clear();
+            job.start.cpp_cache = null;
+          }
+          if (this.toolchain !== toolchain) {
+            this.toolchainIngestions++;
+            this.toolchainHashCount += toolchain.hashCount;
+            this.toolchainHashMs += toolchain.hashMs;
+          }
+          this.toolchainIdentity = toolchain.identity;
+          this.toolchain = toolchain;
+          if (this.toolchainLoading === pending) this.toolchainLoading = undefined;
+        }
+        if (slot.toolchain !== toolchain) {
+          this.compilerModuleCloned = toolchain.configure(slot.worker, {
+            type: 'configure_cpp',
+            cacheCompilerModule: !!this.options?.cacheCompilerModule
+          });
+          slot.toolchain = toolchain;
+        }
+      }
+      if (!this.current(job) || this.slot !== slot) return;
+      const worker = slot.worker;
+      job.stats.workerReadyMs = performance.now() - job.startedAt;
+      const accepts = (message: Partial<OperationIdentity>) =>
+        this.current(job) &&
+        message.scopeEpoch === job.scopeEpoch &&
+        message.operationId === job.operationId;
+      this.stdout[Internals].attach(worker, accepts);
+      this.stderr[Internals].attach(worker, accepts);
+      if (!job.prepareOnly) this.debugger[Internals].beginRun();
+      if (job.opener) {
+        job.device = new HostDeviceSession((error) => this.finish(job, errorResult(error)));
+        job.device.attach(worker);
+        job.device.open(job.opener);
+        if (!this.current(job)) return;
+        job.start.host_device = job.device.workerStart;
+      }
+      if (this.current(job)) {
+        worker.postMessage(job.start);
+        // Structured clone has consumed the snapshot; do not retain a second job copy.
+        job.start.fs = {};
+        job.start.binary_files = {};
+        job.start.cpp_artifacts = null;
+        job.start.cpp_cache = null;
+      }
+    } catch (error) {
+      if (this.current(job)) {
+        this.toolchainLoading = undefined;
+        this.finish(job, errorResult(error));
+      }
+    }
   }
 
   private finish(job: Job, result: RunResult): void {
@@ -398,19 +676,32 @@ export class Engine {
       for (const source of job.stats.cache?.invalid_sources ?? []) this.objects.delete(source);
     if (healthy) {
       for (const source of job.stats.cache?.hit_sources ?? []) this.objects.touch(source);
-      for (const entry of job.staged.snapshot()) this.objects.put(entry);
     }
+    this.objects.discardBatch();
     this.latest = job.stats;
     this.stdin[Internals].clear();
     if (!healthy || !this.options?.retainWorker || this.lang !== 'c') this.retireWorker();
-    if (healthy && (this.options?.retainWorker || this.options?.cacheCompilerModule))
+    if (
+      !this.disposed &&
+      job.cacheEpoch === this.generation &&
+      this.toolchain &&
+      this.options?.compilerLifetime !== 'project' &&
+      (this.options?.retainWorker || this.options?.cacheCompilerModule)
+    )
       this.idleTimer = setTimeout(() => {
         this.retireWorker();
-        this.compilerModule = undefined;
+        this.toolchain = undefined;
+        this.toolchainLoading = undefined;
       }, this.options.idleTimeoutMs);
-    if (!healthy) this.compilerModule = undefined;
+    if (!this.options?.retainWorker && !this.options?.cacheCompilerModule)
+      this.toolchain = undefined;
+    if (job.cacheEpoch !== this.generation) {
+      this.toolchainController?.abort();
+      this.toolchainLoading = undefined;
+    }
     this.active = undefined;
     this.promise = undefined;
+    this.flushReleases();
     job.resolve(result);
   }
 
@@ -428,17 +719,19 @@ export class Engine {
 }
 
 export class Stdout extends EventEmitter<{ data: [Uint8Array] }> {
-  private readonly callback: (event: MessageEvent<WorkerOut>) => void;
+  private readonly callback: (event: MessageEvent<WorkerOut & Partial<OperationIdentity>>) => void;
+  private accepts?: (message: Partial<OperationIdentity>) => boolean;
 
   [Internals]: {
-    attach(worker: Worker): void;
+    attach(worker: Worker, accepts?: (message: Partial<OperationIdentity>) => boolean): void;
     detach(worker: Worker): void;
   };
 
   constructor(private readonly mode: StdoutMode) {
     super();
-    this.callback = ((event: MessageEvent<WorkerOut>) => {
+    this.callback = ((event: MessageEvent<WorkerOut & Partial<OperationIdentity>>) => {
       const msg = event.data;
+      if (this.accepts && !this.accepts(msg)) return;
       if (msg.type !== 'stdout') return;
       if (msg.mode !== this.mode) return;
       const chunk = msg.data as Uint8Array<ArrayBuffer>;
@@ -451,7 +744,8 @@ export class Stdout extends EventEmitter<{ data: [Uint8Array] }> {
     };
   }
 
-  private attach(worker: Worker) {
+  private attach(worker: Worker, accepts?: (message: Partial<OperationIdentity>) => boolean) {
+    this.accepts = accepts;
     worker.addEventListener('message', this.callback);
   }
 

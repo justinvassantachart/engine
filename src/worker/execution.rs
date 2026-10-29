@@ -1,6 +1,7 @@
 use flate2::read::GzDecoder;
 use js_sys::SharedArrayBuffer;
 use std::cell::RefCell;
+use std::rc::Rc;
 use std::io::{Cursor, Read};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -30,8 +31,53 @@ use std::fmt::Debug;
 thread_local! {
     // Explicitly installed by our worker entrypoint. Only immutable compiler code is retained.
     static COMPILER_MODULE_CONSTRUCTOR: RefCell<Option<js_sys::Function>> = const { RefCell::new(None) };
+    static TOOLCHAIN: RefCell<Option<Rc<CompilerToolchain>>> = const { RefCell::new(None) };
+    static OBJECT_BUILD_OBSERVER: RefCell<Option<js_sys::Function>> = const { RefCell::new(None) };
     static COMPILER_INSTANCE_OBSERVER: RefCell<Option<js_sys::Function>> = const { RefCell::new(None) };
 }
+
+pub struct CompilerToolchain {
+    pub compiler: Vec<u8>,
+    pub sysroot: Vec<u8>,
+    pub identities: (String, String, String),
+}
+
+#[wasm_bindgen]
+pub fn configure_compiler_toolchain(compiler: Vec<u8>, sysroot: Vec<u8>, compiler_hash: String, sysroot_hash: String, exceptions_hash: String) {
+    // Only the private worker entrypoint accepts this parent-owned seed. Its hashes
+    // were computed from owned bytes before transport; guest filesystem bytes never enter it.
+    TOOLCHAIN.with(|slot| *slot.borrow_mut() = Some(Rc::new(CompilerToolchain { compiler, sysroot, identities: (compiler_hash, sysroot_hash, exceptions_hash) })));
+}
+
+pub fn compiler_toolchain() -> Option<Rc<CompilerToolchain>> {
+    TOOLCHAIN.with(|slot| slot.borrow().clone())
+}
+
+#[wasm_bindgen]
+pub fn set_object_build_observer(observer: js_sys::Function) {
+    OBJECT_BUILD_OBSERVER.with(|slot| *slot.borrow_mut() = Some(observer));
+}
+
+pub async fn object_build_complete() -> Result<(), JsValue> {
+    let observer = OBJECT_BUILD_OBSERVER.with(|slot| slot.borrow().clone());
+    if let Some(observer) = observer {
+        let promise = observer.call0(&JsValue::UNDEFINED)?;
+        JsFuture::from(js_sys::Promise::resolve(&promise)).await?;
+    }
+    Ok(())
+}
+
+pub async fn prepare_compiler() -> Result<(), JsValue> {
+    if compiler_toolchain().is_none() { return Err("Missing verified compiler toolchain".into()); }
+    let constructor = COMPILER_MODULE_CONSTRUCTOR.with(|slot| slot.borrow().clone());
+    if let Some(constructor) = constructor {
+        let toolchain = compiler_toolchain().expect("verified toolchain");
+        let bytes = unsafe { js_sys::Uint8Array::view(&toolchain.compiler) };
+        JsFuture::from(js_sys::Promise::resolve(&constructor.call1(&JsValue::UNDEFINED, bytes.as_ref())?)).await?;
+    }
+    Ok(())
+}
+
 
 #[wasm_bindgen]
 pub fn set_compiler_module_constructor(constructor: js_sys::Function) {
@@ -189,7 +235,9 @@ impl<'a> Step<'a> {
         /* In debug mode, we need to instrument the binary */
         let mut debugger = None;
 
-        let binary_bytes = if binary_loc.starts_with("/") {
+        let binary_bytes = if self.compiler {
+            compiler_toolchain().ok_or_else(|| RuntimeError::new("Missing verified compiler toolchain"))?.compiler.clone()
+        } else if binary_loc.starts_with("/") {
             let mut wasm = self
                 .exec
                 .read_bytes(binary_loc)
