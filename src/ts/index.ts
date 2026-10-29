@@ -60,6 +60,9 @@ export type DirNode = { [name: string]: FsNode };
 export interface CppTranslationUnitStatistics {
   hits: number;
   misses: number;
+  /** Actual compiler/linker step dispatches; absent in older engine reports. */
+  clang_invocations?: number;
+  link_invocations?: number;
   bypasses: Array<{ source: string; reason: string }>;
   hit_sources: string[];
   invalid_sources: string[];

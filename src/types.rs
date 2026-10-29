@@ -180,6 +180,8 @@ pub struct CppCacheEntry {
 pub struct CppCacheStats {
     pub hits: u32,
     pub misses: u32,
+    pub clang_invocations: u32,
+    pub link_invocations: u32,
     pub bypasses: Vec<CppCacheBypass>,
     pub hit_sources: Vec<String>,
     pub invalid_sources: Vec<String>,

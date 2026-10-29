@@ -117,7 +117,11 @@ counts and Module clone support are reported separately. `latest.phase` and
 `observeCompiler(listener)` report source-free compiler phases and source indices;
 observers cannot authorize cache publication. Worker cache
 statistics distinguish hashing, lookup/validation, hits/misses/bypass reasons,
-object compiler-step time and linking. Compiler Module statistics distinguish
+object compiler-step time and linking. `clang_invocations` and `link_invocations`
+count actual step dispatches. Completed compiler/linker statistics are published
+before guest entry, so an infinite loop or GUI Stop retains the completed build
+counters. These optional public fields are absent in older engine reports.
+Compiler Module statistics distinguish
 module compilation, byte hashing/comparison, hits and fresh compiler instantiation.
 Compiler-step time includes module/instance setup; it is not an isolated native
 clang execution clock. `timing.buildMs` includes toolchain fetching/extraction and

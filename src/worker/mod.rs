@@ -426,6 +426,7 @@ async fn start_cpp(
         cpp_phase("translation_unit_start", source_index, sources.len());
         let output_before = exec.output_bytes();
         let compile_start = Instant::now();
+        if let Some(cache) = &mut cache { cache.stats.clang_invocations += 1; }
         let exit = exec.step("clang").binary("/llvm.core.wasm").compiler().args(&clang_args).run().await.expect("Compilation succeeded");
         cpp_phase("translation_unit_complete", source_index, sources.len());
         if let Some(cache) = &mut cache { cache.stats.compile_ms += compile_start.elapsed().as_secs_f64() * 1000.0; }
@@ -506,9 +507,15 @@ async fn start_cpp(
     }
     cpp_phase("link_start", sources.len(), sources.len());
     let link_start = Instant::now();
+    if let Some(cache) = &mut cache { cache.stats.link_invocations += 1; }
     let exit = exec.step("wasm-ld").binary("/llvm.core.wasm").compiler().args(&link_args).run().await.expect("Linking succeeded");
+    if let Some(cache) = &mut cache {
+        cache.stats.link_ms = link_start.elapsed().as_secs_f64() * 1000.0;
+        // A noncooperative/GUI guest may never return, and Stop can terminate
+        // this worker. Publish completed compiler counters before guest entry.
+        WorkerOut::CppCacheStats { generation: cache.generation, stats: cache.stats.clone() }.send();
+    }
     cpp_phase("link_complete", sources.len(), sources.len());
-    if let Some(cache) = &mut cache { cache.stats.link_ms = link_start.elapsed().as_secs_f64() * 1000.0; }
     if !exit.is_success() {
         if let Some(cache) = cache { cache.send(false); }
         return stop(exit.raw(), build_start, None).send();
