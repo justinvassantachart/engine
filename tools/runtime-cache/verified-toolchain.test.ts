@@ -102,18 +102,16 @@ function controlledLoad(
   const notifyStarted = () => {
     if (hashCalls === 2 && compileCalls === (cacheModule ? 1 : 0)) started.resolve();
   };
-  t.mock.method(
-    globalThis,
-    'fetch',
-    async (url: string) =>
-      new Response(
-        url.endsWith('compiler')
-          ? options.badCompiler
-            ? new Uint8Array([0])
-            : minimal()
-          : new Uint8Array([1, 2])
-      )
-  );
+  t.mock.method(globalThis, 'fetch', async (url: string) => {
+    const bytes = url.endsWith('compiler')
+      ? options.badCompiler
+        ? new Uint8Array([0])
+        : minimal()
+      : new Uint8Array([1, 2]);
+    // Node 22's first Response construction lazily compiles Undici's llhttp
+    // WASM. Keep the controlled compile count specific to the loader under test.
+    return { ok: true, arrayBuffer: async () => bytes.buffer };
+  });
   t.mock.method(crypto.subtle, 'digest', async (...args: Parameters<typeof nativeDigest>) => {
     hashCalls++;
     notifyStarted();
