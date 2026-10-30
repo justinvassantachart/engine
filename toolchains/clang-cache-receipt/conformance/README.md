@@ -15,6 +15,11 @@ The embedded synthetic fixtures exercise actual builtin expansion (including
 aliases, token pasting, inactive/suppressed/redefined occurrences and PCH
 wrappers), counter behavior, include probes, embedding and emitted assembly.
 Observer-on also declines capture deliberately to check compiler independence.
+`run-overflow-conformance.mjs` takes `--compiler`, `--compiler-sha256`, `--arm`,
+`--out` and optional `--reference`. It checks 8,193 distinct probes, enough
+bounded-length names to exceed the receipt byte limit, and an oversized name
+that preserves Clang's ordinary filename-too-long error. Metadata exhaustion
+must never change compiler output or leave an eligible receipt.
 
 `run-course-conformance.mjs` accepts the same arguments plus `--fixture`: an
 archived unchanged course plan envelope or original Marbles compile fixture.
@@ -40,6 +45,15 @@ system records), metadata timestamp flags and mutation bit offsets. It is never
 runtime cache authority and does not replace the compiler's ordinary PCH
 validation policy. Production metadata observation must perform bounded checked
 reads of the actual loaded PCH bytes and fail closed on unsupported formats.
+
+The shipped profile's resource directory is `/usr`; the explicit cc1 system
+search roots remain `/include/c++/v1`, `/include`, `/include/wasm32-wasip1`.
+Observed default inputs include absent `/usr/include` and `/proc/self/fd`.
+PCH-on compilation also opens `/modules.idx`: `FrontendOptions` enables the
+global module index by default, and `ASTReader::loadGlobalIndex` passes its
+empty module-cache path to `GlobalModuleIndex::readIndex`, which appends that
+filename relative to cwd `/`. Cache admission must require the index absent
+or bypass a mounted collision; do not change ordinary flags to remove the read.
 
 The control must first pass exact original Marbles and PCH-on Vector semantics
 and the full synthetic/PCH matrix against the shipped compiler. Observer-off/on
