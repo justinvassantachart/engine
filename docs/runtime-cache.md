@@ -109,6 +109,17 @@ available toolchain profile is `legacy`; `cache-receipt-v1` selection fails expl
 until an actual verified compiler/artifact profile is shipped. Legacy scanner/PCH
 admission rules remain conservative.
 
+The dormant receipt path carries bounded serialized metadata with each object,
+inside the same per-entry and aggregate metadata limits. It hashes the owned user
+snapshot once and enumerates the effective mounted namespace before outputs are
+created. Recorded dependencies and probe domains are revalidated against that
+index before object reuse. The fixed environment requires `/modules.idx` absent;
+a mounted collision bypasses caching while preserving ordinary compilation.
+Only the private build manifest can select this path after verifying compiler,
+sysroot and exception bytes. No manifest currently grants it. Native parser tests
+or private import probes do not certify an actual compiler observer or enable the
+public profile.
+
 `cacheStats` is an owned snapshot: bytes, entries, evictions, oversize admissions,
 scope/operation/cache identities, worker retention/retirement and active or latest
 job measurements. `stagingObjectBytes` and `stagingMetadataBytes` are included in

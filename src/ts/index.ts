@@ -8,6 +8,7 @@ import { CppCacheLimits, CppObjectCache, ObjectCacheStats } from './cpp-object-c
 import { Debugger } from './debugger.js';
 import { createEngineWorker } from './engine-worker';
 import { HostDeviceOpener, HostDeviceSession } from './host-device.js';
+import { requireToolchainManifest } from './toolchain-manifest.js';
 import { errorResult, Internals } from './util.js';
 import { VerifiedToolchain } from './verified-toolchain.js';
 
@@ -204,8 +205,7 @@ export class Engine {
         throw new RangeError('Compiler idle timeout must be between 1 and 300000 milliseconds');
       if (cpp.compilerLifetime !== undefined && !['idle', 'project'].includes(cpp.compilerLifetime))
         throw new TypeError('Invalid compiler lifetime');
-      if (cpp.toolchainProfile && cpp.toolchainProfile !== 'legacy')
-        throw new Error('The cache-receipt-v1 toolchain is not available in this build');
+      requireToolchainManifest(cpp.toolchainProfile);
       this.scope = Object.freeze({ ...cpp.scope });
       this.options = Object.freeze({ ...cpp, scope: this.scope, idleTimeoutMs });
     }
@@ -221,7 +221,7 @@ export class Engine {
       scopeEpoch: this.scopeEpoch,
       operationId: this.operationId,
       cacheEpoch: this.generation,
-      toolchainProfile: 'legacy',
+      toolchainProfile: this.options?.toolchainProfile ?? 'legacy',
       toolchainIdentityBytes: this.toolchain?.identityBytes ?? 0,
       toolchainIngestions: this.toolchainIngestions,
       toolchainHashCount: this.toolchainHashCount,
@@ -429,7 +429,15 @@ export class Engine {
         stdin_buffer: this.stdin[Internals].buffer,
         cpp_cache:
           this.options?.objectCache && !debug && !prepareOnly
-            ? { generation: this.generation, entries: this.objects.snapshot() }
+            ? {
+                generation: this.generation,
+                entries: this.objects.snapshot(),
+                max_entry_metadata_bytes: Math.min(
+                  this.objects.limits.maxEntryMetadataBytes,
+                  this.objects.limits.maxMetadataBytes,
+                  1024 * 1024
+                )
+              }
             : null
       }
     };
@@ -581,7 +589,8 @@ export class Engine {
             prefetch_urls('c'),
             !!this.options?.cacheCompilerModule,
             this.toolchainController.signal,
-            cpp_exception_hash()
+            cpp_exception_hash(),
+            this.options?.toolchainProfile
           );
           this.toolchainLoading = pending;
           this.initializing.add(pending);

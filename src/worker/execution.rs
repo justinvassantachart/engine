@@ -41,13 +41,14 @@ pub struct CompilerToolchain {
     pub compiler: Vec<u8>,
     pub sysroot: Vec<u8>,
     pub identities: (String, String, String),
+    pub receipt_abi: Option<String>,
 }
 
 #[wasm_bindgen]
-pub fn configure_compiler_toolchain(compiler: Vec<u8>, sysroot: Vec<u8>, compiler_hash: String, sysroot_hash: String, exceptions_hash: String) {
+pub fn configure_compiler_toolchain(compiler: Vec<u8>, sysroot: Vec<u8>, compiler_hash: String, sysroot_hash: String, exceptions_hash: String, receipt_abi: Option<String>) {
     // Only the private worker entrypoint accepts this parent-owned seed. Its hashes
     // were computed from owned bytes before transport; guest filesystem bytes never enter it.
-    TOOLCHAIN.with(|slot| *slot.borrow_mut() = Some(Rc::new(CompilerToolchain { compiler, sysroot, identities: (compiler_hash, sysroot_hash, exceptions_hash) })));
+    TOOLCHAIN.with(|slot| *slot.borrow_mut() = Some(Rc::new(CompilerToolchain { compiler, sysroot, identities: (compiler_hash, sysroot_hash, exceptions_hash), receipt_abi })));
 }
 
 pub fn compiler_toolchain() -> Option<Rc<CompilerToolchain>> {

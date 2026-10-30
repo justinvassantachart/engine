@@ -2,6 +2,10 @@ import { build } from 'esbuild';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
+import type { ToolchainSeed } from '../../src/ts/verified-toolchain.ts';
+
+type SeedMessage = { toolchain: ToolchainSeed };
+
 const bundle = await build({
   entryPoints: ['src/ts/verified-toolchain.ts'],
   bundle: true,
@@ -27,9 +31,9 @@ test('verified toolchain owns Buffer/subclass inputs before hashing and keeps se
   wasm.fill(255);
   sysroot.fill(255);
   const owner = await pending;
-  const messages: any[] = [];
+  const messages: SeedMessage[] = [];
   const worker = {
-    postMessage(value: any) {
+    postMessage(value: SeedMessage) {
       messages.push(structuredClone(value));
     }
   } as Worker;
@@ -44,9 +48,9 @@ test('verified toolchain owns Buffer/subclass inputs before hashing and keeps se
 
 test('module clone fallback transports exact owned bytes without requiring module clone support', async () => {
   const owner = await VerifiedToolchain.fromBytes(minimal(), new Uint8Array([1]), true);
-  const messages: any[] = [];
+  const messages: SeedMessage[] = [];
   const worker = {
-    postMessage(value: any) {
+    postMessage(value: SeedMessage) {
       if (value.toolchain.module) throw new DOMException('unsupported', 'DataCloneError');
       messages.push(value);
     }
@@ -59,16 +63,21 @@ test('module clone fallback transports exact owned bytes without requiring modul
 
 test('companion identity is an expectation and cannot authorize a different compiler', async () => {
   const owner = await VerifiedToolchain.fromBytes(minimal(), new Uint8Array([1]), false);
-  const captured: any[] = [];
+  const captured: SeedMessage[] = [];
   owner.configure(
     {
-      postMessage(value: any) {
+      postMessage(value: SeedMessage) {
         captured.push(value);
       }
     } as Worker,
     {}
   );
   const seed = captured[0].toolchain;
+  assert.equal(
+    seed.receiptAbi,
+    undefined,
+    'Arbitrary owned test bytes cannot acquire receipt capability'
+  );
   const expectation = {
     compilerSha256: seed.compilerHash,
     sysrootSha256: seed.sysrootHash,
@@ -76,4 +85,28 @@ test('companion identity is an expectation and cannot authorize a different comp
   };
   assert.equal(owner.matchesExpectation(expectation), true);
   assert.equal(owner.matchesExpectation({ ...expectation, compilerSha256: '0'.repeat(64) }), false);
+});
+
+test('unavailable receipt profile fails before fetching or trusting caller bytes', async () => {
+  const original = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = async () => {
+    calls++;
+    throw new Error('unexpected fetch');
+  };
+  try {
+    await assert.rejects(
+      VerifiedToolchain.load(
+        ['https://example.test/compiler', 'https://example.test/sysroot'],
+        false,
+        undefined,
+        'a'.repeat(64),
+        'cache-receipt-v1'
+      ),
+      /not available/
+    );
+    assert.equal(calls, 0);
+  } finally {
+    globalThis.fetch = original;
+  }
 });

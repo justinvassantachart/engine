@@ -1,4 +1,4 @@
-import { LEGACY_TOOLCHAIN_DIGESTS } from './toolchain-manifest.js';
+import { LEGACY_TOOLCHAIN_DIGESTS, requireToolchainManifest } from './toolchain-manifest.js';
 
 /** Engine-private immutable toolchain ownership. Seeds never cross the public API. */
 export interface ToolchainSeed {
@@ -7,6 +7,7 @@ export interface ToolchainSeed {
   compilerHash: string;
   sysrootHash: string;
   exceptionsHash: string;
+  receiptAbi?: string;
   module?: WebAssembly.Module;
 }
 
@@ -23,8 +24,11 @@ export class VerifiedToolchain {
     urls: readonly string[],
     cacheModule: boolean,
     signal?: AbortSignal,
-    exceptionsHash: string = LEGACY_TOOLCHAIN_DIGESTS.exceptions
+    exceptionsHash: string = LEGACY_TOOLCHAIN_DIGESTS.exceptions,
+    profile = 'legacy'
   ): Promise<VerifiedToolchain> {
+    const manifest = requireToolchainManifest(profile);
+    urls = manifest.urls ?? urls;
     if (urls.length !== 2) throw new Error('Missing C++ toolchain assets');
     const [compiler, sysroot] = await Promise.all(
       urls.map(async (url) => {
@@ -35,12 +39,13 @@ export class VerifiedToolchain {
     );
     const owner = await VerifiedToolchain.ingestOwned(compiler, sysroot, false, exceptionsHash);
     if (
-      owner.#seed.compilerHash !== LEGACY_TOOLCHAIN_DIGESTS.compiler ||
-      owner.#seed.sysrootHash !== LEGACY_TOOLCHAIN_DIGESTS.sysroot ||
-      owner.#seed.exceptionsHash !== LEGACY_TOOLCHAIN_DIGESTS.exceptions
+      owner.#seed.compilerHash !== manifest.digests.compiler ||
+      owner.#seed.sysrootHash !== manifest.digests.sysroot ||
+      owner.#seed.exceptionsHash !== manifest.digests.exceptions
     )
       throw new Error('C++ toolchain integrity mismatch');
     if (signal?.aborted) throw new DOMException('Toolchain loading aborted', 'AbortError');
+    owner.#seed.receiptAbi = manifest.receiptAbi;
     if (cacheModule)
       owner.#seed.module = await WebAssembly.compile(
         owner.#seed.compiler as Uint8Array<ArrayBuffer>

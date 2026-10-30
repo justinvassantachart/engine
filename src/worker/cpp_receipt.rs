@@ -6,6 +6,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 pub const CAPABILITY: &str = "webide-object-cache-v1";
 pub const CACHE_SCHEMA: &str = "debugger-sh/cpp-tu/receipt-v1";
+pub const ABI: &str = "wasm32-wasip1/c++23/legacy-eh/receipt-v1";
 pub const MAX_RECEIPT_BYTES: usize = 1024 * 1024;
 const MAX_PATH: usize = 4096;
 const LINK_PREFIX: &[&str] = &["--export-dynamic", "-z", "stack-size=1048576", "-L/lib/wasm32-wasip1", "/lib/wasm32-wasip1/crt1.o"];
@@ -69,6 +70,19 @@ pub enum Bypass {
     PchMetadata,
     Diagnostics,
     CompilerFailure,
+}
+impl Bypass {
+    pub fn reason(self) -> &'static str {
+        match self {
+            Self::MissingReceipt => "receipt-missing", Self::MalformedReceipt => "receipt-malformed",
+            Self::ReceiptBudget => "receipt-budget", Self::DuplicateReceipt => "receipt-duplicate",
+            Self::UnsupportedInvocation => "receipt-unsupported-invocation", Self::UnsupportedPath => "receipt-unsupported-path",
+            Self::OutputCollision => "receipt-output-collision", Self::TemporalExpansion => "receipt-temporal-expansion",
+            Self::UnsupportedConstruct => "receipt-unsupported-construct", Self::DependencyClosure => "receipt-dependency-closure",
+            Self::ProbeDomain => "receipt-probe-domain", Self::PchMetadata => "receipt-pch-metadata",
+            Self::Diagnostics => "compiler-diagnostics", Self::CompilerFailure => "compiler-failure",
+        }
+    }
 }
 
 type Checked<T> = Result<T, Bypass>;
@@ -164,6 +178,7 @@ pub struct Environment {
     path_policy: String,
     resource_directory: String,
     builtin_module_map_directory: String,
+    absent_global_module_index: String,
     header_search: Vec<String>,
     stdin_empty: bool,
 }
@@ -177,6 +192,9 @@ impl Environment {
             // probed for builtin module maps, not added as a header-search root.
             path_policy: "case-sensitive/canonical/no-symlinks/v1".into(), resource_directory: "/usr".into(),
             builtin_module_map_directory: "/usr/include".into(),
+            // Normal PCH loading probes this even without module flags. Do not
+            // change the compiler's global-index policy to manufacture closure.
+            absent_global_module_index: "/modules.idx".into(),
             header_search: vec!["/include/c++/v1".into(), "/include".into(), "/include/wasm32-wasip1".into()], stdin_empty: true,
         }
     }
@@ -234,9 +252,31 @@ pub struct InputIndex {
     pch: Option<String>,
     link_arguments: Vec<String>,
 }
+
+/// Hash the owned user snapshot once, before asynchronous filesystem construction.
+pub struct UserInputs {
+    files: BTreeMap<String, String>,
+}
+impl UserInputs {
+    pub fn new<'a>(files: impl IntoIterator<Item = (String, &'a [u8])>) -> Checked<Self> {
+        let mut result = BTreeMap::new();
+        for (path, bytes) in files {
+            if !canonical(&path) || result.contains_key(&path) { return Err(Bypass::UnsupportedPath); }
+            result.insert(path, digest(bytes));
+        }
+        Ok(Self { files: result })
+    }
+}
+
 impl InputIndex {
     pub fn new<'a>(environment: Environment, toolchain: ToolchainIdentity,
         toolchain_files: impl IntoIterator<Item = String>, user_files: impl IntoIterator<Item = (String, &'a [u8])>,
+        mounted_directories: impl IntoIterator<Item = String>, sources: Vec<String>, pch: Option<String>, link_arguments: Vec<String>) -> Checked<Self> {
+        Self::from_user_inputs(environment, toolchain, toolchain_files, UserInputs::new(user_files)?, mounted_directories, sources, pch, link_arguments)
+    }
+
+    pub fn from_user_inputs(environment: Environment, toolchain: ToolchainIdentity,
+        toolchain_files: impl IntoIterator<Item = String>, user_files: UserInputs,
         mounted_directories: impl IntoIterator<Item = String>, sources: Vec<String>, pch: Option<String>, link_arguments: Vec<String>) -> Checked<Self> {
         if !environment.supported() || !toolchain.valid() || sources.is_empty() || !unique(&sources) || sources.len() > 256 ||
             sources.iter().any(|s| !canonical(s)) || pch.as_ref().is_some_and(|s| !canonical(s)) ||
@@ -250,13 +290,8 @@ impl InputIndex {
             // All bytes of this member are bound by the actual verified archive identity.
             files.insert(path.clone(), digest(format!("{identity}:{path}").as_bytes()));
         }
-        let mut user = BTreeMap::new();
-        for (path, bytes) in user_files {
-            if !canonical(&path) || user.contains_key(&path) { return Err(Bypass::UnsupportedPath); }
-            let content = digest(bytes);
-            user.insert(path.clone(), content.clone());
-            files.insert(path, content);
-        }
+        let user = user_files.files;
+        files.extend(user.iter().map(|(path, content)| (path.clone(), content.clone())));
         if sources.iter().any(|s| !user.contains_key(s)) || pch.as_ref().is_some_and(|s| !user.contains_key(s)) { return Err(Bypass::DependencyClosure); }
         let archive_start = LINK_PREFIX.len() + sources.len();
         let archive_end = link_arguments.len().checked_sub(LINK_SUFFIX.len()).ok_or(Bypass::UnsupportedInvocation)?;
@@ -285,6 +320,7 @@ impl InputIndex {
         let mut outputs: Vec<_> = sources.iter().map(|source| format!("{source}.o")).collect();
         outputs.push("/main.wasm".into());
         let result = Self { environment, toolchain, files, user_files: user, namespace, sources, outputs, pch, link_arguments };
+        if result.namespace.contains(&result.environment.absent_global_module_index) { return Err(Bypass::UnsupportedInvocation); }
         if result.namespace.iter().any(|path| result.generated(path)) { return Err(Bypass::OutputCollision); }
         Ok(result)
     }
@@ -582,7 +618,7 @@ mod tests {
 
     #[test]
     fn output_or_directory_collisions_are_ineligible_before_lookup() {
-        for path in ["/a.cpp.o","/a.cpp-deadbeef.o.tmp","/b.cpp.o","/main.wasm","/main-deadbeef.wasm.tmp","/tmp/input.h","/a.cpp/child"] {
+        for path in ["/a.cpp.o","/a.cpp-deadbeef.o.tmp","/b.cpp.o","/main.wasm","/main-deadbeef.wasm.tmp","/tmp/input.h","/a.cpp/child","/modules.idx"] {
             let mut files=files();files.insert(path.into(),b"owned".to_vec());
             assert!(index(&files,&["/a.cpp","/b.cpp"],None).is_err(),"{path}");
         }

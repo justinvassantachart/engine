@@ -165,6 +165,8 @@ pub struct CppToolchainIdentity {
 pub struct CppCacheRequest {
     pub generation: u32,
     pub entries: Vec<CppCacheEntry>,
+    #[serde(default)]
+    pub max_entry_metadata_bytes: Option<usize>,
 }
 
 #[derive(Debug, Tsify, Deserialize)]
@@ -172,6 +174,8 @@ pub struct CppCacheEntry {
     pub source: String,
     pub key: String,
     pub object_hash: String,
+    #[serde(default)]
+    pub receipt: Option<String>,
     #[tsify(type = "Uint8Array")]
     pub object: serde_bytes::ByteBuf,
 }
@@ -249,6 +253,8 @@ pub enum WorkerOut<'a> {
         source: String,
         key: String,
         object_hash: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        receipt: Option<String>,
         #[tsify(type = "Uint8Array")]
         #[serde(with = "serde_bytes")]
         object: &'a [u8],
