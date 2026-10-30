@@ -31,7 +31,8 @@
   ],
   "scripts": {
     "build:rs": "wasm-pack build --target web",
-    "build:ts": "vite build",
+    "prepare:receipt-assets": "node scripts/prepare-receipt-assets.mjs",
+    "build:ts": "npm run prepare:receipt-assets && vite build",
     "build": "npm run build:rs && npm run build:ts",
     "build:release": "WASM_RELEASE=1 npm run build",
     "dev": "cd tools/dev && npm run dev --",

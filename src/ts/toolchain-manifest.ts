@@ -1,3 +1,5 @@
+import receiptProfile from './receipt-toolchain-profile.json' with { type: 'json' };
+
 /** Build-fixed legacy identities, verified against the shipping @yowasp/clang artifact.
  * Receipt profiles must be added only with a validated immutable release tuple.
  */
@@ -14,11 +16,35 @@ export interface ToolchainManifest {
   readonly receiptAbi?: string;
 }
 
+interface ReceiptBuildProfile {
+  profile: 'cache-receipt-v1';
+  compiler: { sha256: string };
+  sysroot: { sha256: string };
+  exceptionsSha256: string;
+  engineAbi: string;
+}
+
 /** Deliberately absent until exact control/observer artifacts pass their gates.
  * Adding an immutable manifest is a reviewed release change, never a runtime
  * option, supplied digest, filesystem file or environment variable. */
 function receiptManifest(): ToolchainManifest | undefined {
-  return undefined;
+  const profile = receiptProfile as ReceiptBuildProfile | null;
+  if (!profile) return undefined;
+  return {
+    profile: profile.profile,
+    digests: {
+      compiler: profile.compiler.sha256,
+      sysroot: profile.sysroot.sha256,
+      exceptions: profile.exceptionsSha256
+    },
+    receiptAbi: profile.engineAbi,
+    // Replaced after the engine library's asset transform. The final package
+    // retains literal relative URLs for its consumer's ordinary asset bundler.
+    urls: [
+      new URL(/* @vite-ignore */ '__WEBIDE_RECEIPT_COMPILER_ASSET__', import.meta.url).href,
+      new URL(/* @vite-ignore */ '__WEBIDE_RECEIPT_SYSROOT_ASSET__', import.meta.url).href
+    ]
+  };
 }
 
 export function requireToolchainManifest(profile = 'legacy'): ToolchainManifest {

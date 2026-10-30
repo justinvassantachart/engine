@@ -22,12 +22,45 @@ makes `dist/debugger-sh.js` load `engine_bg.wasm` from
 `https://cdn.jsdelivr.net/npm/debugger-sh@<version>/dist/` — a URL that does not exist for a fork
 version, and which would serve upstream bytes if it did. The normal build base64-embeds the engine
 WASM into the bundle, so the packed artifact needs neither the network nor a local path for its own
-WASM. Compiler and sysroot URLs fetched at run time are unchanged from upstream.
+WASM. The default legacy profile keeps the original compiler and sysroot URLs.
 
 `--ignore-scripts` packs the `dist/` you just built without running any lifecycle script. Do not run
 `npm publish` in this fork (not even `--dry-run`): publish runs `prepublishOnly`, which is
 `build:release`. `npm pack` on its own runs `prepack`/`prepare` but not `prepublishOnly` under
 npm 11; `--ignore-scripts` removes the dependence on that ordering.
+
+### Receipt compiler assets
+
+`src/ts/receipt-toolchain-profile.json` is a build-fixed release input. While it is
+`null`, the build neither downloads nor requires receipt compiler assets and an
+explicit receipt-profile request fails. Change it only after the reproduced
+control and actual observer pass their semantic, receipt, PCH and browser gates.
+Its evidence digests identify those completed records; filling in a digest does
+not itself perform or replace a gate.
+
+A validated profile names one immutable `clang-cache-receipt-v<version>` release
+in this repository. Publish its exact compiler, sysroot gzip, notices and
+provenance only after verification. `npm run prepare:receipt-assets` downloads
+missing members with authenticated `gh release download` and checks their exact
+lengths and SHA-256 values. It separately verifies the decompressed sysroot tar
+and the engine's existing exception payload. Present but corrupt cached members
+fail the build; investigate the failure before removing that owned cache.
+CI supplies its read-only GitHub token for this build step.
+
+The normal build includes this preparation step and copies verified files from
+the ignored `.compiler-assets/cpp-cache-receipt-v1/` directory into
+`dist/cpp-cache-receipt-v1/`. A candidate builder may seed the exact verified bytes
+before the immutable release exists. Final clean builds must resolve the
+published release. No source environment option or runtime caller can authorize
+different compiler bytes.
+
+The packed ESM retains literal package-relative `new URL` asset references. A
+consumer bundler emits these files on its own origin, without inlining the
+compiler into JavaScript or fetching a private release from the browser. Generic
+consumers still select the legacy profile by default. Ship the profile manifest,
+compiler/sysroot bytes, notices and provenance together; do not distribute only
+the JavaScript entrypoint. Record both profiles in the compatible release tuple
+and preserve the previous full tuple for rollback.
 
 ## Release
 

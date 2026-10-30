@@ -3,11 +3,14 @@ import path from 'path';
 import { defineConfig, PluginOption } from 'vite';
 import dts from 'vite-plugin-dts';
 
+import { receiptAssetsPlugin } from './scripts/receipt-assets.mjs';
+
 const outDir = 'dist';
 
 export default defineConfig({
   plugins: [
     wasm(),
+    receiptAssetsPlugin(process.cwd()),
     dts({
       beforeWriteFile(filePath, content) {
         // Public EventEmitter types also work when consumers exclude ambient types.
