@@ -17,6 +17,31 @@ const { VerifiedToolchain } = await import(
   `data:text/javascript;base64,${Buffer.from(bundle.outputFiles[0].text).toString('base64')}`
 );
 
+// Keep the unavailable-profile contract independent of whether the reviewed
+// product build has enabled its actual compiler profile. This fixture changes
+// only the private source manifest and cannot confer a receipt capability.
+const unavailableBundle = await build({
+  entryPoints: ['src/ts/verified-toolchain.ts'],
+  bundle: true,
+  write: false,
+  platform: 'node',
+  format: 'esm',
+  plugins: [
+    {
+      name: 'unavailable-receipt-profile-fixture',
+      setup(builder) {
+        builder.onLoad({ filter: /\/receipt-toolchain-profile\.json$/ }, () => ({
+          contents: 'null',
+          loader: 'json'
+        }));
+      }
+    }
+  ]
+});
+const { VerifiedToolchain: UnavailableProfileToolchain } = await import(
+  `data:text/javascript;base64,${Buffer.from(unavailableBundle.outputFiles[0].text).toString('base64')}`
+);
+
 const minimal = () => new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]);
 
 test('verified toolchain owns Buffer/subclass inputs before hashing and keeps seed after transport', async () => {
@@ -96,7 +121,7 @@ test('unavailable receipt profile fails before fetching or trusting caller bytes
   };
   try {
     await assert.rejects(
-      VerifiedToolchain.load(
+      UnavailableProfileToolchain.load(
         ['https://example.test/compiler', 'https://example.test/sysroot'],
         false,
         undefined,
