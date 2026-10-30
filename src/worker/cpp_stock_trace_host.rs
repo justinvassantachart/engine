@@ -231,7 +231,8 @@ fn after(
                 trace.decline("stock-write-failure");
             }
         }
-        "fd_seek" | "fd_fdstat_get" => {
+        "fd_seek" => trace.seek(fd, args.get(1).and_then(Value::i64).unwrap_or(i64::MIN), arg(args, 2).unwrap_or(u32::MAX), errno),
+        "fd_fdstat_get" => {
             trace.descriptor(fd);
             if errno != 0 {
                 trace.decline("stock-descriptor-protocol");

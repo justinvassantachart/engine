@@ -458,6 +458,18 @@ impl Trace {
     pub fn descriptor(&mut self, fd: u32) {
         self.owner(fd);
     }
+    pub fn seek(&mut self, fd: u32, offset: i64, whence: u32, errno: i32) {
+        let owner = self.owner(fd);
+        if errno == 0 { return; }
+        // LLVM raw_fd_ostream probes errs() with lseek(2, 0, SEEK_CUR).
+        // This engine's original stderr lacks FD_SEEK; pinned WASI returns
+        // Access before mutation. Only that exact original descriptor/query
+        // is fixed bookkeeping, never an allowance for reopened fd 2.
+        if fd == 2 && matches!(owner, Some(Owner::Stderr)) && offset == 0 && whence == 1 && errno == 2 {
+            return;
+        }
+        self.decline("stock-descriptor-protocol");
+    }
     pub fn close(&mut self, fd: u32, errno: i32) {
         if errno != 0 {
             self.decline("stock-close-protocol");
@@ -587,6 +599,25 @@ mod tests {
         assert_eq!(result.bypass, None);
         assert_eq!(result.random_calls, 9);
         assert_eq!(result.input_paths, ["/include/header.h", "/main.cpp"]);
+    }
+    #[test]
+    fn original_stderr_seek_query_preserves_fixed_access_denial_only() {
+        let mut t=setup();begin_input(&mut t);t.seek(2,0,1,2);output(&mut t);
+        assert_eq!(t.finish().bypass,None);
+        for (fd,offset,whence,errno) in [(2,1,1,2),(2,-1,1,2),(2,0,0,2),(2,0,2,2),
+            (1,0,1,2),(0,0,1,2),(2,0,1,8),(2,0,1,28),(99,0,1,0)] {
+            let mut t=setup();begin_input(&mut t);t.seek(fd,offset,whence,errno);output(&mut t);
+            assert!(t.finish().bypass.is_some(),"{fd}/{offset}/{whence}/{errno}");
+        }
+        let mut t=setup();begin_input(&mut t);
+        t.open("/include/header.h",0,2,0,0,Some(4));t.seek(4,0,1,2);output(&mut t);
+        assert_eq!(t.finish().bypass,Some("stock-descriptor-protocol"));
+        let mut t=setup();begin_input(&mut t);t.close(2,0);
+        t.open("/include/header.h",0,2,0,0,Some(2));t.seek(2,0,1,2);output(&mut t);
+        assert_eq!(t.finish().bypass,Some("stock-descriptor-protocol"));
+        let mut t=setup();begin_input(&mut t);
+        t.open("/include/header.h",0,2,0,0,Some(4));t.seek(4,0,1,0);t.close(4,0);output(&mut t);
+        assert_eq!(t.finish().bypass,None);
     }
     #[test]
     fn normalized_missing_paths_are_bounded_and_cannot_escape_root() {
