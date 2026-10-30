@@ -10,6 +10,7 @@ from collections import Counter
 import hashlib
 import json
 from pathlib import Path
+import posixpath
 import stat
 
 parser = argparse.ArgumentParser()
@@ -26,7 +27,7 @@ known = {
     "random_get", "clock_time_get", "clock_res_get", "fd_seek",
     "fd_filestat_get", "fd_prestat_get", "fd_prestat_dir_name",
     "path_filestat_get", "fd_fdstat_get", "path_open", "path_readlink",
-    "fd_read", "fd_pread", "fd_close", "fd_write", "path_rename",
+    "fd_read", "fd_pread", "fd_readdir", "fd_close", "fd_write", "path_rename",
     "path_unlink_file",
 }
 fixed_absent = {"/usr/include", "/proc/self/fd", "/modules.idx"}
@@ -71,6 +72,16 @@ all_outputs = {v["args"][v["args"].index("-o") + 1] for v, _ in invocations.valu
 all_temporaries = {e["path"] for v, _ in invocations.values() for e in v["events"]
                    if e["name"] == "path_open" and e["result"] == 0 and int(e["args"][4]) & 1}
 
+
+def generated(path):
+    if path in all_outputs or path in all_temporaries:
+        return True
+    for output in all_outputs:
+        stem, separator, extension = output.rpartition(".")
+        if separator and path.startswith(stem + "-") and path.endswith("." + extension + ".tmp"):
+            return True
+    return False
+
 for filename, (value, digest) in invocations.items():
     problems, domains, reads, namespace = [], Counter(), set(), {}
     receipt = value.get("receipt")
@@ -84,11 +95,26 @@ for filename, (value, digest) in invocations.items():
     direct_pch = value["args"][value["args"].index("-include-pch") + 1] if "-include-pch" in value["args"] else None
     if not value.get("traceComplete"):
         problems.append("incomplete raw WASI trace")
+    output_probe_candidates = set()
+    if eligible:
+        search = [value["args"][i + 1] for i, arg in enumerate(value["args"][:-1])
+                  if arg in {"-internal-isystem", "-I", "-iquote", "-isystem"}]
+        for probe in receipt.get("includeProbes", []):
+            roots = search + [posixpath.dirname(probe["includer"])]
+            candidates = {posixpath.normpath(posixpath.join(base, probe["name"])) for base in roots}
+            for candidate in candidates:
+                if generated(candidate):
+                    output_probe_candidates.add(candidate)
+        if output_probe_candidates:
+            problems.append("metadata include probe reaches generated output domain: " + ", ".join(sorted(output_probe_candidates)))
     for event in value["events"]:
         name, result = event["name"], event["result"]
         counts[name] += 1
         if name not in known:
             problems.append("unclassified syscall " + name)
+        if name == "fd_readdir":
+            domains["unsupported-directory-enumeration"] += 1
+            problems.append("directory enumeration is outside receipt input policy")
         path = event.get("path")
         if path is None:
             # These query the fixed preopen descriptor table before its root
@@ -105,7 +131,7 @@ for filename, (value, digest) in invocations.items():
         if not path.startswith("/") or ".." in path.split("/"):
             problems.append("noncanonical trace path " + str(path))
             continue
-        output = path in all_outputs or path in all_temporaries
+        output = generated(path)
         # A PCH produced by a previous separate action becomes an explicit
         # imported compiler input and is required in the receipt's closure.
         if path == direct_pch or (receipt and path in receipt.get("importedPchPaths", [])):
@@ -166,6 +192,7 @@ for filename, (value, digest) in invocations.items():
                 problems.append("observer changed projected syscall sequence")
     record = {"invocation": filename, "traceSha256": digest, "action": action,
               "eligible": eligible, "dependencies": len(deps), "contentReadPaths": sorted(reads),
+              "generatedOutputProbeCandidates": sorted(output_probe_candidates),
               "domains": dict(domains), "observedNamespace": namespace,
               "projectedTraceSha256": sha(json.dumps(projection, separators=(",", ":")).encode()),
               "reference": reference_name if paired else None, "exactProjectedTraceMatch": exact_trace,
