@@ -74,3 +74,38 @@ test('malformed digests are misses; invalid limits fail early; clear releases bo
   assert.throws(() => new CppObjectCache({ maxObjectBytes: -1 }));
   assert.equal(DEFAULT_CPP_CACHE_LIMITS.maxObjectBytes, 128 * 1024 * 1024);
 });
+
+test('staging and committed entries share a single byte budget and commit atomically', () => {
+  const cache = new CppObjectCache({ maxObjectBytes: 12 });
+  cache.put(record('/old', 8));
+  cache.beginBatch();
+  cache.stage(record('/a', 8));
+  assert.equal(cache.stats().objectBytes, 8);
+  assert.equal(cache.snapshot().length, 0);
+  cache.stage(record('/b', 8));
+  assert.equal(cache.stats().objectBytes, 0);
+  cache.stage(record('/c', 2));
+  cache.commitBatch();
+  assert.equal(cache.snapshot().length, 0);
+  cache.beginBatch();
+  cache.stage(record('/a', 4));
+  cache.stage(record('/b', 4));
+  assert.equal(cache.stats().stagingEntries, 2);
+  assert.equal(cache.snapshot().length, 0);
+  cache.commitBatch();
+  assert.equal(cache.snapshot().length, 2);
+  assert.equal(cache.stats().objectBytes, 8);
+});
+
+test('discarding an interrupted batch preserves earlier committed records', () => {
+  const cache = new CppObjectCache();
+  cache.put(record('/old'));
+  cache.beginBatch();
+  cache.stage(record('/new'));
+  cache.discardBatch();
+  assert.deepEqual(
+    cache.snapshot().map((value) => value.source),
+    ['/old']
+  );
+  assert.equal(cache.stats().objectBytes, 4);
+});

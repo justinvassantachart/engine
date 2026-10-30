@@ -22,12 +22,31 @@ makes `dist/debugger-sh.js` load `engine_bg.wasm` from
 `https://cdn.jsdelivr.net/npm/debugger-sh@<version>/dist/` — a URL that does not exist for a fork
 version, and which would serve upstream bytes if it did. The normal build base64-embeds the engine
 WASM into the bundle, so the packed artifact needs neither the network nor a local path for its own
-WASM. Compiler and sysroot URLs fetched at run time are unchanged from upstream.
+WASM. The default legacy profile keeps the original compiler and sysroot URLs.
 
 `--ignore-scripts` packs the `dist/` you just built without running any lifecycle script. Do not run
 `npm publish` in this fork (not even `--dry-run`): publish runs `prepublishOnly`, which is
 `build:release`. `npm pack` on its own runs `prepack`/`prepare` but not `prepublishOnly` under
 npm 11; `--ignore-scripts` removes the dependence on that ordering.
+
+### Stock-certified compiler policy
+
+`stock-certified-v1` uses the unchanged legacy compiler, sysroot and exception
+payload. Its companion-owned certificate travels as exact metadata through
+`cppArtifacts.cacheCertificate`; no certificate file is mounted into the guest.
+The engine's `src/ts/stock-cache-certificates.json` is the build-fixed list of
+reviewed certificate digests. A runtime caller cannot register another digest.
+Changes to trusted header bytes, PCH bytes or parsed metadata proofs, macro safety
+obligations, compiler inputs, or policy behavior require a new review and a
+compatible tuple release. Preserve the previous complete tuple for rollback.
+
+Freeze the final engine version, lockfile, policy registry and source before the
+final candidate build and browser gates. The Rust cache key includes the complete
+`package.json`, so changing only its version changes the runtime artifact too.
+Use the same verified tarball bytes for the eventual immutable release; do not
+rebuild or repack with different metadata after performance acceptance. Record the
+certificate digest and companion archive/PCH identities with the release tuple,
+alongside the unchanged stock compiler/sysroot/exception identities.
 
 ## Release
 
