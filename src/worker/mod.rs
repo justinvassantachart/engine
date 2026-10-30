@@ -14,6 +14,10 @@ mod cpp_cache;
 // blocked on the actual patched compiler's compatibility/conformance gates.
 #[allow(dead_code)]
 mod cpp_receipt;
+mod cpp_stock_policy;
+mod cpp_stock_trace;
+mod cpp_stock_trace_host;
+mod cpp_stock_job;
 #[allow(dead_code)]
 mod cpp_receipt_host;
 pub(crate) mod execution;
@@ -188,10 +192,16 @@ async fn start(msg: WorkerStart) {
     if msg.prepare_compiler {
         let started = Instant::now();
         if msg.lang != Lang::C { return WorkerOut::Error { message: "Compiler preparation requires C/C++".into() }.send(); }
-        return match execution::prepare_compiler().await {
-            Ok(()) => { cpp_phase("toolchain_ready", 0, 0); stop(0, started, None).send() },
-            Err(error) => WorkerOut::Error { message: format!("Compiler preparation failed: {error:?}") }.send(),
-        };
+        if let Err(error) = execution::prepare_compiler().await {
+            return WorkerOut::Error { message: format!("Compiler preparation failed: {error:?}") }.send();
+        }
+        cpp_phase("toolchain_ready", 0, 0);
+        if !msg.validate_cache_inputs { return stop(0, started, None).send(); }
+        if !execution::compiler_toolchain().is_some_and(|t| t.stock_profile) {
+            WorkerOut::CppCacheEligibility { eligible: false, certificate_sha256: None, snapshot: None, reason: Some("stock-profile-required".into()) }.send();
+            return stop(0, started, None).send();
+        }
+        return start_native(msg).await;
     }
     if msg.build_only && msg.lang != Lang::C {
         return WorkerOut::Error { message: "Compile-only preparation requires C/C++".into() }.send();
@@ -229,8 +239,10 @@ async fn start_native(msg: WorkerStart) {
     }
     let hash_start = Instant::now();
     let receipt_profile = execution::compiler_toolchain().is_some_and(|toolchain| toolchain.receipt_abi.is_some());
-    let cache_inputs = msg.cpp_cache.as_ref().filter(|_| !receipt_profile).map(|_| cpp_cache_inputs(&msg.fs, &msg.binary_files, &sources));
+    let stock_profile = execution::compiler_toolchain().is_some_and(|toolchain| toolchain.stock_profile);
+    let cache_inputs = msg.cpp_cache.as_ref().filter(|_| !receipt_profile && !stock_profile).map(|_| cpp_cache_inputs(&msg.fs, &msg.binary_files, &sources));
     let receipt_inputs = msg.cpp_cache.as_ref().filter(|_| receipt_profile).map(|_| cpp_receipt_inputs(&msg.fs, &msg.binary_files));
+    let stock_inputs = (stock_profile && (msg.cpp_cache.is_some() || msg.validate_cache_inputs)).then(|| cpp_receipt_inputs(&msg.fs, &msg.binary_files));
     let input_hash_ms = hash_start.elapsed().as_secs_f64() * 1000.0;
 
     let lang_name = match msg.lang {
@@ -276,7 +288,7 @@ async fn start_native(msg: WorkerStart) {
                 }
             };
             let toolchain = execution::compiler_toolchain().expect("verified toolchain");
-            start_cpp(is_debug, msg.build_only, build_start, sources, exec, fs, host_device, artifacts, msg.cpp_cache, cache_inputs, receipt_inputs, toolchain, input_hash_ms).await;
+            start_cpp(is_debug, msg.build_only, msg.prepare_compiler, build_start, sources, exec, fs, host_device, artifacts, msg.cpp_cache, cache_inputs, receipt_inputs, stock_inputs, toolchain, input_hash_ms).await;
         }
         Lang::Rust => start_rust(is_debug, build_start, sources, exec, fs).await,
         Lang::Python => unreachable!(),
@@ -463,7 +475,9 @@ async fn compile_receipt_source(
     if diagnostic_bytes != 0 { cache.bypass(source, Bypass::Diagnostics.reason()); return None; }
     // Receipt completion was provisional. Do not parse it until the ordinary
     // successful action has exited and the final object actually exists.
-    let Ok(object) = exec.read_bytes(&object_path).await else { cache.bypass(source, "missing-object"); return None; };
+    let Ok(object) = exec.read_cache_bytes(&object_path, (128 * 1024 * 1024usize).saturating_sub(cache.pending_bytes)).await else {
+        WorkerOut::CppCacheAbandon.send(); cache.bypass(source, "object-capture-budget-or-missing"); return None;
+    };
     let receipt = Arc::try_unwrap(capture).map_err(|_| Bypass::MalformedReceipt)
         .and_then(|capture| capture.into_inner().map_err(|_| Bypass::MalformedReceipt))
         .and_then(|capture| capture.finish(true, diagnostic_bytes));
@@ -483,9 +497,93 @@ async fn compile_receipt_source(
     None
 }
 
+async fn compile_stock_source(
+    exec: &Execution, cache: &mut Option<CppCacheJob>, mut job: Option<&mut Result<cpp_stock_job::StockJob, String>>,
+    source: &str, source_index: usize, source_count: usize, is_debug: bool, artifacts: &CppArtifacts,
+) -> Option<i32> {
+    let started = Instant::now();
+    let arguments = cpp_clang_args(source, is_debug, artifacts, false);
+    let metadata_limit = cache.as_ref().map_or(0, |c| c.metadata_limit);
+    let eligibility = if is_debug { Err("debug-profile".to_string()) }
+        else if metadata_limit == 0 { Err("stock-metadata-budget".to_string()) }
+        else { match job.as_deref_mut() {
+            Some(Ok(job)) => job.preflight_source(exec, source).await,
+            Some(Err(reason)) => Err(reason.clone()),
+            None => Err("stock-cache-disabled".into()),
+        }};
+    if let Some(cache) = cache { cache.stats.hash_ms += started.elapsed().as_secs_f64() * 1000.0; }
+    let object_path = format!("{source}.o");
+    let lookup_started = Instant::now();
+    let mut hit = false;
+    if let Some(cache) = cache {
+        match &eligibility {
+            Err(reason) => cache.bypass(source, reason),
+            Ok(()) => {
+                if let Some(entry) = cache.entries.remove(source) {
+                    let key = entry.receipt.as_ref().ok_or("stock-metadata-missing".to_string()).and_then(|record| {
+                        job.as_deref().and_then(|j| j.as_ref().ok()).ok_or("stock-cache-disabled".to_string())?
+                            .lookup_key(record, source, &arguments, metadata_limit)
+                    });
+                    if key.as_ref().is_ok_and(|key| *key == entry.key) {
+                        if entry.object.len() <= 128 * 1024 * 1024 && cpp_cache::valid_object(&entry.object, &entry.object_hash) {
+                            hit = exec.write_bytes(&object_path, &entry.object).await.is_ok();
+                        }
+                        if !hit && cache.stats.invalid_sources.len() < cpp_cache::MAX_REPORTED_SOURCES { cache.stats.invalid_sources.push(source.into()); }
+                    } else if key.is_err() && cache.stats.invalid_sources.len() < cpp_cache::MAX_REPORTED_SOURCES { cache.stats.invalid_sources.push(source.into()); }
+                }
+                if hit { cache.stats.hits += 1; if cache.stats.hit_sources.len() < cpp_cache::MAX_REPORTED_SOURCES { cache.stats.hit_sources.push(source.into()); } }
+                else { cache.stats.misses += 1; }
+            }
+        }
+        cache.stats.lookup_ms += lookup_started.elapsed().as_secs_f64() * 1000.0;
+    }
+    if hit { cpp_phase("cache_hit", source_index, source_count); return None; }
+    // Observe even a lexically ineligible miss when the registered job exists:
+    // an unexpected mutating syscall must disable later lookups in this build.
+    let trace = if is_debug { None } else { job.as_deref().and_then(|j| j.as_ref().ok()).filter(|j| j.active().is_ok()).map(|j| j.trace(source)) };
+    cpp_phase("translation_unit_start", source_index, source_count);
+    let output_before = exec.output_bytes();
+    let compile_started = Instant::now();
+    if let Some(cache) = cache { cache.stats.clang_invocations += 1; }
+    let exit = exec.step("clang").binary("/llvm.core.wasm").compiler_stock(trace.clone()).args(&arguments).run().await.expect("Compilation succeeded");
+    cpp_phase("translation_unit_complete", source_index, source_count);
+    if let Some(cache) = cache { cache.stats.compile_ms += compile_started.elapsed().as_secs_f64() * 1000.0; }
+    if !exit.is_success() { return Some(exit.raw()); }
+    let expected_capture = trace.is_some();
+    let observation = trace.and_then(|t| t.lock().ok().map(|t| t.finish()));
+    let capture_bypass = observation.as_ref().and_then(|o| o.bypass)
+        .or_else(|| (expected_capture && observation.is_none()).then_some("stock-capture-unavailable"));
+    if let Some(reason) = capture_bypass {
+        if let Some(Ok(job)) = job.as_deref_mut() { job.poison(reason); }
+        WorkerOut::CppCacheAbandon.send();
+        if let Some(cache) = cache { cache.bypass(source, reason); }
+        return None;
+    }
+    if eligibility.is_err() { return None; }
+    let (Some(cache), Some(Ok(job)), Some(observation)) = (cache, job, observation) else { return None; };
+    if exec.output_bytes() != output_before { cache.bypass(source, "compiler-diagnostics"); return None; }
+    let Ok(object) = exec.read_cache_bytes(&object_path, (128 * 1024 * 1024usize).saturating_sub(cache.pending_bytes)).await else {
+        WorkerOut::CppCacheAbandon.send(); cache.bypass(source, "object-capture-budget-or-missing"); return None;
+    };
+    let admitted = Instant::now();
+    let (key, record) = match job.admit(exec, source, &arguments, observation, metadata_limit).await {
+        Ok(value) => value, Err(reason) => { cache.bypass(source, &reason); return None; },
+    };
+    cache.stats.hash_ms += admitted.elapsed().as_secs_f64() * 1000.0;
+    let object_hash = cpp_cache::hash(&object);
+    if !cpp_cache::valid_object(&object, &object_hash) { cache.bypass(source, "invalid-object"); return None; }
+    if cache.pending_count >= 256 || object.len() > 128 * 1024 * 1024 - cache.pending_bytes {
+        WorkerOut::CppCacheAbandon.send(); cache.bypass(source, "staging-budget"); return None;
+    }
+    cache.pending_bytes += object.len(); cache.pending_count += 1;
+    WorkerOut::CppCacheObject { generation: cache.generation, source: source.into(), key, object_hash, receipt: Some(record), object: &object }.send();
+    None
+}
+
 async fn start_cpp(
     is_debug: bool,
     build_only: bool,
+    prepare_only: bool,
     build_start: Instant,
     sources: Vec<String>,
     exec: Execution,
@@ -495,6 +593,7 @@ async fn start_cpp(
     request: Option<CppCacheRequest>,
     inputs: Option<cpp_cache::Inputs>,
     receipt_inputs: Option<Result<cpp_receipt::UserInputs, cpp_receipt::Bypass>>,
+    stock_inputs: Option<Result<cpp_receipt::UserInputs, cpp_receipt::Bypass>>,
     toolchain: std::rc::Rc<execution::CompilerToolchain>,
     input_hash_ms: f64,
 ) {
@@ -531,10 +630,34 @@ async fn start_cpp(
     if receipt_index.is_some() {
         if let Some(cache) = &mut cache { cache.stats.hash_ms += receipt_index_start.elapsed().as_secs_f64() * 1000.0; }
     }
+    let stock_started = Instant::now();
+    let mut stock_job = if let Some(inputs) = stock_inputs {
+        Some(cpp_stock_job::StockJob::new(&exec, &artifacts, &sources, inputs, &toolchain).await)
+    } else { None };
+    if prepare_only {
+        let result = match stock_job.as_mut() {
+            Some(Ok(job)) => job.preflight(&exec).await.and_then(|_| job.snapshot().map(|snapshot| (job.certificate().to_string(), snapshot))),
+            Some(Err(reason)) => Err(reason.clone()),
+            None => Err("stock-cache-disabled".into()),
+        };
+        match result {
+            Ok((certificate, snapshot)) => WorkerOut::CppCacheEligibility { eligible: true, certificate_sha256: Some(certificate), snapshot: Some(snapshot), reason: None }.send(),
+            Err(reason) => WorkerOut::CppCacheEligibility { eligible: false, certificate_sha256: stock_job.as_ref().and_then(|j| j.as_ref().ok()).map(|j| j.certificate().into()), snapshot: None, reason: Some(reason) }.send(),
+        }
+        return stop(0, build_start, None).send();
+    }
+    if let Some(cache) = &mut cache { cache.stats.hash_ms += stock_started.elapsed().as_secs_f64() * 1000.0; }
 
     cpp_phase("object_build_start", 0, sources.len());
     for (source_index, source) in sources.iter().enumerate() {
         yield_to_messages().await;
+        if toolchain.stock_profile {
+            if let Some(exit) = compile_stock_source(&exec, &mut cache, stock_job.as_mut(), source, source_index, sources.len(), is_debug, &artifacts).await {
+                if let Some(cache) = cache { cache.send(false); }
+                return stop(exit, build_start, None).send();
+            }
+            continue;
+        }
         if toolchain.receipt_abi.is_some() {
             if let Some(exit) = compile_receipt_source(&exec, &mut cache, receipt_index.as_ref(), source, source_index, sources.len(), is_debug, &artifacts).await {
                 if let Some(cache) = cache { cache.send(false); }
@@ -631,7 +754,9 @@ async fn start_cpp(
                 if user_headers.iter().any(|bytes| cpp_cache::references_tainted_macro(bytes, &tainted)) {
                     cache.bypass(source, "dynamic-system-macro"); continue;
                 }
-                let Ok(object) = exec.read_bytes(&obj_path).await else { cache.bypass(source, "missing-object"); continue; };
+                let Ok(object) = exec.read_cache_bytes(&obj_path, (128 * 1024 * 1024usize).saturating_sub(cache.pending_bytes)).await else {
+                    WorkerOut::CppCacheAbandon.send(); cache.bypass(source, "object-capture-budget-or-missing"); continue;
+                };
                 let object_hash = cpp_cache::hash(&object);
                 if !cpp_cache::valid_object(&object, &object_hash) { cache.bypass(source, "invalid-object"); continue; }
                 if cache.pending_count >= 256 || object.len() > 128 * 1024 * 1024 - cache.pending_bytes {
@@ -645,6 +770,18 @@ async fn start_cpp(
         }
     }
 
+    if toolchain.stock_profile {
+        let verified = stock_job.as_ref().and_then(|j| j.as_ref().ok());
+        let eligible = verified.is_some_and(|job| job.active().is_ok()) && cache.as_ref().is_some_and(|c|
+            c.stats.bypasses.is_empty() && c.stats.hits as usize + c.pending_count == sources.len());
+        let reason = if eligible { None } else {
+            cache.as_ref().and_then(|c| c.stats.bypasses.first()).map(|b| b.reason.clone())
+                .or_else(|| stock_job.as_ref().and_then(|j| j.as_ref().err()).cloned())
+                .or_else(|| Some("stock-incomplete-admission".into()))
+        };
+        WorkerOut::CppCacheEligibility { eligible, certificate_sha256: verified.map(|j| j.certificate().into()),
+            snapshot: if eligible { verified.and_then(|j| j.snapshot().ok()) } else { None }, reason }.send();
+    }
     if let Some(cache) = &mut cache { cache.entries.clear(); }
     if let Some(cache) = &cache { WorkerOut::CppCacheStats { generation: cache.generation, stats: cache.stats.clone() }.send(); }
     cpp_phase("object_build_complete", sources.len(), sources.len());
@@ -663,6 +800,7 @@ async fn start_cpp(
     if let Some(cache) = &mut cache { cache.stats.link_invocations += 1; }
     let mut linker = exec.step("wasm-ld").binary("/llvm.core.wasm").compiler().args(&link_args);
     if toolchain.receipt_abi.is_some() { linker = linker.compiler_receipt(None); }
+    if toolchain.stock_profile { linker = linker.compiler_stock(None); }
     let exit = linker.run().await.expect("Linking succeeded");
     if let Some(cache) = &mut cache {
         cache.stats.link_ms = link_start.elapsed().as_secs_f64() * 1000.0;

@@ -1,4 +1,5 @@
 import receiptProfile from './receipt-toolchain-profile.json' with { type: 'json' };
+import stockCertificates from './stock-cache-certificates.json' with { type: 'json' };
 
 /** Build-fixed legacy identities, verified against the shipping @yowasp/clang artifact.
  * Receipt profiles must be added only with a validated immutable release tuple.
@@ -10,7 +11,7 @@ export const LEGACY_TOOLCHAIN_DIGESTS = Object.freeze({
 });
 
 export interface ToolchainManifest {
-  readonly profile: 'legacy' | 'cache-receipt-v1';
+  readonly profile: 'legacy' | 'cache-receipt-v1' | 'stock-certified-v1';
   readonly digests: Readonly<Record<keyof typeof LEGACY_TOOLCHAIN_DIGESTS, string>>;
   readonly urls?: readonly [string, string];
   readonly receiptAbi?: string;
@@ -49,7 +50,9 @@ function receiptManifest(): ToolchainManifest | undefined {
 
 export function requireToolchainManifest(profile = 'legacy'): ToolchainManifest {
   if (profile === 'legacy') return { profile, digests: LEGACY_TOOLCHAIN_DIGESTS };
+  if (profile === 'stock-certified-v1' && stockCertificates.length > 0)
+    return { profile, digests: LEGACY_TOOLCHAIN_DIGESTS };
   const manifest = profile === 'cache-receipt-v1' ? receiptManifest() : undefined;
-  if (!manifest) throw new Error('The cache-receipt-v1 toolchain is not available in this build');
+  if (!manifest) throw new Error(`The ${profile} toolchain is not available in this build`);
   return manifest;
 }

@@ -26,6 +26,7 @@ use crate::types::{StdoutMode, WorkerOut};
 use super::io::{Stdin, Stdout};
 use super::runtime::JsRuntime;
 use super::cpp_receipt_host::{InvocationCapture, ReceiptImport};
+use super::cpp_stock_trace_host::{InvocationTrace, TraceImport};
 
 use std::fmt::Debug;
 
@@ -42,13 +43,14 @@ pub struct CompilerToolchain {
     pub sysroot: Vec<u8>,
     pub identities: (String, String, String),
     pub receipt_abi: Option<String>,
+    pub stock_profile: bool,
 }
 
 #[wasm_bindgen]
-pub fn configure_compiler_toolchain(compiler: Vec<u8>, sysroot: Vec<u8>, compiler_hash: String, sysroot_hash: String, exceptions_hash: String, receipt_abi: Option<String>) {
+pub fn configure_compiler_toolchain(compiler: Vec<u8>, sysroot: Vec<u8>, compiler_hash: String, sysroot_hash: String, exceptions_hash: String, receipt_abi: Option<String>, stock_profile: bool) {
     // Only the private worker entrypoint accepts this parent-owned seed. Its hashes
     // were computed from owned bytes before transport; guest filesystem bytes never enter it.
-    TOOLCHAIN.with(|slot| *slot.borrow_mut() = Some(Rc::new(CompilerToolchain { compiler, sysroot, identities: (compiler_hash, sysroot_hash, exceptions_hash), receipt_abi })));
+    TOOLCHAIN.with(|slot| *slot.borrow_mut() = Some(Rc::new(CompilerToolchain { compiler, sysroot, identities: (compiler_hash, sysroot_hash, exceptions_hash), receipt_abi, stock_profile })));
 }
 
 pub fn compiler_toolchain() -> Option<Rc<CompilerToolchain>> {
@@ -108,6 +110,8 @@ pub struct Step<'a> {
     compiler: bool,
     receipt_import: bool,
     receipt_capture: Option<InvocationCapture>,
+    stock_profile: bool,
+    stock_trace: Option<InvocationTrace>,
     envs: Vec<(String, String)>,
     device_files: Vec<(PathBuf, Box<dyn wasmer_wasix::virtual_fs::VirtualFile + Send + Sync>)>,
 }
@@ -137,6 +141,8 @@ impl Execution {
             compiler: false,
             receipt_import: false,
             receipt_capture: None,
+            stock_profile: false,
+            stock_trace: None,
             envs: Vec::new(),
             device_files: Vec::new(),
         }
@@ -147,6 +153,20 @@ impl Execution {
         let mut wasm_bytes = Vec::new();
         file.read_to_end(&mut wasm_bytes).await?;
         Ok(wasm_bytes)
+    }
+
+    /// Optional cache reads are bounded before allocating and use fallible
+    /// reservation. The owned job filesystem is immutable between tool steps.
+    pub async fn read_cache_bytes(&self, path: &str, limit: usize) -> Result<Vec<u8>, std::io::Error> {
+        let size = usize::try_from(self.fs.metadata(std::path::Path::new(path))?.len)
+            .ok().filter(|size| *size <= limit)
+            .ok_or_else(|| std::io::Error::other("cache input budget"))?;
+        let mut bytes = Vec::new();
+        bytes.try_reserve_exact(size).map_err(|_| std::io::Error::other("cache input allocation"))?;
+        bytes.resize(size, 0);
+        let mut file = self.fs.new_open_options().read(true).open(path)?;
+        file.read_exact(&mut bytes).await?;
+        Ok(bytes)
     }
 
     #[allow(dead_code)]
@@ -186,6 +206,12 @@ impl<'a> Step<'a> {
         self.compiler = true;
         self.receipt_import = true;
         self.receipt_capture = capture;
+        self
+    }
+    pub fn compiler_stock(mut self, trace: Option<InvocationTrace>) -> Self {
+        self.compiler = true;
+        self.stock_profile = true;
+        self.stock_trace = trace;
         self
     }
 
@@ -347,7 +373,7 @@ impl<'a> Step<'a> {
         for (k, v) in &self.envs {
             self.builder.add_env(k, v);
         }
-        if self.receipt_import {
+        if self.receipt_import || self.stock_profile {
             // The receipt environment is enforced here, never inferred from
             // WASI defaults or the student's interactive input queue.
             self.builder.get_env_mut().clear();
@@ -360,7 +386,7 @@ impl<'a> Step<'a> {
             .stdout(Box::new(Stdout::new_counted(StdoutMode::Out, self.exec.output_bytes.clone())))
             .stderr(Box::new(Stdout::new_counted(StdoutMode::Err, self.exec.output_bytes.clone())))
             .stdin(Box::new(Stdin::new(&self.exec.stdin_buffer)));
-        if self.receipt_import {
+        if self.receipt_import || self.stock_profile {
             builder = builder.stdin(Box::new(wasmer_wasix::virtual_fs::NullFile::default()));
         }
 
@@ -386,6 +412,15 @@ impl<'a> Step<'a> {
                 .initialize(&mut store, instance.clone())
                 .ensure("Initialized WASI")?;
 
+            instance
+        } else if self.stock_profile && self.stock_trace.is_some() {
+            let wasi_env = builder.build().ensure("Built stock compiler WASI environment")?;
+            let mut wasi_func_env = WasiFunctionEnv::new(&mut store, wasi_env);
+            let mut imports = wasi_func_env.import_object(&mut store, &module).ensure("Created stock compiler WASI imports")?;
+            let trace = TraceImport::attach(&mut store, &mut imports, &module, self.stock_trace.take().expect("stock trace"));
+            let instance = wasmer::Instance::new(&mut store, &module, &imports).ensure("Created stock compiler instance with observation")?;
+            TraceImport::bind(&trace, &mut store, &instance);
+            wasi_func_env.initialize(&mut store, instance.clone()).ensure("Initialized stock compiler WASI")?;
             instance
         } else if self.receipt_import {
             let wasi_env = builder.build().ensure("Built compiler WASI environment")?;

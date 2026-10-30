@@ -33,7 +33,8 @@ addEventListener(
         message.toolchain.compilerHash,
         message.toolchain.sysrootHash,
         message.toolchain.exceptionsHash,
-        message.toolchain.receiptAbi
+        message.toolchain.receiptAbi,
+        message.toolchain.stockProfile === true
       );
     } else if ((message as { type?: string })?.type === 'object_build_ack') {
       event.stopImmediatePropagation();

@@ -200,6 +200,12 @@ impl Environment {
     }
     fn supported(&self) -> bool { Self::fixed() == *self }
     pub fn arguments(&self, source: &str, pch: Option<&str>) -> Vec<String> {
+        let mut args = self.stock_arguments(source, pch);
+        args.splice(args.len()-1..args.len()-1, ["-resource-dir".into(), self.resource_directory.clone(), "-fwebide-cache-receipt".into()]);
+        args
+    }
+    /// Exact existing stock cc1 action; no depfile, observer or warning flags.
+    pub fn stock_arguments(&self, source: &str, pch: Option<&str>) -> Vec<String> {
         let mut args: Vec<String> = [
             "-cc1", "-triple", "wasm32-wasip1", "-Werror", "-emit-obj", "-disable-free", "-isysroot", "/",
             "-internal-isystem", "/include/c++/v1", "-internal-isystem", "/include", "-internal-isystem", "/include/wasm32-wasip1",
@@ -208,7 +214,7 @@ impl Environment {
         ].into_iter().map(String::from).collect();
         args.push(format!("{source}.o"));
         if let Some(pch) = pch { args.extend(["-include-pch".into(), pch.into(), "-fvalidate-ast-input-files-content".into()]); }
-        args.extend(["-resource-dir".into(), self.resource_directory.clone(), "-fwebide-cache-receipt".into(), source.into()]);
+        args.push(source.into());
         args
     }
 
@@ -336,11 +342,17 @@ impl InputIndex {
     }
 
     pub fn base_key(&self, source: &str, arguments: &[String]) -> Checked<String> {
-        if !self.sources.iter().any(|s| s == source) || !self.environment.supported() || arguments.iter().any(|arg| arg.starts_with('@')) || arguments != self.environment.arguments(source, self.pch.as_deref()) {
+        self.base_key_for(source, arguments, false)
+    }
+    fn base_key_for(&self, source: &str, arguments: &[String], stock: bool) -> Checked<String> {
+        let expected = if stock { self.environment.stock_arguments(source, self.pch.as_deref()) } else { self.environment.arguments(source, self.pch.as_deref()) };
+        if !self.sources.iter().any(|s| s == source) || !self.environment.supported() || arguments.iter().any(|arg| arg.starts_with('@')) || arguments != expected {
             return Err(Bypass::UnsupportedInvocation);
         }
         let mut hash = Sha256::new();
-        for value in [CACHE_SCHEMA, CAPABILITY, self.toolchain.key().as_str(), source] { add(&mut hash, value.as_bytes()); }
+        let schema = if stock { "debugger-sh/cpp-tu/stock-certified-v1/policy1" } else { CACHE_SCHEMA };
+        let capability = if stock { "stock-certified-v1" } else { CAPABILITY };
+        for value in [schema, capability, self.toolchain.key().as_str(), source] { add(&mut hash, value.as_bytes()); }
         add(&mut hash, &serde_json::to_vec(&self.environment).map_err(|_| Bypass::UnsupportedInvocation)?);
         add(&mut hash, b"compile");
         for arg in arguments { add(&mut hash, arg.as_bytes()); }
@@ -354,6 +366,33 @@ impl InputIndex {
         for (path, content) in &self.user_files {
             if path == source || !self.sources.contains(path) { add(&mut hash, path.as_bytes()); add(&mut hash, content.as_bytes()); }
         }
+        Ok(format!("{:x}", hash.finalize()))
+    }
+
+    /// Stored stock metadata records an already admitted actual input closure.
+    /// This key cannot itself authorize an unregistered certificate. The caller
+    /// checks that registry first and performs full policy/trace admission on a
+    /// miss. Equal keys bind all bytes the prior admission depended upon.
+    pub fn stock_key(&self, source: &str, arguments: &[String], certificate: &str, dependencies: &[String]) -> Checked<String> {
+        if certificate.len() != 64 || !certificate.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)) ||
+            dependencies.len() > 16384 || !unique(dependencies) || !dependencies.iter().any(|p| p == source) ||
+            self.pch.as_ref().is_some_and(|p| !dependencies.contains(p)) {
+            return Err(Bypass::DependencyClosure);
+        }
+        let base = self.base_key_for(source, arguments, true)?;
+        let mut sorted = BTreeMap::new();
+        for path in dependencies {
+            if self.generated(path) || path != source && self.sources.contains(path) { return Err(Bypass::DependencyClosure); }
+            sorted.insert(path, self.files.get(path).ok_or(Bypass::DependencyClosure)?);
+        }
+        let mut hash = Sha256::new(); add(&mut hash, base.as_bytes()); add(&mut hash, certificate.as_bytes());
+        for (path, content) in sorted { add(&mut hash, path.as_bytes()); add(&mut hash, content.as_bytes()); }
+        Ok(format!("{:x}", hash.finalize()))
+    }
+
+    pub fn stock_snapshot(&self, certificate: &str) -> Checked<String> {
+        let mut hash = Sha256::new(); add(&mut hash, certificate.as_bytes());
+        for source in &self.sources { add(&mut hash, self.base_key_for(source, &self.environment.stock_arguments(source, self.pch.as_deref()), true)?.as_bytes()); }
         Ok(format!("{:x}", hash.finalize()))
     }
 
@@ -565,6 +604,36 @@ mod tests {
         let sources=vec!["/a.cpp".into()];
         let mut args=Environment::link_arguments(&sources,&[]);args.push("-o/alternative".into());
         assert!(matches!(InputIndex::new(Environment::fixed(),identity(),vec![],files().iter().map(|(p,b)|(p.clone(),b.as_slice())),vec![],sources,None,args),Err(Bypass::UnsupportedInvocation)));
+    }
+
+    #[test]
+    fn stock_keys_bind_exact_invocation_policy_and_owned_snapshot() {
+        let original=files(); let sources=["/a.cpp","/b.cpp"];
+        let before=index(&original,&sources,None).unwrap();
+        let args=before.environment.stock_arguments("/a.cpp",None);let certificate="d".repeat(64);
+        let deps=vec!["/a.cpp".into(),"/include/stdio.h".into()];
+        let baseline=before.stock_key("/a.cpp",&args,&certificate,&deps).unwrap();
+        assert_ne!(baseline,before.stock_key("/a.cpp",&args,&"e".repeat(64),&deps).unwrap());
+        for extra in ["-DTEST=1","-fwebide-cache-receipt","@args","-ftime-trace"] {
+            let mut changed=args.clone();changed.push(extra.into());
+            assert_eq!(before.stock_key("/a.cpp",&changed,&certificate,&deps),Err(Bypass::UnsupportedInvocation));
+        }
+        assert_eq!(before.stock_key("/a.cpp",&before.environment.arguments("/a.cpp",None),&certificate,&deps),Err(Bypass::UnsupportedInvocation));
+        for path in ["/a.cpp.o","/a.cpp-12345678.o.tmp","/b.cpp","/missing.h"] {
+            let mut changed=deps.clone(); changed.push(path.into());
+            assert_eq!(before.stock_key("/a.cpp",&args,&certificate,&changed),Err(Bypass::DependencyClosure));
+        }
+        let mut sibling=original.clone();sibling.insert("/b.cpp".into(),b"int z;".to_vec());
+        let after=index(&sibling,&sources,None).unwrap();
+        assert_eq!(baseline,after.stock_key("/a.cpp",&args,&certificate,&deps).unwrap());
+        assert_ne!(before.stock_snapshot(&certificate),after.stock_snapshot(&certificate));
+        for (path,bytes) in [("/a.cpp",b"int z;".as_slice()),("/image.bin",b"change".as_slice()),("/unused.h",b"new".as_slice()),("/include/stdio.h",b"shadow".as_slice())] {
+            let mut changed=original.clone();changed.insert(path.into(),bytes.to_vec());
+            assert_ne!(baseline,index(&changed,&sources,None).unwrap().stock_key("/a.cpp",&args,&certificate,&deps).unwrap());
+        }
+        assert_ne!(baseline,index(&original,&["/b.cpp","/a.cpp"],None).unwrap().stock_key("/a.cpp",&args,&certificate,&deps).unwrap());
+        let mut env_changed=before;env_changed.environment.variables.insert("CPATH".into(),"/new".into());
+        assert_eq!(env_changed.stock_key("/a.cpp",&args,&certificate,&deps),Err(Bypass::UnsupportedInvocation));
     }
 
     #[test]

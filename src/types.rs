@@ -111,6 +111,8 @@ pub struct WorkerStart {
     #[serde(default)]
     pub prepare_compiler: bool,
     #[serde(default)]
+    pub validate_cache_inputs: bool,
+    #[serde(default)]
     pub scope_epoch: u32,
     #[serde(default)]
     pub operation_id: u32,
@@ -149,6 +151,9 @@ pub struct CppArtifacts {
     pub precompiled_header: Option<String>,
     #[serde(default)]
     pub required_toolchain: Option<CppToolchainIdentity>,
+    /// Exact metadata document, never mounted into the guest namespace.
+    #[serde(default)]
+    pub cache_certificate: Option<String>,
 }
 
 /// Optional companion expectation. It can reject a mismatched tuple, never grant trust.
@@ -267,6 +272,13 @@ pub enum WorkerOut<'a> {
     CppCacheStats {
         generation: u32,
         stats: CppCacheStats,
+    },
+    #[serde(rename = "cpp_cache_eligibility")]
+    CppCacheEligibility {
+        eligible: bool,
+        certificate_sha256: Option<String>,
+        snapshot: Option<String>,
+        reason: Option<String>,
     },
 
     /// Indicate that execution has paused.
