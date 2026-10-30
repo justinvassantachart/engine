@@ -1,6 +1,7 @@
 //! Observation-only WASI adapter for the immutable stock compiler profile.
 //! Unknown imports/accesses disable cache admission; the original syscall is
-//! still called exactly once with unchanged arguments and return/trap values.
+//! still called exactly once with unchanged arguments and return values. The
+//! original proc_exit import preserves typed exits; other traps fail closed.
 use super::cpp_stock_trace::{MAX_PATH, Trace};
 use std::sync::{Arc, Mutex};
 use wasmer::{
@@ -43,7 +44,6 @@ fn syscall_name(name: &str) -> &'static str {
         "fd_write",
         "fd_seek",
         "fd_fdstat_get",
-        "proc_exit",
     ];
     NAMES
         .iter()
@@ -231,7 +231,12 @@ fn after(
                 trace.decline("stock-write-failure");
             }
         }
-        "fd_seek" => trace.seek(fd, args.get(1).and_then(Value::i64).unwrap_or(i64::MIN), arg(args, 2).unwrap_or(u32::MAX), errno),
+        "fd_seek" => trace.seek(
+            fd,
+            args.get(1).and_then(Value::i64).unwrap_or(i64::MIN),
+            arg(args, 2).unwrap_or(u32::MAX),
+            errno,
+        ),
         "fd_fdstat_get" => {
             trace.descriptor(fd);
             if errno != 0 {
@@ -272,6 +277,12 @@ impl TraceImport {
                 }
                 continue;
             };
+            // Keep Wasmer's original typed exit trap intact. proc_exit observes
+            // no cache inputs; Step::run owns its exact success/error status.
+            // Calling it through another JS Function boundary erases WasiError.
+            if import.name() == "proc_exit" {
+                continue;
+            }
             let ty = original.ty(store);
             let wrapper = FunctionEnv::new(
                 store,
@@ -314,12 +325,8 @@ impl TraceImport {
                             Ok(values.into_vec())
                         }
                         Err(error) => {
-                            // Successful proc_exit is normally represented as a
-                            // Wasmer trap; the outer invocation owns exit handling.
-                            if name != "proc_exit" {
-                                if let Ok(mut trace) = capture.lock() {
-                                    trace.decline("stock-syscall-trap");
-                                }
+                            if let Ok(mut trace) = capture.lock() {
+                                trace.decline("stock-syscall-trap");
                             }
                             Err(error)
                         }

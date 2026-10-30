@@ -29,6 +29,25 @@ WASM. The default legacy profile keeps the original compiler and sysroot URLs.
 `build:release`. `npm pack` on its own runs `prepack`/`prepare` but not `prepublishOnly` under
 npm 11; `--ignore-scripts` removes the dependence on that ordering.
 
+### Stock-certified compiler policy
+
+`stock-certified-v1` uses the unchanged legacy compiler, sysroot and exception
+payload. Its companion-owned certificate travels as exact metadata through
+`cppArtifacts.cacheCertificate`; no certificate file is mounted into the guest.
+The engine's `src/ts/stock-cache-certificates.json` is the build-fixed list of
+reviewed certificate digests. A runtime caller cannot register another digest.
+Changes to trusted header bytes, PCH bytes or parsed metadata proofs, macro safety
+obligations, compiler inputs, or policy behavior require a new review and a
+compatible tuple release. Preserve the previous complete tuple for rollback.
+
+Freeze the final engine version, lockfile, policy registry and source before the
+final candidate build and browser gates. The Rust cache key includes the complete
+`package.json`, so changing only its version changes the runtime artifact too.
+Use the same verified tarball bytes for the eventual immutable release; do not
+rebuild or repack with different metadata after performance acceptance. Record the
+certificate digest and companion archive/PCH identities with the release tuple,
+alongside the unchanged stock compiler/sysroot/exception identities.
+
 ### Receipt compiler assets
 
 `src/ts/receipt-toolchain-profile.json` is a build-fixed release input. While it is

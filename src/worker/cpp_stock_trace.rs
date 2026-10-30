@@ -301,9 +301,11 @@ impl Trace {
         }
     }
     pub fn preopen(&mut self, fd: u32, path: &str) {
-        if path != "/" {
+        // Pinned Wasmer advertises name.len()+1 and writes a terminal NUL.
+        // Accept only its exact root encoding, never trim arbitrary names.
+        if path != "/" && path != "/\0" {
             self.decline("stock-preopen");
-        } else if let Some(index) = self.namespace.directory(path) {
+        } else if let Some(index) = self.namespace.directory("/") {
             self.insert_fd(fd, Owner::Directory(index));
         } else {
             self.decline("stock-preopen");
@@ -460,12 +462,16 @@ impl Trace {
     }
     pub fn seek(&mut self, fd: u32, offset: i64, whence: u32, errno: i32) {
         let owner = self.owner(fd);
-        if errno == 0 { return; }
-        // LLVM raw_fd_ostream probes errs() with lseek(2, 0, SEEK_CUR).
-        // This engine's original stderr lacks FD_SEEK; pinned WASI returns
-        // Access before mutation. Only that exact original descriptor/query
-        // is fixed bookkeeping, never an allowance for reopened fd 2.
-        if fd == 2 && matches!(owner, Some(Owner::Stderr)) && offset == 0 && whence == 1 && errno == 2 {
+        if errno == 0 {
+            return;
+        }
+        // LLVM raw_fd_ostream probes outs()/errs() with lseek(fd,0,SEEK_CUR).
+        // This engine's original stdout/stderr lack FD_SEEK; pinned WASI
+        // returns Access before mutation. Only these exact original stream
+        // queries are fixed bookkeeping, never an allowance for reopened FDs.
+        let original_output = fd == 1 && matches!(owner, Some(Owner::Stdout))
+            || fd == 2 && matches!(owner, Some(Owner::Stderr));
+        if original_output && offset == 0 && whence == 1 && errno == 2 {
             return;
         }
         self.decline("stock-descriptor-protocol");
@@ -601,23 +607,86 @@ mod tests {
         assert_eq!(result.input_paths, ["/include/header.h", "/main.cpp"]);
     }
     #[test]
-    fn original_stderr_seek_query_preserves_fixed_access_denial_only() {
-        let mut t=setup();begin_input(&mut t);t.seek(2,0,1,2);output(&mut t);
-        assert_eq!(t.finish().bypass,None);
-        for (fd,offset,whence,errno) in [(2,1,1,2),(2,-1,1,2),(2,0,0,2),(2,0,2,2),
-            (1,0,1,2),(0,0,1,2),(2,0,1,8),(2,0,1,28),(99,0,1,0)] {
-            let mut t=setup();begin_input(&mut t);t.seek(fd,offset,whence,errno);output(&mut t);
-            assert!(t.finish().bypass.is_some(),"{fd}/{offset}/{whence}/{errno}");
+    fn only_exact_root_preopen_transport_encodings_are_accepted() {
+        for spelling in ["/", "/\0"] {
+            let mut t = setup();
+            t.preopen(3, spelling);
+            assert!(t.active());
+            assert_eq!(t.resolve(3, "main.cpp"), Some("/main.cpp".into()));
         }
-        let mut t=setup();begin_input(&mut t);
-        t.open("/include/header.h",0,2,0,0,Some(4));t.seek(4,0,1,2);output(&mut t);
-        assert_eq!(t.finish().bypass,Some("stock-descriptor-protocol"));
-        let mut t=setup();begin_input(&mut t);t.close(2,0);
-        t.open("/include/header.h",0,2,0,0,Some(2));t.seek(2,0,1,2);output(&mut t);
-        assert_eq!(t.finish().bypass,Some("stock-descriptor-protocol"));
-        let mut t=setup();begin_input(&mut t);
-        t.open("/include/header.h",0,2,0,0,Some(4));t.seek(4,0,1,0);t.close(4,0);output(&mut t);
-        assert_eq!(t.finish().bypass,None);
+        for spelling in [
+            "",
+            ".",
+            "./",
+            "//",
+            "/other",
+            "/\0suffix",
+            "/\0\0",
+            "//\0",
+            "/other\0",
+            "\0/",
+        ] {
+            let mut t = setup();
+            t.preopen(3, spelling);
+            assert_eq!(t.finish().bypass, Some("stock-preopen"), "{spelling:?}");
+        }
+    }
+    #[test]
+    fn original_output_stream_seek_queries_preserve_fixed_access_denial_only() {
+        for fd in [1, 2] {
+            let mut t = setup();
+            begin_input(&mut t);
+            t.seek(fd, 0, 1, 2);
+            output(&mut t);
+            assert_eq!(t.finish().bypass, None);
+        }
+        for (fd, offset, whence, errno) in [
+            (2, 1, 1, 2),
+            (2, -1, 1, 2),
+            (2, 0, 0, 2),
+            (2, 0, 2, 2),
+            (1, 1, 1, 2),
+            (1, -1, 1, 2),
+            (1, 0, 0, 2),
+            (1, 0, 2, 2),
+            (1, 0, 1, 8),
+            (1, 0, 1, 28),
+            (0, 0, 1, 2),
+            (2, 0, 1, 8),
+            (2, 0, 1, 28),
+            (99, 0, 1, 0),
+        ] {
+            let mut t = setup();
+            begin_input(&mut t);
+            t.seek(fd, offset, whence, errno);
+            output(&mut t);
+            assert!(
+                t.finish().bypass.is_some(),
+                "{fd}/{offset}/{whence}/{errno}"
+            );
+        }
+        let mut t = setup();
+        begin_input(&mut t);
+        t.open("/include/header.h", 0, 2, 0, 0, Some(4));
+        t.seek(4, 0, 1, 2);
+        output(&mut t);
+        assert_eq!(t.finish().bypass, Some("stock-descriptor-protocol"));
+        for fd in [1, 2] {
+            let mut t = setup();
+            begin_input(&mut t);
+            t.close(fd, 0);
+            t.open("/include/header.h", 0, 2, 0, 0, Some(fd));
+            t.seek(fd, 0, 1, 2);
+            output(&mut t);
+            assert_eq!(t.finish().bypass, Some("stock-descriptor-protocol"));
+        }
+        let mut t = setup();
+        begin_input(&mut t);
+        t.open("/include/header.h", 0, 2, 0, 0, Some(4));
+        t.seek(4, 0, 1, 0);
+        t.close(4, 0);
+        output(&mut t);
+        assert_eq!(t.finish().bypass, None);
     }
     #[test]
     fn normalized_missing_paths_are_bounded_and_cannot_escape_root() {

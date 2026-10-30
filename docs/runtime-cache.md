@@ -103,8 +103,10 @@ checked timestamp/import/input records and audited exported state for those exac
 bytes. Arbitrary or altered PCHs bypass. Unused optional headers need not be
 mounted; the certificate never introduces a namespace entry or a source allowlist.
 
-On an ordinary miss, a bounded observer wraps the existing WASI imports and passes
-all arguments, results and traps through unchanged. It records actual read and
+On an ordinary miss, a bounded observer wraps the existing WASI input imports and
+passes their arguments and return values through unchanged. The original
+`proc_exit` import remains intact so Wasmer preserves its typed exit status;
+unexpected syscall traps disable admission and propagate as failures. It records actual read and
 metadata inputs, preserves the audited stock temporary-output protocol, and
 rejects unexpected mutation, enumeration or capture loss. All nonselected user
 bytes and the complete namespace are keyed. Cross-selected-source observations,

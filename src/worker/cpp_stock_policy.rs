@@ -5,7 +5,8 @@
 //! Certificates belong to the companion package. They contain no student source
 //! identities. A registry entry authorizes exact audited trusted bytes and public
 //! macro wrappers; it is never supplied by the host application. The initial
-//! registry is empty. Changed trusted inputs require review and a tuple release.
+//! registry pins the independently audited certificate. Changed trusted inputs
+//! require review and a compatible tuple release.
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
