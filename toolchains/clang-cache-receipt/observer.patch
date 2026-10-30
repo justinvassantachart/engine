@@ -55,10 +55,20 @@ index 186dbb43f..66b2b9924 100644
  
    /// Create a new code generation action.  If the optional \p _VMContext
 diff --git a/clang/include/clang/Frontend/CompilerInstance.h b/clang/include/clang/Frontend/CompilerInstance.h
-index d0b41e9f1..baf446791 100644
+index d0b41e9f1..db1ad0153 100644
 --- a/clang/include/clang/Frontend/CompilerInstance.h
 +++ b/clang/include/clang/Frontend/CompilerInstance.h
-@@ -954,6 +954,11 @@ public:
+@@ -765,7 +765,8 @@ public:
+       ArrayRef<std::shared_ptr<ModuleFileExtension>> Extensions,
+       ArrayRef<std::shared_ptr<DependencyCollector>> DependencyCollectors,
+       void *DeserializationListener, bool OwnDeserializationListener,
+-      bool Preamble, bool UseGlobalModuleIndex);
++      bool Preamble, bool UseGlobalModuleIndex,
++      DependencyCollector *ReceiptCollector = nullptr);
+ 
+   /// Create a code completion consumer using the invocation; note that this
+   /// will cause the source manager to truncate the input source file at the
+@@ -954,6 +955,11 @@ public:
  
    bool lookupMissingImports(StringRef Name, SourceLocation TriggerLoc) override;
  
@@ -280,7 +290,7 @@ index c40baa365..0d1bb6d14 100644
    ASTUnit.cpp
    ChainedDiagnosticConsumer.cpp
 diff --git a/clang/lib/Frontend/CompilerInstance.cpp b/clang/lib/Frontend/CompilerInstance.cpp
-index 088538c74..a9c743d2d 100644
+index 088538c74..85e26570b 100644
 --- a/clang/lib/Frontend/CompilerInstance.cpp
 +++ b/clang/lib/Frontend/CompilerInstance.cpp
 @@ -523,6 +523,8 @@ void CompilerInstance::createPreprocessor(TranslationUnitKind TUKind) {
@@ -292,21 +302,40 @@ index 088538c74..a9c743d2d 100644
  
    // Handle generating header include information, if requested.
    if (DepOpts.ShowHeaderIncludes)
-@@ -664,6 +666,8 @@ IntrusiveRefCntPtr<ASTReader> CompilerInstance::createPCHExternalASTSource(
+@@ -630,7 +632,7 @@ void CompilerInstance::createPCHExternalASTSource(
+       getASTContext(), getPCHContainerReader(), getCodeGenOpts(),
+       getFrontendOpts().ModuleFileExtensions, DependencyCollectors,
+       DeserializationListener, OwnDeserializationListener, Preamble,
+-      getFrontendOpts().UseGlobalModuleIndex);
++      getFrontendOpts().UseGlobalModuleIndex, WebIDEReceiptCollector);
+ }
+ 
+ IntrusiveRefCntPtr<ASTReader> CompilerInstance::createPCHExternalASTSource(
+@@ -642,7 +644,8 @@ IntrusiveRefCntPtr<ASTReader> CompilerInstance::createPCHExternalASTSource(
+     ArrayRef<std::shared_ptr<ModuleFileExtension>> Extensions,
+     ArrayRef<std::shared_ptr<DependencyCollector>> DependencyCollectors,
+     void *DeserializationListener, bool OwnDeserializationListener,
+-    bool Preamble, bool UseGlobalModuleIndex) {
++    bool Preamble, bool UseGlobalModuleIndex,
++    DependencyCollector *ReceiptCollector) {
+   const HeaderSearchOptions &HSOpts =
+       PP.getHeaderSearchInfo().getHeaderSearchOpts();
+ 
+@@ -664,6 +667,8 @@ IntrusiveRefCntPtr<ASTReader> CompilerInstance::createPCHExternalASTSource(
  
    for (auto &Listener : DependencyCollectors)
      Listener->attachToASTReader(*Reader);
-+  if (WebIDEReceiptCollector)
-+    WebIDEReceiptCollector->attachToASTReader(*Reader);
++  if (ReceiptCollector)
++    ReceiptCollector->attachToASTReader(*Reader);
  
    auto Listener = std::make_unique<ReadModuleNames>(PP);
    auto &ListenerRef = *Listener;
 diff --git a/clang/lib/Frontend/WebIDECacheReceipt.cpp b/clang/lib/Frontend/WebIDECacheReceipt.cpp
 new file mode 100644
-index 000000000..a726bd1f5
+index 000000000..44b73d6ec
 --- /dev/null
 +++ b/clang/lib/Frontend/WebIDECacheReceipt.cpp
-@@ -0,0 +1,325 @@
+@@ -0,0 +1,334 @@
 +//===- WebIDECacheReceipt.cpp - Bounded observation only --------------------===//
 +// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 +// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
@@ -452,6 +481,15 @@ index 000000000..a726bd1f5
 +    if (NodeCount == 65536) { unsupported("ast-observation-limit"); return; }
 +    Nodes[NodeCount++] = {S, false};
 +  }
++  void inspectAsm(const Expr *E) noexcept {
++    // The pinned API's getAsmString() constructs a std::string. Inspect only
++    // the already-held literal; never evaluate or copy an optional expression.
++    if (const auto *S = llvm::dyn_cast_or_null<StringLiteral>(E)) {
++      if (!S->getString().empty()) unsupported("assembly");
++    } else {
++      unsupported("assembly-expression");
++    }
++  }
 +  void inspectAST(ASTContext &C) noexcept {
 +    push(C.getTranslationUnitDecl()); unsigned Visited = 0;
 +    while (NodeCount && !Unsupported) {
@@ -460,7 +498,7 @@ index 000000000..a726bd1f5
 +      if (N.IsDecl) {
 +        const auto *D = static_cast<const Decl *>(N.Ptr);
 +        if (const auto *A = llvm::dyn_cast<FileScopeAsmDecl>(D)) {
-+          if (!A->getAsmString()->getString().empty()) unsupported("assembly");
++          inspectAsm(A->getAsmStringExpr());
 +        }
 +        if (const auto *F = llvm::dyn_cast<FunctionDecl>(D)) {
 +          // The body of this already source-parsed declaration only.
@@ -473,7 +511,7 @@ index 000000000..a726bd1f5
 +      } else {
 +        const auto *S = static_cast<const Stmt *>(N.Ptr);
 +        if (const auto *A = llvm::dyn_cast<GCCAsmStmt>(S)) {
-+          if (!A->getAsmString()->getString().empty()) unsupported("assembly");
++          inspectAsm(A->getAsmStringExpr());
 +        } else if (const auto *A = llvm::dyn_cast<MSAsmStmt>(S)) {
 +          if (!A->getAsmString().empty()) unsupported("assembly");
 +        }

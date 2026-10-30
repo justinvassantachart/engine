@@ -101,3 +101,18 @@ class-specific nothrow allocation and matching delete; no global throwing-new
 behavior is assumed. Failure leaves existing callbacks untouched and disables
 eligibility. Both has_include and has_include_next use the same exact parsed
 probe observation; the engine validates the conservative search-prefix superset.
+
+## Native API validation correction
+
+The first candidate failed the generated-header native syntax check before the
+remote build completed. The exact failed patch, logs and source commit remain
+in evidence. The pinned GCC/FileScope assembly API returns a newly allocated
+std::string; the observer now reads the already-held StringLiteral view through
+getAsmStringExpr. Nonliteral assembly expressions decline without evaluation or
+allocation. Empty literal barriers and symbol-label attributes stay eligible.
+
+The pre-PCH factory is static. Its optional raw receipt-collector parameter now
+defaults to null and is passed explicitly by the instance-owned factory before
+ReadAST. Existing static callers keep the null default and ordinary semantics.
+All nine changed-file/integration native syntax checks pass; this does not
+replace the actual SDK29 WASM build, import or semantic/browser gates.

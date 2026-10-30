@@ -6,8 +6,8 @@
   "controlValidationSha256": "cc58fa920647e37a88ae755439fa1c43ec7d4cf6f9653c22da8f9f9cc7bf16eb",
   "patch": {
     "path": "observer.patch",
-    "sha256": "42a025166431ccddbf04396b2ccf59a15bfc492b1c187939fa746c2c44fd2c6e",
-    "bytes": 44394
+    "sha256": "0f58269dc22635cbe59225fb3228a8284d79d484d392d6b65e9e3b448ee304d4",
+    "bytes": 46291
   },
   "pinnedLlvmCommit": "9560ae0f2cc440e4fc891fddbc119da6f56daa59",
   "intent": "Observation-only frontend option, unsuppressible builtin expansion hook, bounded dependencies/probes, actual-loaded PCH metadata proof and private optional completion import.",
@@ -25,6 +25,16 @@
     "actualWasmConformance": "pending",
     "pairedBrowserOverhead": "pending",
     "independentSourceReview": {
+      "status": "passed-for-corrected-candidate-build",
+      "sha256": "cb7e3928181350e4b391cadc61d00e677f75ab3a1a585521b418687fad596cbb"
+    },
+    "nativeChangedFileSyntax": {
+      "status": "passed",
+      "files": 9,
+      "sha256": "3a71ae687407a892d147e578bd62c244ef392ef02882cdf26ebb7ee30fa93cad",
+      "scope": "Apple Clang 17 syntax-only with generated pinned LLVM headers; actual SDK29 WASM build remains required"
+    },
+    "previousIndependentSourceReview": {
       "status": "passed-for-candidate-build",
       "sha256": "5ffc4ae446a14ac5e44ebc6144cdb994ac7f9ecd6ec97cc965546aa78ea08782"
     }
@@ -40,5 +50,13 @@
     "astVisitedNodes": 1000000,
     "irVisitedInstructions": 1000000
   },
-  "releaseEligible": false
+  "releaseEligible": false,
+  "previousCandidate": {
+    "patchSha256": "42a025166431ccddbf04396b2ccf59a15bfc492b1c187939fa746c2c44fd2c6e",
+    "engineCommit": "28f6186d01448925bd462be3204eee6525faa7b2",
+    "workflowRun": 40985829837,
+    "status": "rejected-by-native-api-check",
+    "failureEvidenceSha256": "9c26958f89117a15a61b887ca068035e1ee9b377c970a47a91ee9b52edb97e7e",
+    "reason": "Pinned GCC/FileScope assembly accessor API and static PCH-factory collector attachment corrected before actual compiler acceptance."
+  }
 }
