@@ -8,6 +8,7 @@ import { CppCacheLimits, CppObjectCache, ObjectCacheStats } from './cpp-object-c
 import { Debugger } from './debugger.js';
 import { createEngineWorker } from './engine-worker';
 import { HostDeviceOpener, HostDeviceSession } from './host-device.js';
+import { requireToolchainManifest } from './toolchain-manifest.js';
 import { errorResult, Internals } from './util.js';
 import { VerifiedToolchain } from './verified-toolchain.js';
 
@@ -26,6 +27,8 @@ export interface CppArtifacts {
   archives?: string[] | null;
   precompiledHeader?: string | null;
   requiredToolchain?: CppToolchainIdentity | null;
+  /** Exact bounded certificate JSON. A supplied document never grants trust. */
+  cacheCertificate?: string;
 }
 
 /** Immutable ownership boundary. Create a new Engine when either identity changes. */
@@ -41,9 +44,14 @@ export interface CppPerformanceOptions {
   /** Idle worker lifetime; defaults to 30 seconds, at most five minutes. */
   idleTimeoutMs?: number;
   compilerLifetime?: 'idle' | 'project';
+  toolchainProfile?: 'legacy' | 'stock-certified-v1';
 }
 export interface EngineOptions {
   cpp?: CppPerformanceOptions;
+}
+export interface CompilerPreparationOptions {
+  /** Inspect an owned candidate snapshot for known cache exclusions, without Clang. */
+  validateCacheInputs?: boolean;
 }
 export type { CppCacheLimits, ObjectCacheStats } from './cpp-object-cache.js';
 
@@ -82,6 +90,18 @@ export interface CppCacheStatistics extends ObjectCacheStats {
   scopeEpoch: number;
   operationId: number;
   cacheEpoch: number;
+  toolchainProfile: 'legacy' | 'stock-certified-v1';
+  /** Exact registered certificate verified for this operation, including input bypasses. */
+  stockCertificateSha256?: string;
+  /** Last validated owned snapshot, never authority for a later mutable plan.
+   * Preparation means no known exclusion; an ordinary miss still validates its
+   * complete observed inputs and diagnostics. Compile/Run means every selected
+   * TU was admitted or hit. Cleared when a new operation starts.
+   */
+  cacheEligible: boolean;
+  cacheEligibilityReason?: string;
+  cacheEligibilitySnapshot?: string;
+  cacheEligibilityOperationId?: number;
   toolchainIdentityBytes: number;
   toolchainIngestions: number;
   toolchainHashCount: number;
@@ -107,6 +127,7 @@ type InternalMessage = (
 interface Job extends OperationIdentity {
   generation: number;
   prepareOnly: boolean;
+  validateCacheInputs: boolean;
   publication?: Promise<void>;
   settled: boolean;
   buildOnly: boolean;
@@ -166,6 +187,13 @@ export class Engine {
   }>();
   private retirements = 0;
   private latest?: CppJobStatistics;
+  private cacheValidation?: {
+    eligible: boolean;
+    certificate?: string;
+    snapshot?: string;
+    operationId: number;
+    reason?: string;
+  };
 
   static async create(lang: Lang, options: EngineOptions = {}): Promise<Engine> {
     const capturedOptions = structuredClone(options);
@@ -194,6 +222,7 @@ export class Engine {
         throw new RangeError('Compiler idle timeout must be between 1 and 300000 milliseconds');
       if (cpp.compilerLifetime !== undefined && !['idle', 'project'].includes(cpp.compilerLifetime))
         throw new TypeError('Invalid compiler lifetime');
+      requireToolchainManifest(cpp.toolchainProfile);
       this.scope = Object.freeze({ ...cpp.scope });
       this.options = Object.freeze({ ...cpp, scope: this.scope, idleTimeoutMs });
     }
@@ -209,6 +238,12 @@ export class Engine {
       scopeEpoch: this.scopeEpoch,
       operationId: this.operationId,
       cacheEpoch: this.generation,
+      toolchainProfile: this.options?.toolchainProfile ?? 'legacy',
+      cacheEligible: this.cacheValidation?.eligible ?? false,
+      stockCertificateSha256: this.cacheValidation?.certificate,
+      cacheEligibilitySnapshot: this.cacheValidation?.snapshot,
+      cacheEligibilityOperationId: this.cacheValidation?.operationId,
+      cacheEligibilityReason: this.cacheValidation?.reason,
       toolchainIdentityBytes: this.toolchain?.identityBytes ?? 0,
       toolchainIngestions: this.toolchainIngestions,
       toolchainHashCount: this.toolchainHashCount,
@@ -225,6 +260,7 @@ export class Engine {
 
   /** Clears all retained code/objects. An active job may finish but cannot repopulate them. */
   public clearCaches(): void {
+    this.cacheValidation = undefined;
     this.generation++;
     this.objects.clear();
     this.toolchain = undefined;
@@ -325,9 +361,22 @@ export class Engine {
     return this.disposal;
   }
 
-  /** Load compiler resources without student inputs, linking, or guest execution. */
-  public prepareCompiler(): Promise<RunResult> {
-    return this.submit(true, true);
+  /** Load compiler resources. Optional input validation never invokes Clang, links, or runs a guest. */
+  public prepareCompiler(options?: CompilerPreparationOptions): Promise<RunResult> {
+    if (
+      options?.validateCacheInputs !== undefined &&
+      typeof options.validateCacheInputs !== 'boolean'
+    )
+      return Promise.resolve(errorResult(new TypeError('Invalid compiler preparation options')));
+    const validate =
+      options?.validateCacheInputs === true &&
+      this.options?.toolchainProfile === 'stock-certified-v1' &&
+      !!this.options?.objectCache &&
+      this.objects.limits.maxEntries > 0 &&
+      this.objects.limits.maxObjectBytes > 0 &&
+      this.objects.limits.maxMetadataBytes > 0 &&
+      this.objects.limits.maxEntryMetadataBytes > 0;
+    return this.submit(true, true, validate);
   }
 
   /** Every Run links current objects and starts a fresh student runtime. */
@@ -342,17 +391,30 @@ export class Engine {
 
   private submit(
     buildOnly: boolean,
-    prepareOnly = false
+    prepareOnly = false,
+    validateCacheInputs = false
   ): Promise<RunResult> {
     if (this.disposed) return Promise.resolve(errorResult(new Error('Engine is disposed')));
     if (this.active || this.cancellationDraining)
       return Promise.resolve(errorResult(new Error('An engine job is already active')));
     if (buildOnly && this.lang !== 'c')
       return Promise.resolve(errorResult(new Error('Compile-only is supported for C/C++')));
-    const omitInputs = prepareOnly;
+    this.cacheValidation = undefined;
+    const omitInputs = prepareOnly && !validateCacheInputs;
     let snapshot: Pick<WorkerStart, 'fs' | 'binary_files' | 'cpp_artifacts'>;
     try {
       const artifacts = omitInputs || !this.cppArtifacts ? null : { ...this.cppArtifacts };
+      if (artifacts?.cacheCertificate !== undefined) {
+        const raw = artifacts.cacheCertificate;
+        // Optional metadata cannot force an unbounded clone or a malformed
+        // WorkerStart. Valid certificate strings remain byte-exact.
+        if (
+          typeof raw !== 'string' ||
+          raw.length > 1024 * 1024 ||
+          new TextEncoder().encode(raw).byteLength > 1024 * 1024
+        )
+          delete artifacts.cacheCertificate;
+      }
       snapshot = {
         fs: omitInputs ? {} : structuredClone(this.fs),
         binary_files: Object.fromEntries(
@@ -390,6 +452,7 @@ export class Engine {
       operationId: ++this.operationId,
       cacheEpoch: this.generation,
       prepareOnly,
+      validateCacheInputs,
       settled: false,
       buildOnly,
       debug,
@@ -405,6 +468,7 @@ export class Engine {
         ...snapshot,
         lang: this.lang,
         prepare_compiler: prepareOnly,
+        validate_cache_inputs: validateCacheInputs,
         scope_epoch: this.scopeEpoch,
         operation_id: this.operationId,
         cache_epoch: this.generation,
@@ -415,7 +479,12 @@ export class Engine {
           this.options?.objectCache && !debug && !prepareOnly
             ? {
                 generation: this.generation,
-                entries: this.objects.snapshot()
+                entries: this.objects.snapshot(),
+                max_entry_metadata_bytes: Math.min(
+                  this.objects.limits.maxEntryMetadataBytes,
+                  this.objects.limits.maxMetadataBytes,
+                  1024 * 1024
+                )
               }
             : null
       }
@@ -467,7 +536,32 @@ export class Engine {
       }
       if (message.operationId !== job.operationId || message.scopeEpoch !== job.scopeEpoch) return;
       try {
-        if (message.type === 'stop') {
+        if (message.type === 'cpp_cache_eligibility') {
+          if (
+            this.options?.toolchainProfile !== 'stock-certified-v1' ||
+            (job.prepareOnly && !job.validateCacheInputs)
+          )
+            return;
+          const digest = (value: unknown): value is string =>
+            typeof value === 'string' && /^[0-9a-f]{64}$/.test(value);
+          const valid =
+            message.eligible === true &&
+            digest(message.certificate_sha256) &&
+            digest(message.snapshot);
+          this.cacheValidation = {
+            eligible: valid,
+            certificate: digest(message.certificate_sha256)
+              ? message.certificate_sha256
+              : undefined,
+            snapshot: valid ? message.snapshot! : undefined,
+            operationId: job.operationId,
+            reason: valid
+              ? undefined
+              : typeof message.reason === 'string'
+                ? message.reason.slice(0, 128)
+                : 'stock-input-validation'
+          };
+        } else if (message.type === 'stop') {
           this.finish(job, {
             type: 'completed',
             exitCode: message.exit_code,
@@ -536,11 +630,25 @@ export class Engine {
       if (valid && job.cacheEpoch === this.generation) this.objects.commitBatch();
       else {
         this.objects.abandonBatch();
+        if (this.cacheValidation?.operationId === job.operationId)
+          this.cacheValidation = {
+            ...this.cacheValidation,
+            eligible: false,
+            snapshot: undefined,
+            reason: 'stock-publication-budget-or-validation'
+          };
       }
     } catch {
       // A Map insertion can fail after partial publication. Clear both maps
       // and accounting before acknowledging optional-cache failure.
       this.objects.clear();
+      if (this.cacheValidation?.operationId === job.operationId)
+        this.cacheValidation = {
+          ...this.cacheValidation,
+          eligible: false,
+          snapshot: undefined,
+          reason: 'stock-publication-failure'
+        };
     }
     if (this.current(job))
       slot.worker.postMessage({
@@ -559,7 +667,8 @@ export class Engine {
       prefetch_urls('c'),
       !!this.options?.cacheCompilerModule,
       this.toolchainController.signal,
-      cpp_exception_hash()
+      cpp_exception_hash(),
+      this.options?.toolchainProfile
     );
     this.toolchainLoading = pending;
     this.initializing.add(pending);
@@ -653,6 +762,7 @@ export class Engine {
 
   private finish(job: Job, result: RunResult): void {
     if (!this.current(job)) return;
+    if (result.type !== 'completed' || result.exitCode !== 0) this.cacheValidation = undefined;
     // Fence before cleanup or any observable callback can dispatch queued-ready work.
     job.settled = true;
     const worker = this.slot?.worker;

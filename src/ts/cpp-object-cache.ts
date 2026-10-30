@@ -18,6 +18,8 @@ export interface ObjectRecord {
   key: string;
   object_hash: string;
   object: Uint8Array;
+  /** Internal validated compiler metadata; never a caller-supplied capability. */
+  receipt?: string | null;
 }
 
 export interface ObjectCacheStats {
@@ -111,6 +113,7 @@ export class CppObjectCache {
       typeof value.object_hash !== 'string' ||
       !/^[a-f0-9]{64}$/.test(value.key) ||
       !/^[a-f0-9]{64}$/.test(value.object_hash) ||
+      (value.receipt != null && typeof value.receipt !== 'string') ||
       !(value.object instanceof Uint8Array)
     )
       return;
@@ -118,7 +121,8 @@ export class CppObjectCache {
       JSON.stringify({
         source: value.source,
         key: value.key,
-        object_hash: value.object_hash
+        object_hash: value.object_hash,
+        ...(value.receipt == null ? {} : { receipt: value.receipt })
       })
     ).byteLength;
   }
@@ -155,10 +159,11 @@ export class CppObjectCache {
   }
 
   snapshot(): ObjectRecord[] {
-    return [...this.records.values()].map(({ source, key, object_hash, object }) => ({
+    return [...this.records.values()].map(({ source, key, object_hash, object, receipt }) => ({
       source,
       key,
       object_hash,
+      ...(receipt == null ? {} : { receipt }),
       object: object.slice()
     }));
   }

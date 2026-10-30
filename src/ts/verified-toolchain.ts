@@ -7,6 +7,7 @@ export interface ToolchainSeed {
   compilerHash: string;
   sysrootHash: string;
   exceptionsHash: string;
+  stockProfile?: boolean;
   module?: WebAssembly.Module;
 }
 
@@ -63,6 +64,7 @@ export class VerifiedToolchain {
       throw new Error('C++ toolchain integrity mismatch');
     if (signal?.aborted) throw new DOMException('Toolchain loading aborted', 'AbortError');
     if (compilation.status === 'rejected') throw compilation.reason;
+    owner.#seed.stockProfile = manifest.profile === 'stock-certified-v1';
     owner.#seed.module = compilation.value;
     return owner;
   }

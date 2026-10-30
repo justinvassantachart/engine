@@ -1,3 +1,5 @@
+import stockCertificates from './stock-cache-certificates.json' with { type: 'json' };
+
 /** Build-fixed legacy identities, verified against the shipping @yowasp/clang artifact.
  */
 export const LEGACY_TOOLCHAIN_DIGESTS = Object.freeze({
@@ -7,11 +9,13 @@ export const LEGACY_TOOLCHAIN_DIGESTS = Object.freeze({
 });
 
 export interface ToolchainManifest {
-  readonly profile: 'legacy';
+  readonly profile: 'legacy' | 'stock-certified-v1';
   readonly digests: Readonly<Record<keyof typeof LEGACY_TOOLCHAIN_DIGESTS, string>>;
 }
 
 export function requireToolchainManifest(profile = 'legacy'): ToolchainManifest {
   if (profile === 'legacy') return { profile, digests: LEGACY_TOOLCHAIN_DIGESTS };
+  if (profile === 'stock-certified-v1' && stockCertificates.length > 0)
+    return { profile, digests: LEGACY_TOOLCHAIN_DIGESTS };
   throw new Error(`The ${profile} toolchain is not available in this build`);
 }
