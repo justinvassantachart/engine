@@ -1,6 +1,6 @@
 # Clang object-cache toolchain
 
-This directory starts with the **unmodified reproduction control** for the shipped
+This directory contains the **accepted unmodified reproduction control** for the shipped
 `@yowasp/clang@22.0.0-git20542-10`. It is not a receipt-capable release and does not
 enable a runtime profile. The source-backed candidate pins SDK 29, LLVM and
 wasi-libc commits, the upstream recipe, MinSizeRel with assertions and full LTO.
@@ -13,7 +13,11 @@ tools and transitives, including the formerly ranged esbuild input. A build
 records installed package versions, repository-index hashes, native tablegen
 hashes, CMake caches, generated toolchains and artifact hashes. It preserves the
 upstream source date epoch. `gzip -n` is only a new deterministic wrapper; parity
-is checked against the **uncompressed** shipped resource tar.
+uses the **uncompressed** shipped resource tar as a pinned comparison input.
+The accepted rebuild differs in archive packing mtimes, assertion source paths
+and checked linked layout; it is not historically bit-identical. Complete
+function/table bijections, initialized-byte coverage, sysroot member relocation
+checks and real-browser parity are bound by `control-validation.json`.
 
 Build outside the repository on a Linux x86-64 machine with sufficient memory
 for LLVM's full LTO link:
@@ -34,8 +38,9 @@ The workflow defaults to the unmodified `control` arm. Ordinary toolchain
 commits do not trigger a rebuild; only manual dispatch or an explicit
 `build-request.json` change does. The optional `observer` arm refuses to start
 without the actual accepted `control-validation.json`, exact `observer.patch`
-and its digest-bound candidate manifest. Those files are intentionally absent
-until the corresponding gates are complete.
+and its digest-bound candidate manifest. The committed control acceptance binds
+eight completed gates, including full artifact-difference attribution. The
+observer patch is a candidate and does not enable receipt admission.
 
 Observer builds retain the isolated source/build tree, verified SDK archive and
 bounded ccache under immutable per-run cache keys. `build-state.py` fingerprints
@@ -54,3 +59,10 @@ Build receipts remain explicitly unvalidated until semantic, real-engine and
 paired browser gates pass. Validated compiler/sysroot bytes and source notices
 are intended for the immutable engine package's `dist/cpp-cache-receipt-v1/`
 directory, allowing the course bundler to serve them on its own origin.
+
+`observer-design.md` records the two safety reconciliations found through actual
+control probes: optional registration uses a non-owning collector slot and
+allocation-safe callback chaining, and actual-loaded PCH input proof uses a
+bounded reader instead of forcing unsafe stock visitation of otherwise-unused
+records. `conformance/pch-reader-test.cpp` checks the pure reader under sanitizers.
+Native reader tests do not certify the actual compiler import or admission.

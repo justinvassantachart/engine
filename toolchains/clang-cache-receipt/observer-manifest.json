@@ -1,0 +1,44 @@
+{
+  "schema": 1,
+  "status": "candidate",
+  "capability": "webide-object-cache-v1",
+  "abi": "webide_compiler.cache_receipt_v1(i32,i32)->i32",
+  "controlValidationSha256": "cc58fa920647e37a88ae755439fa1c43ec7d4cf6f9653c22da8f9f9cc7bf16eb",
+  "patch": {
+    "path": "observer.patch",
+    "sha256": "42a025166431ccddbf04396b2ccf59a15bfc492b1c187939fa746c2c44fd2c6e",
+    "bytes": 44394
+  },
+  "pinnedLlvmCommit": "9560ae0f2cc440e4fc891fddbc119da6f56daa59",
+  "intent": "Observation-only frontend option, unsuppressible builtin expansion hook, bounded dependencies/probes, actual-loaded PCH metadata proof and private optional completion import.",
+  "ordinaryFlagsUnchanged": true,
+  "sdkVersion": 29,
+  "configuration": "MinSizeRel",
+  "assertions": true,
+  "localValidation": {
+    "patchWhitespace": "passed",
+    "pchBoundedReader": {
+      "status": "passed",
+      "sha256": "6ca1000c4d4d02a663ab6b42a3a109dbc1233b4a490c1283e9bdf52027e2269f"
+    },
+    "fullLlvmAdapterCompiled": false,
+    "actualWasmConformance": "pending",
+    "pairedBrowserOverhead": "pending",
+    "independentSourceReview": {
+      "status": "passed-for-candidate-build",
+      "sha256": "5ffc4ae446a14ac5e44ebc6144cdb994ac7f9ecd6ec97cc965546aa78ea08782"
+    }
+  },
+  "limits": {
+    "receiptBytes": 1048576,
+    "arenaBytes": 1048576,
+    "dependencies": 16384,
+    "includeProbes": 8192,
+    "pchFiles": 16,
+    "stringBytes": 4096,
+    "astPendingNodes": 65536,
+    "astVisitedNodes": 1000000,
+    "irVisitedInstructions": 1000000
+  },
+  "releaseEligible": false
+}

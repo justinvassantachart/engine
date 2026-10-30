@@ -1,0 +1,1002 @@
+diff --git a/clang/include/clang/AST/Decl.h b/clang/include/clang/AST/Decl.h
+index 5c46c9121..0ad41c8e6 100644
+--- a/clang/include/clang/AST/Decl.h
++++ b/clang/include/clang/AST/Decl.h
+@@ -1369,6 +1369,8 @@ public:
+     return const_cast<VarDecl *>(this)->getInit();
+   }
+   Expr *getInit();
++  /// Never deserialize a lazy initializer for optional observation.
++  Stmt *getInitIfAlreadyLoaded() const;
+ 
+   /// Retrieve the address of the initializer expression.
+   Stmt **getInitAddress();
+@@ -2323,6 +2325,14 @@ public:
+   bool isThisDeclarationInstantiatedFromAFriendDefinition() const;
+ 
+   /// Returns whether this specific declaration of the function has a body.
++  /// Read only the body already held by this declaration, without walking
++  /// redeclarations or querying the external AST source.
++  Stmt *getBodyIfAlreadyLoaded() const {
++    if (FunctionDeclBits.HasDefaultedOrDeletedInfo || Body.isOffset())
++      return nullptr;
++    return Body.get(nullptr);
++  }
++
+   bool doesThisDeclarationHaveABody() const {
+     return (!FunctionDeclBits.HasDefaultedOrDeletedInfo && Body) ||
+            isLateTemplateParsed();
+diff --git a/clang/include/clang/CodeGen/CodeGenAction.h b/clang/include/clang/CodeGen/CodeGenAction.h
+index 186dbb43f..66b2b9924 100644
+--- a/clang/include/clang/CodeGen/CodeGenAction.h
++++ b/clang/include/clang/CodeGen/CodeGenAction.h
+@@ -20,6 +20,7 @@ namespace llvm {
+ namespace clang {
+ class BackendConsumer;
+ class CodeGenerator;
++class DependencyCollector;
+ 
+ class CodeGenAction : public ASTFrontendAction {
+ private:
+@@ -44,6 +45,7 @@ private:
+   };
+ 
+   unsigned Act;
++  DependencyCollector *WebIDEReceipt = nullptr;
+   std::unique_ptr<llvm::Module> TheModule;
+ 
+   /// Bitcode modules to link in to our module.
+@@ -57,6 +59,7 @@ private:
+   bool loadLinkModules(CompilerInstance &CI);
+ 
+ protected:
++  bool BeginInvocation(CompilerInstance &CI) override;
+   bool BeginSourceFileAction(CompilerInstance &CI) override;
+ 
+   /// Create a new code generation action.  If the optional \p _VMContext
+diff --git a/clang/include/clang/Frontend/CompilerInstance.h b/clang/include/clang/Frontend/CompilerInstance.h
+index d0b41e9f1..baf446791 100644
+--- a/clang/include/clang/Frontend/CompilerInstance.h
++++ b/clang/include/clang/Frontend/CompilerInstance.h
+@@ -954,6 +954,11 @@ public:
+ 
+   bool lookupMissingImports(StringRef Name, SourceLocation TriggerLoc) override;
+ 
++  /// Non-owning, bounded optional observer, owned by the frontend action.
++  DependencyCollector *WebIDEReceiptCollector = nullptr;
++  void setWebIDEReceiptCollector(DependencyCollector *C) { WebIDEReceiptCollector = C; }
++  DependencyCollector *getWebIDEReceiptCollector() const { return WebIDEReceiptCollector; }
++
+   void addDependencyCollector(std::shared_ptr<DependencyCollector> Listener) {
+     DependencyCollectors.push_back(std::move(Listener));
+   }
+diff --git a/clang/include/clang/Frontend/FrontendOptions.h b/clang/include/clang/Frontend/FrontendOptions.h
+index ba7da56cb..bd76095f3 100644
+--- a/clang/include/clang/Frontend/FrontendOptions.h
++++ b/clang/include/clang/Frontend/FrontendOptions.h
+@@ -281,6 +281,9 @@ public:
+   LLVM_PREFERRED_TYPE(bool)
+   unsigned DisableFree : 1;
+ 
++  /// Observation-only host receipt; not serialized into language/PCH options.
++  bool WebIDECacheReceipt = false;
++
+   /// When generating PCH files, instruct the AST writer to create relocatable
+   /// PCH files.
+   LLVM_PREFERRED_TYPE(bool)
+diff --git a/clang/include/clang/Frontend/WebIDECacheReceipt.h b/clang/include/clang/Frontend/WebIDECacheReceipt.h
+new file mode 100644
+index 000000000..357abed65
+--- /dev/null
++++ b/clang/include/clang/Frontend/WebIDECacheReceipt.h
+@@ -0,0 +1,17 @@
++//===- WebIDECacheReceipt.h - Optional bounded cache observation ---*- C++ -*-===//
++// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
++// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
++#ifndef LLVM_CLANG_FRONTEND_WEBIDECACHERECEIPT_H
++#define LLVM_CLANG_FRONTEND_WEBIDECACHERECEIPT_H
++namespace llvm { class Module; }
++namespace clang {
++class ASTContext;
++class CompilerInstance;
++class DependencyCollector;
++// These functions never affect compilation success and never query the filesystem.
++DependencyCollector *createWebIDECacheReceipt(CompilerInstance &) noexcept;
++void destroyWebIDECacheReceipt(DependencyCollector *) noexcept;
++void observeWebIDECacheReceipt(DependencyCollector *, ASTContext &, llvm::Module *) noexcept;
++void finishWebIDECacheReceipt(DependencyCollector *) noexcept;
++}
++#endif
+diff --git a/clang/include/clang/Lex/PPCallbacks.h b/clang/include/clang/Lex/PPCallbacks.h
+index e6120c564..f0cc3c228 100644
+--- a/clang/include/clang/Lex/PPCallbacks.h
++++ b/clang/include/clang/Lex/PPCallbacks.h
+@@ -369,6 +369,9 @@ public:
+ 
+   /// Hook called when a '__has_include' or '__has_include_next' directive is
+   /// read.
++  /// Invoked only for an actually expanded builtin, before token mutation.
++  virtual void BuiltinMacroExpanded(StringRef Name) {}
++
+   virtual void HasInclude(SourceLocation Loc, StringRef FileName, bool IsAngled,
+                           OptionalFileEntryRef File,
+                           SrcMgr::CharacteristicKind FileType);
+@@ -620,6 +623,11 @@ public:
+     Second->HasEmbed(Loc, FileName, IsAngled, File);
+   }
+ 
++  void BuiltinMacroExpanded(StringRef Name) override {
++    First->BuiltinMacroExpanded(Name);
++    Second->BuiltinMacroExpanded(Name);
++  }
++
+   void HasInclude(SourceLocation Loc, StringRef FileName, bool IsAngled,
+                   OptionalFileEntryRef File,
+                   SrcMgr::CharacteristicKind FileType) override;
+diff --git a/clang/include/clang/Lex/Preprocessor.h b/clang/include/clang/Lex/Preprocessor.h
+index 4bff1b395..3509649ac 100644
+--- a/clang/include/clang/Lex/Preprocessor.h
++++ b/clang/include/clang/Lex/Preprocessor.h
+@@ -1338,6 +1338,8 @@ public:
+                                                 std::move(Callbacks));
+     Callbacks = std::move(C);
+   }
++  /// Optional observation must not fail ordinary compilation on allocation pressure.
++  bool tryAddPPCallbacks(std::unique_ptr<PPCallbacks> C) noexcept;
+   void removePPCallbacks() { Callbacks.reset(); }
+   /// \}
+ 
+diff --git a/clang/include/clang/Options/Options.td b/clang/include/clang/Options/Options.td
+index b2b8dc5d4..e80876946 100644
+--- a/clang/include/clang/Options/Options.td
++++ b/clang/include/clang/Options/Options.td
+@@ -8342,6 +8342,11 @@ def code_completion_with_fixits : Flag<["-"], "code-completion-with-fixits">,
+ def skip_function_bodies : Flag<["-"], "skip-function-bodies">,
+   HelpText<"Skip function bodies when possible">,
+   MarshallingInfoFlag<FrontendOpts<"SkipFunctionBodies">>;
++def fwebide_cache_receipt : Flag<["-"], "fwebide-cache-receipt">,
++  Visibility<[CC1Option]>,
++  HelpText<"Observe bounded object-cache metadata through the private host ABI">,
++  MarshallingInfoFlag<FrontendOpts<"WebIDECacheReceipt">>;
++
+ defm disable_free : BoolOption<"",
+   "disable-free",
+   FrontendOpts<"DisableFree">,
+diff --git a/clang/include/clang/Serialization/ModuleFile.h b/clang/include/clang/Serialization/ModuleFile.h
+index 783e2ba7a..ec0d36363 100644
+--- a/clang/include/clang/Serialization/ModuleFile.h
++++ b/clang/include/clang/Serialization/ModuleFile.h
+@@ -257,9 +257,15 @@ public:
+   /// Absolute offset of the start of the input-files block.
+   uint64_t InputFilesOffsetBase = 0;
+ 
++  /// Checked end of the input block, retained for bounded read-only observation.
++  uint64_t InputFilesBlockEndBit = 0;
++
+   /// Relative offsets for all of the input file entries in the AST file.
+   const llvm::support::unaligned_uint64_t *InputFileOffsets = nullptr;
+ 
++  /// Exact offset-table blob extent, without trusting adjacent serialized bytes.
++  size_t InputFileOffsetsBytes = 0;
++
+   /// The input files that have been loaded from this AST file.
+   std::vector<InputFile> InputFilesLoaded;
+ 
+diff --git a/clang/lib/AST/Decl.cpp b/clang/lib/AST/Decl.cpp
+index 66c625f41..66aad0be4 100644
+--- a/clang/lib/AST/Decl.cpp
++++ b/clang/lib/AST/Decl.cpp
+@@ -2417,6 +2417,17 @@ bool VarDecl::hasInit() const {
+   return !Init.isNull();
+ }
+ 
++Stmt *VarDecl::getInitIfAlreadyLoaded() const {
++  if (!hasInit())
++    return nullptr;
++  if (auto *S = dyn_cast<Stmt *>(Init))
++    return S;
++  if (auto *E = dyn_cast<EvaluatedStmt *>(Init))
++    if (!E->Value.isOffset())
++      return E->Value.get(nullptr);
++  return nullptr;
++}
++
+ Expr *VarDecl::getInit() {
+   if (!hasInit())
+     return nullptr;
+diff --git a/clang/lib/CodeGen/CodeGenAction.cpp b/clang/lib/CodeGen/CodeGenAction.cpp
+index a5ef4ac9d..cffc61547 100644
+--- a/clang/lib/CodeGen/CodeGenAction.cpp
++++ b/clang/lib/CodeGen/CodeGenAction.cpp
+@@ -25,6 +25,7 @@
+ #include "clang/CodeGen/ModuleBuilder.h"
+ #include "clang/Driver/DriverDiagnostic.h"
+ #include "clang/Frontend/CompilerInstance.h"
++#include "clang/Frontend/WebIDECacheReceipt.h"
+ #include "clang/Frontend/MultiplexConsumer.h"
+ #include "clang/Lex/Preprocessor.h"
+ #include "clang/Serialization/ASTWriter.h"
+@@ -245,6 +246,8 @@ void BackendConsumer::HandleTranslationUnit(ASTContext &C) {
+   if (!getModule())
+     return;
+ 
++  observeWebIDECacheReceipt(CI.getWebIDEReceiptCollector(), C, getModule());
++
+   LLVMContext &Ctx = getModule()->getContext();
+   std::unique_ptr<DiagnosticHandler> OldDiagnosticHandler =
+     Ctx.getDiagnosticHandler();
+@@ -864,6 +867,7 @@ CodeGenAction::CodeGenAction(unsigned _Act, LLVMContext *_VMContext)
+       OwnsVMContext(!_VMContext) {}
+ 
+ CodeGenAction::~CodeGenAction() {
++  destroyWebIDECacheReceipt(WebIDEReceipt);
+   TheModule.reset();
+   if (OwnsVMContext)
+     delete VMContext;
+@@ -899,6 +903,15 @@ bool CodeGenAction::loadLinkModules(CompilerInstance &CI) {
+   return false;
+ }
+ 
++bool CodeGenAction::BeginInvocation(CompilerInstance &CI) {
++  if (!ASTFrontendAction::BeginInvocation(CI)) return false;
++  if (Act == Backend_EmitObj && CI.getFrontendOpts().WebIDECacheReceipt) {
++    WebIDEReceipt = createWebIDECacheReceipt(CI);
++    CI.setWebIDEReceiptCollector(WebIDEReceipt);
++  }
++  return true;
++}
++
+ bool CodeGenAction::hasIRSupport() const { return true; }
+ 
+ void CodeGenAction::EndSourceFileAction() {
+@@ -910,6 +923,8 @@ void CodeGenAction::EndSourceFileAction() {
+ 
+   // Steal the module from the consumer.
+   TheModule = BEConsumer->takeModule();
++  finishWebIDECacheReceipt(WebIDEReceipt);
++  getCompilerInstance().setWebIDEReceiptCollector(nullptr);
+ }
+ 
+ std::unique_ptr<llvm::Module> CodeGenAction::takeModule() {
+diff --git a/clang/lib/Frontend/CMakeLists.txt b/clang/lib/Frontend/CMakeLists.txt
+index c40baa365..0d1bb6d14 100644
+--- a/clang/lib/Frontend/CMakeLists.txt
++++ b/clang/lib/Frontend/CMakeLists.txt
+@@ -2,6 +2,7 @@ add_subdirectory(Rewrite)
+ 
+ set(LLVM_LINK_COMPONENTS
+   BitReader
++  Core
+   BitstreamReader
+   Option
+   Plugins
+@@ -12,6 +13,8 @@ set(LLVM_LINK_COMPONENTS
+ 
+ add_clang_library(clangFrontend
+   ASTConsumers.cpp
++  WebIDECacheReceipt.cpp
++  WebIDECacheReceiptPCH.cpp
+   ASTMerge.cpp
+   ASTUnit.cpp
+   ChainedDiagnosticConsumer.cpp
+diff --git a/clang/lib/Frontend/CompilerInstance.cpp b/clang/lib/Frontend/CompilerInstance.cpp
+index 088538c74..a9c743d2d 100644
+--- a/clang/lib/Frontend/CompilerInstance.cpp
++++ b/clang/lib/Frontend/CompilerInstance.cpp
+@@ -523,6 +523,8 @@ void CompilerInstance::createPreprocessor(TranslationUnitKind TUKind) {
+ 
+   for (auto &Listener : DependencyCollectors)
+     Listener->attachToPreprocessor(*PP);
++  if (WebIDEReceiptCollector)
++    WebIDEReceiptCollector->attachToPreprocessor(*PP);
+ 
+   // Handle generating header include information, if requested.
+   if (DepOpts.ShowHeaderIncludes)
+@@ -664,6 +666,8 @@ IntrusiveRefCntPtr<ASTReader> CompilerInstance::createPCHExternalASTSource(
+ 
+   for (auto &Listener : DependencyCollectors)
+     Listener->attachToASTReader(*Reader);
++  if (WebIDEReceiptCollector)
++    WebIDEReceiptCollector->attachToASTReader(*Reader);
+ 
+   auto Listener = std::make_unique<ReadModuleNames>(PP);
+   auto &ListenerRef = *Listener;
+diff --git a/clang/lib/Frontend/WebIDECacheReceipt.cpp b/clang/lib/Frontend/WebIDECacheReceipt.cpp
+new file mode 100644
+index 000000000..a726bd1f5
+--- /dev/null
++++ b/clang/lib/Frontend/WebIDECacheReceipt.cpp
+@@ -0,0 +1,325 @@
++//===- WebIDECacheReceipt.cpp - Bounded observation only --------------------===//
++// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
++// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
++#include "clang/Frontend/WebIDECacheReceipt.h"
++#include "WebIDECacheReceiptPCH.h"
++#include "clang/AST/ASTContext.h"
++#include "clang/AST/DeclCXX.h"
++#include "clang/AST/DeclTemplate.h"
++#include "clang/AST/Stmt.h"
++#include "clang/AST/StmtCXX.h"
++#include "clang/Basic/SourceManager.h"
++#include "clang/Frontend/CompilerInstance.h"
++#include "clang/Frontend/Utils.h"
++#include "clang/Lex/PPCallbacks.h"
++#include "clang/Lex/Preprocessor.h"
++#include "clang/Lex/PreprocessorLexer.h"
++#include "clang/Lex/PreprocessorOptions.h"
++#include "clang/Serialization/ASTReader.h"
++#include "clang/Serialization/ModuleFile.h"
++#include "clang/Serialization/ModuleManager.h"
++#include "llvm/IR/InlineAsm.h"
++#include "llvm/IR/Instructions.h"
++#include "llvm/IR/Module.h"
++#include "llvm/Support/ConvertUTF.h"
++#include <cstdlib>
++#include <cstring>
++#include <new>
++
++using namespace clang;
++using llvm::StringRef;
++namespace {
++constexpr unsigned MaxString = 4096, MaxDeps = 16384, MaxProbes = 8192;
++constexpr unsigned ArenaBytes = 1024 * 1024, JsonBytes = 1024 * 1024;
++struct Ref { unsigned Offset = 0, Length = 0; };
++struct Probe { Ref Name, Includer, Found; bool Angled = false, HasFound = false; };
++class Receipt;
++class ReceiptCallbacks final : public PPCallbacks {
++  Receipt &Owner;
++  Preprocessor &PP;
++public:
++  ReceiptCallbacks(Receipt &O, Preprocessor &P) noexcept : Owner(O), PP(P) {}
++  static void *operator new(size_t N, const std::nothrow_t &) noexcept { return std::malloc(N); }
++  static void operator delete(void *P) noexcept { std::free(P); }
++  static void operator delete(void *P, const std::nothrow_t &) noexcept { std::free(P); }
++  void LexedFileChanged(FileID, LexedFileChangeReason, SrcMgr::CharacteristicKind,
++                        FileID, SourceLocation) override;
++  void FileSkipped(const FileEntryRef &, const Token &, SrcMgr::CharacteristicKind) override;
++  void HasInclude(SourceLocation, StringRef, bool, OptionalFileEntryRef,
++                  SrcMgr::CharacteristicKind) override;
++  void BuiltinMacroExpanded(StringRef) override;
++  void EmbedDirective(SourceLocation, StringRef, bool, OptionalFileEntryRef,
++                      const LexEmbedParametersResult &) override;
++  void HasEmbed(SourceLocation, StringRef, bool, OptionalFileEntryRef) override;
++  void InclusionDirective(SourceLocation, const Token &, StringRef, bool,
++                           CharSourceRange, OptionalFileEntryRef, StringRef,
++                           StringRef, const clang::Module *, bool,
++                           SrcMgr::CharacteristicKind) override;
++};
++
++class Receipt final : public DependencyCollector {
++  CompilerInstance &CI;
++  ASTReader *Reader = nullptr;
++  char Arena[ArenaBytes], Json[JsonBytes];
++  unsigned Used = 0, JsonUsed = 0;
++  Ref Source, Dependencies[MaxDeps], PCHs[16];
++  unsigned DepCount = 0, PCHCount = 0, Slots[MaxDeps * 2] = {};
++  Probe Probes[MaxProbes];
++  unsigned ProbeCount = 0;
++  const char *Unsupported = nullptr;
++  bool Date = false, Time = false, Timestamp = false, Counter = false;
++  bool Observed = false, Emitted = false, PCHIndependent = true, JsonOK = true;
++  // Traversal uses fixed storage, skips lazy/imported declarations and never
++  // invokes an allocating RecursiveASTVisitor or external AST source.
++  struct Node { const void *Ptr; bool IsDecl; };
++  Node Nodes[65536];
++  unsigned NodeCount = 0;
++  StringRef text(Ref R) const noexcept { return StringRef(Arena + R.Offset, R.Length); }
++  bool store(StringRef S, Ref &R) noexcept {
++    if (S.empty() || S.size() > MaxString || S.contains('\0') || S.size() > ArenaBytes - Used) {
++      unsupported("metadata-limit"); return false;
++    }
++    for (unsigned char C : S.bytes())
++      if (C < 32 || C == 127) { unsupported("unsupported-string"); return false; }
++    const auto *U = reinterpret_cast<const llvm::UTF8 *>(S.data());
++    if (!llvm::isLegalUTF8String(&U, U + S.size())) { unsupported("invalid-utf8"); return false; }
++    R = {Used, static_cast<unsigned>(S.size())};
++    std::memcpy(Arena + Used, S.data(), S.size()); Used += S.size(); return true;
++  }
++  bool path(StringRef S, char (&Out)[MaxString + 1], unsigned &N) noexcept {
++    if (S.empty() || S.size() > MaxString || S.contains('\0') || S.contains('\\')) {
++      unsupported("unsupported-path"); return false;
++    }
++    for (unsigned char C : S.bytes())
++      if (C < 32 || C == 127) { unsupported("unsupported-path"); return false; }
++    N = 1; Out[0] = '/';
++    while (!S.empty()) {
++      auto Pair = S.split('/'); auto Part = Pair.first; S = Pair.second;
++      if (Part.empty() || Part == ".") continue;
++      if (Part == "..") {
++        if (N == 1) { unsupported("path-outside-root"); return false; }
++        while (N > 1 && Out[N - 1] != '/') --N;
++        if (N > 1) --N;
++        continue;
++      }
++      if (Part.front() == '<' || Part.size() + N + (N > 1 ? 1 : 0) > MaxString) {
++        unsupported("unsupported-path"); return false;
++      }
++      if (N > 1) Out[N++] = '/';
++      std::memcpy(Out + N, Part.data(), Part.size()); N += Part.size();
++    }
++    if (N == 1) { unsupported("unsupported-path"); return false; }
++    Out[N] = 0; return true;
++  }
++  bool storePath(StringRef S, Ref &R) noexcept {
++    char B[MaxString + 1]; unsigned N;
++    return path(S, B, N) && store(StringRef(B, N), R);
++  }
++  void put(StringRef S) noexcept {
++    if (!JsonOK || S.size() > JsonBytes - JsonUsed) { JsonOK = false; return; }
++    std::memcpy(Json + JsonUsed, S.data(), S.size()); JsonUsed += S.size();
++  }
++  void quoted(StringRef S) noexcept {
++    static constexpr char Hex[] = "0123456789abcdef";
++    put("\"");
++    for (unsigned char C : S.bytes()) {
++      if (C == '"') put("\\\"");
++      else if (C == '\\') put("\\\\");
++      else if (C < 32) { char E[] = {'\\', 'u', '0', '0', Hex[C >> 4], Hex[C & 15]}; put(StringRef(E, 6)); }
++      else { char V = C; put(StringRef(&V, 1)); }
++    }
++    put("\"");
++  }
++  void refs(const Ref *Rs, unsigned Count) noexcept {
++    put("["); for (unsigned I = 0; I < Count; ++I) { if (I) put(","); quoted(text(Rs[I])); } put("]");
++  }
++  void push(const Decl *D) noexcept {
++    if (!D || D->isFromASTFile()) return;
++    if (NodeCount == 65536) { unsupported("ast-observation-limit"); return; }
++    Nodes[NodeCount++] = {D, true};
++  }
++  void push(const Stmt *S) noexcept {
++    if (!S) return;
++    if (NodeCount == 65536) { unsupported("ast-observation-limit"); return; }
++    Nodes[NodeCount++] = {S, false};
++  }
++  void inspectAST(ASTContext &C) noexcept {
++    push(C.getTranslationUnitDecl()); unsigned Visited = 0;
++    while (NodeCount && !Unsupported) {
++      if (++Visited > 1000000) { unsupported("ast-observation-limit"); break; }
++      Node N = Nodes[--NodeCount];
++      if (N.IsDecl) {
++        const auto *D = static_cast<const Decl *>(N.Ptr);
++        if (const auto *A = llvm::dyn_cast<FileScopeAsmDecl>(D)) {
++          if (!A->getAsmString()->getString().empty()) unsupported("assembly");
++        }
++        if (const auto *F = llvm::dyn_cast<FunctionDecl>(D)) {
++          // The body of this already source-parsed declaration only.
++          push(F->getBodyIfAlreadyLoaded());
++        }
++        if (const auto *V = llvm::dyn_cast<VarDecl>(D)) push(V->getInitIfAlreadyLoaded());
++        if (const auto *T = llvm::dyn_cast<TemplateDecl>(D)) push(T->getTemplatedDecl());
++        if (const auto *DC = llvm::dyn_cast<DeclContext>(D))
++          for (const Decl *Child : DC->noload_decls()) push(Child);
++      } else {
++        const auto *S = static_cast<const Stmt *>(N.Ptr);
++        if (const auto *A = llvm::dyn_cast<GCCAsmStmt>(S)) {
++          if (!A->getAsmString()->getString().empty()) unsupported("assembly");
++        } else if (const auto *A = llvm::dyn_cast<MSAsmStmt>(S)) {
++          if (!A->getAsmString().empty()) unsupported("assembly");
++        }
++        if (const auto *DS = llvm::dyn_cast<DeclStmt>(S))
++          for (const Decl *D : DS->decls()) push(D);
++        for (const Stmt *Child : S->children()) push(Child);
++      }
++    }
++  }
++  static bool pchSink(void *Self, StringRef Name) noexcept {
++    return static_cast<Receipt *>(Self)->dependency(Name);
++  }
++  void inspectPCH() noexcept {
++    if (!Reader) {
++      if (!CI.getPreprocessorOpts().ImplicitPCHInclude.empty()) unsupported("pch-not-observed");
++      return;
++    }
++    for (const auto &M : Reader->getModuleManager()) {
++      if (M.Kind != serialization::MK_PCH || !M.Imports.empty() ||
++          !M.ImportedBy.empty() || !M.TransitiveImports.empty()) {
++        unsupported("imported-or-chained-pch"); continue;
++      }
++      if (PCHCount == 16) { unsupported("pch-count-limit"); return; }
++      Ref R;
++      if (!storePath(M.FileName, R) || !dependency(M.FileName)) continue;
++      PCHs[PCHCount++] = R;
++      auto Proof = webide::inspectPCHInputs(M, this, pchSink);
++      PCHIndependent &= Proof.metadataIndependent;
++      if (!Proof.complete) unsupported(Proof.unsupported ? Proof.unsupported : "pch-incomplete");
++    }
++    if (PCHCount != (CI.getPreprocessorOpts().ImplicitPCHInclude.empty() ? 0u : 1u))
++      unsupported("pch-set-mismatch");
++  }
++public:
++  explicit Receipt(CompilerInstance &Instance) noexcept : CI(Instance) {
++    const auto &Inputs = CI.getFrontendOpts().Inputs;
++    if (Inputs.size() != 1 || !Inputs.front().isFile()) { unsupported("input-kind"); return; }
++    if (!storePath(Inputs.front().getFile(), Source)) return;
++    dependency(Inputs.front().getFile());
++    if (CI.getLangOpts().Modules || !CI.getPreprocessorOpts().ChainedIncludes.empty())
++      unsupported("modules-or-chained-pch");
++  }
++  static void *operator new(size_t N, const std::nothrow_t &) noexcept { return std::malloc(N); }
++  static void operator delete(void *P) noexcept { std::free(P); }
++  static void operator delete(void *P, const std::nothrow_t &) noexcept { std::free(P); }
++  void unsupported(const char *Why) noexcept { if (!Unsupported) Unsupported = Why; }
++  bool dependency(StringRef S) noexcept {
++    char B[MaxString + 1]; unsigned N;
++    if (!path(S, B, N)) return false;
++    StringRef Name(B, N); uint32_t Hash = 2166136261u;
++    for (unsigned char C : Name.bytes()) Hash = (Hash ^ C) * 16777619u;
++    unsigned Slot = Hash & (MaxDeps * 2 - 1);
++    for (unsigned I = 0; I < MaxDeps * 2; ++I, Slot = (Slot + 1) & (MaxDeps * 2 - 1)) {
++      if (Slots[Slot]) { if (text(Dependencies[Slots[Slot] - 1]) == Name) return true; continue; }
++      if (DepCount == MaxDeps) { unsupported("dependency-limit"); return false; }
++      if (!store(Name, Dependencies[DepCount])) return false;
++      Slots[Slot] = ++DepCount; return true;
++    }
++    unsupported("dependency-limit"); return false;
++  }
++  void probe(Preprocessor &PP, StringRef Name, bool Angled, OptionalFileEntryRef Found) noexcept {
++    if (ProbeCount == MaxProbes) { unsupported("probe-limit"); return; }
++    auto *Lexer = PP.getCurrentFileLexer();
++    if (!Lexer) { unsupported("probe-includer"); return; }
++    auto File = PP.getSourceManager().getFileEntryRefForID(Lexer->getFileID());
++    if (!File) { unsupported("probe-includer"); return; }
++    Probe P;
++    if (!store(Name, P.Name) || !storePath(File->getName(), P.Includer) || !dependency(File->getName())) return;
++    P.Angled = Angled; P.HasFound = bool(Found);
++    if (Found && (!storePath(Found->getName(), P.Found) || !dependency(Found->getName()))) return;
++    Probes[ProbeCount++] = P;
++  }
++  void builtin(StringRef Name) noexcept {
++    if (Name == "__DATE__") Date = true;
++    else if (Name == "__TIME__") Time = true;
++    else if (Name == "__TIMESTAMP__") Timestamp = true;
++    else if (Name == "__COUNTER__") Counter = true;
++    else if (Name == "__has_embed") unsupported("embed");
++  }
++  void attachToPreprocessor(Preprocessor &PP) override {
++    std::unique_ptr<PPCallbacks> C(new (std::nothrow) ReceiptCallbacks(*this, PP));
++    if (!PP.tryAddPPCallbacks(std::move(C))) unsupported("observer-allocation");
++  }
++  void attachToASTReader(ASTReader &R) override {
++    if (Reader && Reader != &R) unsupported("multiple-ast-readers");
++    Reader = &R;
++    // Deliberately do not attach stock all-input visitation: otherwise unused
++    // malformed PCH input records must not change ordinary compilation.
++  }
++  void observe(ASTContext &C, llvm::Module *M) noexcept {
++    if (Observed) { unsupported("multiple-translation-units"); return; }
++    Observed = true; inspectPCH();
++    if (!M) { unsupported("missing-ir"); return; }
++    if (!M->getModuleInlineAsm().empty()) unsupported("assembly");
++    unsigned IRVisited = 0;
++    for (const auto &F : *M) for (const auto &B : F) for (const auto &I : B) {
++      if (++IRVisited > 1000000) { unsupported("ir-observation-limit"); return; }
++      if (const auto *Call = llvm::dyn_cast<llvm::CallBase>(&I))
++        if (const auto *A = llvm::dyn_cast<llvm::InlineAsm>(Call->getCalledOperand()))
++          if (!A->getAsmString().empty()) unsupported("assembly");
++    }
++    if (!Unsupported) inspectAST(C);
++  }
++  void finish() noexcept;
++};
++void ReceiptCallbacks::LexedFileChanged(FileID F, LexedFileChangeReason R,
++    SrcMgr::CharacteristicKind, FileID, SourceLocation) {
++  if (R != LexedFileChangeReason::EnterFile) return;
++  if (auto File = PP.getSourceManager().getFileEntryRefForID(F)) Owner.dependency(File->getName());
++}
++void ReceiptCallbacks::FileSkipped(const FileEntryRef &F, const Token &, SrcMgr::CharacteristicKind) { Owner.dependency(F.getName()); }
++void ReceiptCallbacks::HasInclude(SourceLocation, StringRef Name, bool Angled,
++    OptionalFileEntryRef F, SrcMgr::CharacteristicKind) { Owner.probe(PP, Name, Angled, F); }
++void ReceiptCallbacks::BuiltinMacroExpanded(StringRef Name) { Owner.builtin(Name); }
++void ReceiptCallbacks::EmbedDirective(SourceLocation, StringRef, bool, OptionalFileEntryRef,
++    const LexEmbedParametersResult &) { Owner.unsupported("embed"); }
++void ReceiptCallbacks::HasEmbed(SourceLocation, StringRef, bool, OptionalFileEntryRef) { Owner.unsupported("embed"); }
++void ReceiptCallbacks::InclusionDirective(SourceLocation, const Token &, StringRef,
++    bool, CharSourceRange, OptionalFileEntryRef, StringRef, StringRef,
++    const clang::Module *, bool Imported, SrcMgr::CharacteristicKind) {
++  if (Imported) Owner.unsupported("modules");
++}
++#if defined(__wasm__)
++extern "C" __attribute__((import_module("webide_compiler"), import_name("cache_receipt_v1")))
++int emitReceipt(const char *, unsigned);
++#else
++static int emitReceipt(const char *, unsigned) noexcept { return 0; }
++#endif
++void Receipt::finish() noexcept {
++  if (Emitted) return;
++  Emitted = true;
++  put("{\"schema\":1,\"capability\":\"webide-object-cache-v1\",\"completed\":");
++  put(Observed ? "true" : "false"); put(",\"source\":"); quoted(text(Source));
++  put(",\"volatileBuiltins\":["); bool Comma = false;
++  if (Date) { quoted("__DATE__"); Comma = true; }
++  if (Time) { if (Comma) put(","); quoted("__TIME__"); Comma = true; }
++  if (Timestamp) { if (Comma) put(","); quoted("__TIMESTAMP__"); }
++  put("],\"usesCounter\":"); put(Counter ? "true" : "false");
++  put(",\"unsupported\":["); if (Unsupported) quoted(Unsupported); put("]");
++  put(",\"dependencies\":"); refs(Dependencies, DepCount);
++  put(",\"includeProbes\":[");
++  for (unsigned I = 0; I < ProbeCount; ++I) {
++    const auto &P = Probes[I]; if (I) put(",");
++    put("{\"name\":"); quoted(text(P.Name)); put(",\"angled\":"); put(P.Angled ? "true" : "false");
++    put(",\"includer\":"); quoted(text(P.Includer)); put(",\"found\":");
++    if (P.HasFound) quoted(text(P.Found)); else put("null"); put("}");
++  }
++  put("],\"importedPchPaths\":"); refs(PCHs, PCHCount);
++  put(",\"pchMetadataIndependent\":"); put(PCHIndependent ? "true" : "false"); put("}");
++  if (JsonOK) (void)emitReceipt(Json, JsonUsed); // Host response cannot affect compilation.
++}
++} // namespace
++DependencyCollector *clang::createWebIDECacheReceipt(CompilerInstance &CI) noexcept { return new (std::nothrow) Receipt(CI); }
++void clang::destroyWebIDECacheReceipt(DependencyCollector *P) noexcept { delete P; }
++void clang::observeWebIDECacheReceipt(DependencyCollector *P, ASTContext &C, llvm::Module *M) noexcept {
++  if (P) static_cast<Receipt *>(P)->observe(C, M);
++}
++void clang::finishWebIDECacheReceipt(DependencyCollector *P) noexcept { if (P) static_cast<Receipt *>(P)->finish(); }
+diff --git a/clang/lib/Frontend/WebIDECacheReceiptPCH.cpp b/clang/lib/Frontend/WebIDECacheReceiptPCH.cpp
+new file mode 100644
+index 000000000..efdcb4e93
+--- /dev/null
++++ b/clang/lib/Frontend/WebIDECacheReceiptPCH.cpp
+@@ -0,0 +1,66 @@
++//===- WebIDECacheReceiptPCH.cpp - Read-only PCH receipt proof ---------------===//
++// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
++// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
++#include "WebIDECacheReceiptPCH.h"
++#include "clang/Serialization/ModuleFile.h"
++#include "llvm/Bitstream/BitstreamReader.h"
++
++namespace clang::webide {
++namespace {
++bool literal(const llvm::BitCodeAbbrevOp &Op, uint64_t Value) noexcept {
++  return Op.isLiteral() && Op.getLiteralValue() == Value;
++}
++bool encoding(const llvm::BitCodeAbbrevOp &Op,
++              llvm::BitCodeAbbrevOp::Encoding Kind, uint64_t Width = 0) noexcept {
++  if (Op.isLiteral() || Op.getEncoding() != Kind)
++    return false;
++  return Kind == llvm::BitCodeAbbrevOp::Blob || Op.getEncodingData() == Width;
++}
++bool canonicalAbbreviations(const llvm::BitstreamCursor &Cursor) noexcept {
++  using Op = llvm::BitCodeAbbrevOp;
++  const auto *Input = Cursor.getAbbrevIfValid(4);
++  const auto *Hash = Cursor.getAbbrevIfValid(5);
++  if (Cursor.getAbbrevIDWidth() != 4 || !Input || !Hash ||
++      Cursor.getAbbrevIfValid(6) || Input->getNumOperandInfos() != 10 ||
++      Hash->getNumOperandInfos() != 3)
++    return false;
++  if (!literal(Input->getOperandInfo(0), 1) ||
++      !encoding(Input->getOperandInfo(1), Op::VBR, 6) ||
++      !encoding(Input->getOperandInfo(2), Op::VBR, 12) ||
++      !encoding(Input->getOperandInfo(3), Op::VBR, 32) ||
++      !encoding(Input->getOperandInfo(8), Op::VBR, 16) ||
++      !encoding(Input->getOperandInfo(9), Op::Blob))
++    return false;
++  for (unsigned I = 4; I != 8; ++I)
++    if (!encoding(Input->getOperandInfo(I), Op::Fixed, 1))
++      return false;
++  return literal(Hash->getOperandInfo(0), 2) &&
++         encoding(Hash->getOperandInfo(1), Op::Fixed, 32) &&
++         encoding(Hash->getOperandInfo(2), Op::Fixed, 32);
++}
++} // namespace
++
++PCHReceiptProof inspectPCHInputs(const serialization::ModuleFile &F,
++                                 void *Context, PCHPathSink Sink) noexcept {
++  if (F.Kind != serialization::MK_PCH || !F.DirectlyImported ||
++      F.RelocatablePCH || F.StandardCXXModule || !F.Imports.empty() ||
++      !F.TransitiveImports.empty() || !F.ImportedBy.empty() ||
++      !F.ExtensionReaders.empty() || !F.ModuleMapPath.empty() ||
++      !F.ModuleOffsetMap.empty() || !Sink)
++    return {false, false, "pch-import-topology"};
++  if (F.NumUserInputFiles > F.InputFilesLoaded.size() ||
++      F.InputFileInfosLoaded.size() != F.InputFilesLoaded.size() ||
++      !canonicalAbbreviations(F.InputFilesCursor))
++    return {false, false, "pch-input-abbreviations"};
++  struct Bridge { void *Context; PCHPathSink Sink; } B{Context, Sink};
++  auto Emit = [](void *Opaque, const char *Path, size_t Size) noexcept {
++    auto &B = *static_cast<Bridge *>(Opaque);
++    return B.Sink(B.Context, llvm::StringRef(Path, Size));
++  };
++  return pch_detail::inspect(
++      {reinterpret_cast<const unsigned char *>(F.Data.data()), F.Data.size(),
++       reinterpret_cast<const unsigned char *>(F.InputFileOffsets),
++       F.InputFileOffsetsBytes, F.InputFilesLoaded.size(), F.InputFilesOffsetBase,
++       F.InputFilesBlockEndBit, F.HasTimestamps}, &B, Emit);
++}
++} // namespace clang::webide
+diff --git a/clang/lib/Frontend/WebIDECacheReceiptPCH.h b/clang/lib/Frontend/WebIDECacheReceiptPCH.h
+new file mode 100644
+index 000000000..1c016a787
+--- /dev/null
++++ b/clang/lib/Frontend/WebIDECacheReceiptPCH.h
+@@ -0,0 +1,16 @@
++//===- WebIDECacheReceiptPCH.h - Read-only PCH receipt proof -------*- C++ -*-===//
++// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
++// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
++#ifndef LLVM_CLANG_LIB_FRONTEND_WEBIDECACHERECEIPTPCH_H
++#define LLVM_CLANG_LIB_FRONTEND_WEBIDECACHERECEIPTPCH_H
++#include "WebIDECacheReceiptPCHReader.h"
++#include "llvm/ADT/StringRef.h"
++namespace clang {
++namespace serialization { class ModuleFile; }
++namespace webide {
++using PCHPathSink = bool (*)(void *, llvm::StringRef) noexcept;
++PCHReceiptProof inspectPCHInputs(const serialization::ModuleFile &, void *,
++                                 PCHPathSink) noexcept;
++} // namespace webide
++} // namespace clang
++#endif
+diff --git a/clang/lib/Frontend/WebIDECacheReceiptPCHReader.h b/clang/lib/Frontend/WebIDECacheReceiptPCHReader.h
+new file mode 100644
+index 000000000..e3f46f818
+--- /dev/null
++++ b/clang/lib/Frontend/WebIDECacheReceiptPCHReader.h
+@@ -0,0 +1,179 @@
++//===- WebIDECacheReceiptPCHReader.h - Bounded PCH observation -----*- C++ -*-===//
++// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
++// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
++//===----------------------------------------------------------------------===//
++#ifndef LLVM_CLANG_LIB_FRONTEND_WEBIDECACHERECEIPTPCHREADER_H
++#define LLVM_CLANG_LIB_FRONTEND_WEBIDECACHERECEIPTPCHREADER_H
++
++#include <cstddef>
++#include <cstdint>
++#include <cstring>
++#include <limits>
++
++namespace clang::webide {
++
++struct PCHReceiptProof {
++  bool complete;
++  bool metadataIndependent;
++  const char *unsupported;
++};
++
++namespace pch_detail {
++// This reader deliberately does not use BitstreamCursor::readRecord or
++// ASTReader::getInputFileInfo. Those ordinary deserialization paths may allocate,
++// diagnose, or assert on otherwise unused malformed system-input records.
++struct InputLayout {
++  const unsigned char *Data;
++  size_t Bytes;
++  const unsigned char *Offsets;
++  size_t OffsetBytes;
++  size_t Count;
++  uint64_t BaseBit;
++  uint64_t EndBit;
++  bool HasTimestamps;
++};
++using PathSink = bool (*)(void *, const char *, size_t) noexcept;
++
++class CheckedBits {
++  const unsigned char *Data;
++  uint64_t End;
++  uint64_t Pos;
++
++public:
++  CheckedBits(const unsigned char *Data, uint64_t Start, uint64_t End) noexcept
++      : Data(Data), End(End), Pos(Start) {}
++  uint64_t position() const noexcept { return Pos; }
++  bool fixed(unsigned Width, uint64_t &Value) noexcept {
++    if (Width > 64 || Pos > End || Width > End - Pos)
++      return false;
++    Value = 0;
++    for (unsigned I = 0; I < Width; ++I, ++Pos)
++      Value |= uint64_t((Data[Pos / 8] >> (Pos % 8)) & 1) << I;
++    return true;
++  }
++  bool vbr(unsigned Width, uint64_t &Value) noexcept {
++    if (Width < 2 || Width > 32)
++      return false;
++    Value = 0;
++    unsigned Shift = 0;
++    const uint64_t More = uint64_t(1) << (Width - 1);
++    for (;;) {
++      uint64_t Word;
++      if (!fixed(Width, Word))
++        return false;
++      uint64_t Part = Word & (More - 1);
++      if (Shift >= 64 || Part > (std::numeric_limits<uint64_t>::max() >> Shift))
++        return false;
++      Value |= Part << Shift;
++      if (!(Word & More))
++        return Shift == 0 || Part != 0; // The pinned writer emits canonical VBR.
++      Shift += Width - 1;
++    }
++  }
++  bool align32() noexcept {
++    uint64_t Padding;
++    return fixed(unsigned((32 - Pos % 32) % 32), Padding) && Padding == 0;
++  }
++  bool blob(const char *&Start, size_t &Size) noexcept {
++    uint64_t Length;
++    if (!vbr(6, Length) || Length > 8192 || !align32() ||
++        Length > (End - Pos) / 8)
++      return false;
++    Start = reinterpret_cast<const char *>(Data + Pos / 8);
++    Size = size_t(Length);
++    Pos += Length * 8;
++    return align32();
++  }
++};
++
++inline uint64_t offsetAt(const unsigned char *P) noexcept {
++  uint64_t Result = 0;
++  for (unsigned I = 0; I < 8; ++I)
++    Result |= uint64_t(P[I]) << (I * 8);
++  return Result;
++}
++
++inline bool canonicalPath(const char *P, size_t N) noexcept {
++  if (N < 2 || N > 4096 || P[0] != '/' || P[N - 1] == '/')
++    return false;
++  size_t Component = 1;
++  for (size_t I = 1; I <= N; ++I) {
++    if (I < N && (static_cast<unsigned char>(P[I]) < 32 ||
++                  static_cast<unsigned char>(P[I]) == 127 || P[I] == '\\'))
++      return false;
++    if (I == N || P[I] == '/') {
++      size_t Length = I - Component;
++      if (!Length || (Length == 1 && P[Component] == '.') ||
++          (Length == 2 && P[Component] == '.' && P[Component + 1] == '.'))
++        return false;
++      Component = I + 1;
++    }
++  }
++  return true;
++}
++
++inline PCHReceiptProof inspect(const InputLayout &L, void *Context,
++                               PathSink Sink) noexcept {
++  auto Fail = [](const char *Reason) noexcept -> PCHReceiptProof {
++    return {false, false, Reason};
++  };
++  if (!L.Data || !L.Offsets || !Sink || L.Bytes < 4 ||
++      L.Bytes > 256 * 1024 * 1024 || std::memcmp(L.Data, "CPCH", 4) != 0 ||
++      !L.Count || L.Count > 16384 || L.OffsetBytes != L.Count * 8 ||
++      L.BaseBit < 32 || L.BaseBit >= L.EndBit || L.EndBit > L.Bytes * 8 ||
++      L.EndBit % 32 != 0)
++    return Fail("pch-input-layout");
++  // Offset storage must belong to these exact loaded bytes. Integer range
++  // checks avoid undefined subtraction/comparison of unrelated C++ pointers.
++  uintptr_t Begin = reinterpret_cast<uintptr_t>(L.Data);
++  uintptr_t Offsets = reinterpret_cast<uintptr_t>(L.Offsets);
++  if (Offsets < Begin || Offsets - Begin > L.Bytes ||
++      L.OffsetBytes > L.Bytes - (Offsets - Begin))
++    return Fail("pch-input-offsets");
++
++  bool Independent = !L.HasTimestamps;
++  uint64_t Next = L.BaseBit;
++  for (size_t I = 0; I < L.Count; ++I) {
++    uint64_t Offset = offsetAt(L.Offsets + I * 8);
++    if (Offset >= L.EndBit - L.BaseBit || L.BaseBit + Offset != Next)
++      return Fail("pch-input-offsets");
++    CheckedBits Bits(L.Data, Next, L.EndBit);
++    uint64_t Code, ID, Size, Time, Overridden, Transient, TopLevel, ModuleMap;
++    uint64_t RequestedLength;
++    if (!Bits.fixed(4, Code) || Code != 4 || !Bits.vbr(6, ID) || ID != I + 1 ||
++        !Bits.vbr(12, Size) || !Bits.vbr(32, Time) ||
++        !Bits.fixed(1, Overridden) || !Bits.fixed(1, Transient) ||
++        !Bits.fixed(1, TopLevel) || !Bits.fixed(1, ModuleMap) ||
++        !Bits.vbr(16, RequestedLength))
++      return Fail("pch-input-record");
++    if (Overridden || Transient || ModuleMap)
++      return Fail("pch-input-flags");
++    Independent &= Time == 0;
++    const char *Names;
++    size_t NameBytes;
++    if (!Bits.blob(Names, NameBytes) || RequestedLength > NameBytes ||
++        !canonicalPath(Names, size_t(RequestedLength)))
++      return Fail("pch-input-name");
++    size_t ActualLength = NameBytes - size_t(RequestedLength);
++    if (ActualLength &&
++        (ActualLength != RequestedLength ||
++         std::memcmp(Names, Names + RequestedLength, ActualLength) != 0))
++      return Fail("pch-input-alias");
++    uint64_t HashLow, HashHigh;
++    if (!Bits.fixed(4, Code) || Code != 5 || !Bits.fixed(32, HashLow) ||
++        !Bits.fixed(32, HashHigh))
++      return Fail("pch-input-hash");
++    Next = Bits.position();
++    if (!Sink(Context, Names, size_t(RequestedLength)))
++      return Fail("pch-input-capacity");
++  }
++  CheckedBits Tail(L.Data, Next, L.EndBit);
++  uint64_t Code;
++  if (!Tail.fixed(4, Code) || Code != 0 || !Tail.align32() ||
++      Tail.position() != L.EndBit)
++    return Fail("pch-input-block-end");
++  return {true, Independent, nullptr};
++}
++} // namespace pch_detail
++} // namespace clang::webide
++#endif
+diff --git a/clang/lib/Lex/PPMacroExpansion.cpp b/clang/lib/Lex/PPMacroExpansion.cpp
+index 09cf77893..d29e694d0 100644
+--- a/clang/lib/Lex/PPMacroExpansion.cpp
++++ b/clang/lib/Lex/PPMacroExpansion.cpp
+@@ -1615,6 +1615,8 @@ void Preprocessor::ExpandBuiltinMacro(Token &Tok) {
+   // Figure out which token this is.
+   IdentifierInfo *II = Tok.getIdentifierInfo();
+   assert(II && "Can't be a macro without id info!");
++  if (Callbacks)
++    Callbacks->BuiltinMacroExpanded(II->getName());
+ 
+   // If this is an _Pragma or Microsoft __pragma directive, expand it,
+   // invoke the pragma handler, then lex the token after it.
+diff --git a/clang/lib/Lex/Preprocessor.cpp b/clang/lib/Lex/Preprocessor.cpp
+index 0a25dc195..5b2c7fabd 100644
+--- a/clang/lib/Lex/Preprocessor.cpp
++++ b/clang/lib/Lex/Preprocessor.cpp
+@@ -25,6 +25,8 @@
+ //===----------------------------------------------------------------------===//
+ 
+ #include "clang/Lex/Preprocessor.h"
++#include <cstdlib>
++#include <new>
+ #include "clang/Basic/Builtins.h"
+ #include "clang/Basic/FileManager.h"
+ #include "clang/Basic/IdentifierTable.h"
+@@ -1714,3 +1716,23 @@ void NoTrivialPPDirectiveTracer::MacroExpands(const Token &MacroNameTok,
+   if (!MD.getMacroInfo()->isBuiltinMacro())
+     setSeenNoTrivialPPDirective();
+ }
++
++// A dedicated allocation path leaves existing callbacks untouched on failure.
++namespace {
++class OptionalPPCallbackChain final : public clang::PPChainedCallbacks {
++public:
++  using PPChainedCallbacks::PPChainedCallbacks;
++  static void *operator new(size_t N, const std::nothrow_t &) noexcept { return std::malloc(N); }
++  static void operator delete(void *P) noexcept { std::free(P); }
++  static void operator delete(void *P, const std::nothrow_t &) noexcept { std::free(P); }
++};
++}
++bool clang::Preprocessor::tryAddPPCallbacks(std::unique_ptr<PPCallbacks> C) noexcept {
++  if (!C) return false;
++  if (!Callbacks) { Callbacks = std::move(C); return true; }
++  // Allocation precedes constructor argument evaluation for a new-expression.
++  auto *Chain = new (std::nothrow) OptionalPPCallbackChain(std::move(C), std::move(Callbacks));
++  if (!Chain) return false;
++  Callbacks.reset(Chain);
++  return true;
++}
+diff --git a/clang/lib/Serialization/ASTReader.cpp b/clang/lib/Serialization/ASTReader.cpp
+index 66cf484bb..08f0bb1a7 100644
+--- a/clang/lib/Serialization/ASTReader.cpp
++++ b/clang/lib/Serialization/ASTReader.cpp
+@@ -3253,6 +3253,7 @@ ASTReader::ReadControlBlock(ModuleFile &F,
+           Error(std::move(Err));
+           return Failure;
+         }
++        F.InputFilesBlockEndBit = Stream.GetCurrentBitNo();
+         if (ReadBlockAbbrevs(F.InputFilesCursor, INPUT_FILES_BLOCK_ID)) {
+           Error("malformed block record in AST file");
+           return Failure;
+@@ -3566,6 +3567,7 @@ ASTReader::ReadControlBlock(ModuleFile &F,
+       NumUserInputs = Record[1];
+       F.InputFileOffsets =
+           (const llvm::support::unaligned_uint64_t *)Blob.data();
++      F.InputFileOffsetsBytes = Blob.size();
+       F.InputFilesLoaded.resize(NumInputs);
+       F.InputFileInfosLoaded.resize(NumInputs);
+       F.NumUserInputFiles = NumUserInputs;
+diff --git a/llvm/include/llvm/Bitstream/BitstreamReader.h b/llvm/include/llvm/Bitstream/BitstreamReader.h
+index ff42cda71..160b4b4f8 100644
+--- a/llvm/include/llvm/Bitstream/BitstreamReader.h
++++ b/llvm/include/llvm/Bitstream/BitstreamReader.h
+@@ -539,6 +539,14 @@ private:
+   //===--------------------------------------------------------------------===//
+ 
+ public:
++  /// Read-only bounded observation without allocating an Error on bad input.
++  const BitCodeAbbrev *getAbbrevIfValid(unsigned AbbrevID) const {
++    if (AbbrevID < bitc::FIRST_APPLICATION_ABBREV)
++      return nullptr;
++    unsigned AbbrevNo = AbbrevID - bitc::FIRST_APPLICATION_ABBREV;
++    return AbbrevNo < CurAbbrevs.size() ? CurAbbrevs[AbbrevNo].get() : nullptr;
++  }
++
+   /// Return the abbreviation for the specified AbbrevId.
+   Expected<const BitCodeAbbrev *> getAbbrev(unsigned AbbrevID) {
+     unsigned AbbrevNo = AbbrevID - bitc::FIRST_APPLICATION_ABBREV;

@@ -38,7 +38,7 @@ gate = json.loads((r / 'control-validation.json').read_text())
 patch = json.loads((r / 'observer-manifest.json').read_text())
 required = {'original-marbles-six-tu', 'vector-pch-on', 'synthetic-semantics',
             'pch-metadata-safety', 'receipt-overflow', 'representative-browser',
-            'paired-browser-overhead'}
+            'paired-browser-overhead', 'artifact-difference-attribution'}
 if (gate.get('schema') != 1 or gate.get('status') != 'passed' or
     gate.get('inputsSha256') != digest(r / 'inputs.json') or
     not required.issubset({item['name'] for item in gate.get('checks', []) if item.get('status') == 'passed'})):

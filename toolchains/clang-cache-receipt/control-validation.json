@@ -1,0 +1,106 @@
+{
+  "schema": 1,
+  "status": "passed",
+  "acceptedAtUtc": "2026-10-30T01:12:12.603919+00:00",
+  "inputsSha256": "c934706883d5600cd601e3931318be699848a3d591cfc120e50bcf469c2a22cb",
+  "workflow": {
+    "runUrl": "https://github.com/justinvassantachart/engine/actions/runs/40968426702",
+    "sourceCommit": "c316144695505f3616bcd3c34803846a85e7012c",
+    "artifactId": 12944460189,
+    "artifactZipSha256": "8c281776870579d1707fb1d80f0038a0757ee50d96c7faa8d9e8e1ed97e02a78"
+  },
+  "control": {
+    "compilerSha256": "5adf33fccfe8a110ebe0bd3bcc612617fc65e54eea450f8a185ef36aa4358fb4",
+    "compilerBytes": 75507890,
+    "resourceTarSha256": "112cf1d35773701ff8feed74f2231dfcc6677996e307115e86820b917b43724d",
+    "resourceTarBytes": 29655040,
+    "resourceGzipSha256": "1a31c8106d6252336db9ca8b71f06695bdc6199cd37862cc4a450d59c38376b1",
+    "resourceGzipBytes": 4306686
+  },
+  "checks": [
+    {
+      "name": "original-marbles-six-tu",
+      "status": "passed",
+      "evidence": {
+        "path": "toolchain/evidence/marbles-control-paired.json",
+        "sha256": "9828b29407dc3524888e23355cf80a0357be8f196a4a7684c50f4fca51d592b7",
+        "bytes": 725
+      }
+    },
+    {
+      "name": "vector-pch-on",
+      "status": "passed",
+      "evidence": {
+        "path": "toolchain/evidence/vector-control-node24/summary.json",
+        "sha256": "e8c654da725f242ede72e9658f78fd4390424008f4b657dc3724a70cf8760fab",
+        "bytes": 1645
+      }
+    },
+    {
+      "name": "synthetic-semantics",
+      "status": "passed",
+      "evidence": {
+        "path": "toolchain/evidence/semantic-control-node24/summary.json",
+        "sha256": "4d9b82d0627c4b929d587ba7946a54a22111462565cef92d7d836dcd85f91d69",
+        "bytes": 53529
+      }
+    },
+    {
+      "name": "pch-metadata-safety",
+      "status": "passed",
+      "evidence": {
+        "path": "toolchain/evidence/vector-pch-safety-control/summary.json",
+        "sha256": "fdc558fc41f9255b44aeb99eaa4fe4ba9f7fea34cdf98a0638470ead9d487ca9",
+        "bytes": 4474
+      }
+    },
+    {
+      "name": "receipt-overflow",
+      "status": "passed",
+      "evidence": {
+        "path": "toolchain/evidence/overflow-control-node24/summary.json",
+        "sha256": "2baf6dbe86f3f208bb05bd4ed88c534cadfdfe11c1aa8e2bcbbfca16d946cf3b",
+        "bytes": 5841
+      }
+    },
+    {
+      "name": "representative-browser",
+      "status": "passed",
+      "evidence": {
+        "path": "evidence/toolchain-browser/control-browser-acceptance.json",
+        "sha256": "739d2df939435428483704ea4a0f29d79a8bcf76f9c2e685122acb6e3d9bd219",
+        "bytes": 4292
+      }
+    },
+    {
+      "name": "paired-browser-overhead",
+      "status": "passed",
+      "evidence": {
+        "path": "evidence/toolchain-browser/receipts/paired-both-1793320497626/summary.json",
+        "sha256": "05d94bdd811b37ebcb6f077546bf3b3d5e60b67fd809dfd2953639f8d1bb8951",
+        "bytes": 578935
+      }
+    },
+    {
+      "name": "artifact-difference-attribution",
+      "status": "passed",
+      "evidence": {
+        "path": "toolchain/evidence/control-run-40968426702/artifact-difference-acceptance.json",
+        "sha256": "9e1fb0b54c372ffaa0884d8a5f53a7e88ba3cbcdc43e3357b5f2751aed20d142",
+        "bytes": 4492
+      }
+    }
+  ],
+  "limitations": [
+    "Compiler target/codegen, imported host functions, memory limits, stack pointer and exported API are unchanged. Function/type ordering, two constant-block positions, alignment and related pointer/table references differ; complete bijections and byte coverage are checked.",
+    "Assertion messages contain the named build-source path difference. These strings change internal layout and available allocator layout; they are not user source paths. Ordinary compiler outputs/diagnostics and representative browser behavior are separately required identical.",
+    "Only actually referenced zero-initialized addresses are proved mapped inside both initial memories. No hidden heap-base symbol, exact unobserved static boundary, universal formal equivalence or historical bit reproducibility is claimed."
+  ],
+  "failedAttemptsRetained": [
+    "Initial Marbles comparison used an older reference schema; fresh Node24 shipped reference and exact signatures resolve all twelve cases without changing fixtures.",
+    "Initial safety-reference path typo is retained and corrected with the committed exact shipped harness.",
+    "Browser representative setup failures and strict expected-exit correction are recorded in control-browser-acceptance.json; seven other passing cases retained and SimpleTest rerun.",
+    "Initial full-WAT printer capacity failure and unfinished exploratory layout audits are retained; final native printer and complete checks supersede them."
+  ],
+  "authorizes": "Observation-only patch implementation/build and on/off validation. Does not certify receipt admission, enable a profile, or authorize publication absent remaining release gates."
+}
