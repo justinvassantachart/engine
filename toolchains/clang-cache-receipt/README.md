@@ -29,3 +29,28 @@ It uploads failure logs as well as successful output. Do not rerun a failed buil
 without first recording and addressing its cause. The control must pass the
 four-arm semantic/browser parity and overhead gates before a patched toolchain
 can be admitted or released. No scanner fallback grants receipt capability.
+
+The workflow defaults to the unmodified `control` arm. Ordinary toolchain
+commits do not trigger a rebuild; only manual dispatch or an explicit
+`build-request.json` change does. The optional `observer` arm refuses to start
+without the actual accepted `control-validation.json`, exact `observer.patch`
+and its digest-bound candidate manifest. Those files are intentionally absent
+until the corresponding gates are complete.
+
+Observer builds retain the isolated source/build tree, verified SDK archive and
+bounded ccache under immutable per-run cache keys. `build-state.py` fingerprints
+every retained file, mode and symlink. Reuse first verifies that full snapshot,
+the frozen environment and exact previous source patch; it reverses only that
+known patch before applying the next candidate. The SDK is re-extracted from
+its verified archive, compiler checks use content, and the original upstream
+build recipe is rerun. The first observer build cannot reuse an earlier control
+whose running workflow did not save state. Cache-save failures must be reported;
+artifact/evidence upload remains independent of cache success.
+
+The candidate retains both raw linked core and JCO-extracted core and requires
+exact byte equality. The memory-free generic component adapter declines the
+receipt import; real delivery belongs to the engine's private compiler host.
+Build receipts remain explicitly unvalidated until semantic, real-engine and
+paired browser gates pass. Validated compiler/sysroot bytes and source notices
+are intended for the immutable engine package's `dist/cpp-cache-receipt-v1/`
+directory, allowing the course bundler to serve them on its own origin.
