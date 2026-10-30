@@ -510,6 +510,14 @@ export class Engine {
     try {
       if (!this.slot) this.makeWorker();
       if (!this.current(job)) return promise;
+      const slot = this.slot!;
+      if (this.lang === 'c' && !this.toolchain) {
+        // Fetch/verify immutable code while the fresh worker initializes. The
+        // ready event still gates dispatch, configuration and every guest job.
+        void this.ensureToolchain().catch((error) => {
+          if (this.current(job) && this.slot === slot) this.finish(job, errorResult(error));
+        });
+      }
       if (this.slot!.ready) void this.dispatch(job);
     } catch (error) {
       this.finish(job, errorResult(error));
@@ -682,6 +690,31 @@ export class Engine {
       });
   }
 
+  private ensureToolchain(): Promise<VerifiedToolchain> {
+    if (this.toolchain) return Promise.resolve(this.toolchain);
+    if (this.toolchainLoading) return this.toolchainLoading;
+    this.toolchainController = new AbortController();
+    const pending = VerifiedToolchain.load(
+      prefetch_urls('c'),
+      !!this.options?.cacheCompilerModule,
+      this.toolchainController.signal,
+      cpp_exception_hash(),
+      this.options?.toolchainProfile
+    );
+    this.toolchainLoading = pending;
+    this.initializing.add(pending);
+    void pending.then(
+      () => this.initializing.delete(pending),
+      () => {
+        this.initializing.delete(pending);
+        // A cancelled job may no longer have a dispatch catch, but its rejected
+        // load must not poison the next submission or clear a newer load.
+        if (this.toolchainLoading === pending) this.toolchainLoading = undefined;
+      }
+    );
+    return pending;
+  }
+
   private async dispatch(job: Job): Promise<void> {
     const slot = this.slot;
     if (!this.current(job) || !slot) return;
@@ -689,24 +722,8 @@ export class Engine {
       if (this.lang === 'c') {
         const scopeEpoch = this.scopeEpoch;
         const cacheEpoch = this.generation;
-        let pending = this.toolchainLoading;
-        if (!this.toolchain && !pending) {
-          this.toolchainController = new AbortController();
-          pending = VerifiedToolchain.load(
-            prefetch_urls('c'),
-            !!this.options?.cacheCompilerModule,
-            this.toolchainController.signal,
-            cpp_exception_hash(),
-            this.options?.toolchainProfile
-          );
-          this.toolchainLoading = pending;
-          this.initializing.add(pending);
-          void pending.then(
-            () => this.initializing.delete(pending!),
-            () => this.initializing.delete(pending!)
-          );
-        }
-        const toolchain = this.toolchain ?? (await pending!);
+        const pending = this.ensureToolchain();
+        const toolchain = this.toolchain ?? (await pending);
         if (!this.current(job) || this.slot !== slot || scopeEpoch !== this.scopeEpoch) return;
         const expectation = job.start.cpp_artifacts?.requiredToolchain;
         if (expectation && !toolchain.matchesExpectation(expectation)) {

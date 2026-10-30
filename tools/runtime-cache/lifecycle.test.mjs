@@ -69,7 +69,7 @@ const bundle = await build({
         build.onLoad({ filter: /.*/, namespace: 'test' }, ({ path }) => ({
           contents:
             path === 'toolchain'
-              ? `export class VerifiedToolchain { identity = 'test'; identityBytes = 16; compilerBytes = 8; static async load() { return new VerifiedToolchain(); } configure(worker, envelope) { worker.postMessage(envelope); } }`
+              ? `export class VerifiedToolchain { identity = 'test'; identityBytes = 16; compilerBytes = 8; static async load(...args) { await globalThis.__engineTestToolchainLoad?.(...args); return new VerifiedToolchain(); } configure(worker, envelope) { worker.postMessage(envelope); } }`
               : path === 'worker'
                 ? 'export const createEngineWorker = () => globalThis.__engineTestWorker();'
                 : path === 'binary'
@@ -129,6 +129,185 @@ const record = (worker, engine) =>
     generation: engine.cacheStats.generation,
     ...source('b')
   });
+
+for (const identityFirst of [false, true]) {
+  test(`initial toolchain loading overlaps worker initialization (${identityFirst ? 'identity' : 'ready'} first)`, async () => {
+    const gate = Promise.withResolvers();
+    let loads = 0;
+    globalThis.__engineTestToolchainLoad = () => {
+      loads++;
+      return gate.promise;
+    };
+    const engine = await Engine.create('c', options());
+    try {
+      assert.equal(loads, 0, 'creation does not fetch');
+      const job = engine.prepareCompiler();
+      const worker = workers.at(-1);
+      assert.equal(loads, 1, 'load starts without waiting for ready');
+      assert.equal(worker.messages.length, 0);
+      if (identityFirst) {
+        gate.resolve();
+        await new Promise((resolve) => setImmediate(resolve));
+        assert.equal(worker.messages.length, 0, 'verified code cannot configure an unready worker');
+        await ready(worker);
+      } else {
+        await ready(worker);
+        assert.equal(worker.messages.length, 0, 'ready alone cannot start an unverified job');
+        gate.resolve();
+        await new Promise((resolve) => setImmediate(resolve));
+      }
+      assert.equal(loads, 1);
+      assert.equal(worker.messages[0].type, 'configure_cpp');
+      assert.equal(worker.messages[1].prepare_compiler, true);
+      await complete(worker);
+      assert.equal((await job).type, 'completed');
+    } finally {
+      gate.resolve();
+      delete globalThis.__engineTestToolchainLoad;
+      await engine.dispose();
+    }
+  });
+}
+
+test('toolchain rejection before worker ready settles and retires the job', async () => {
+  const gate = Promise.withResolvers();
+  globalThis.__engineTestToolchainLoad = () => gate.promise;
+  const engine = await Engine.create('c', options());
+  try {
+    const job = engine.prepareCompiler();
+    const worker = workers.at(-1);
+    gate.reject(new Error('toolchain unavailable'));
+    assert.equal((await job).type, 'error');
+    assert.equal(worker.terminated, true);
+    await ready(worker);
+    assert.equal(worker.messages.length, 0);
+  } finally {
+    delete globalThis.__engineTestToolchainLoad;
+    await engine.dispose();
+  }
+});
+
+test('cancel before ready fences the old worker while a new job shares the pending load', async () => {
+  const gate = Promise.withResolvers();
+  let loads = 0;
+  globalThis.__engineTestToolchainLoad = () => {
+    loads++;
+    return gate.promise;
+  };
+  const engine = await Engine.create('c', options());
+  try {
+    const oldJob = engine.prepareCompiler();
+    const oldWorker = workers.at(-1);
+    await engine.cancelCurrentOperation();
+    assert.equal((await oldJob).type, 'stopped');
+    const newJob = engine.prepareCompiler();
+    const newWorker = workers.at(-1);
+    await ready(oldWorker);
+    await ready(newWorker);
+    gate.resolve();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(loads, 1);
+    assert.equal(oldWorker.messages.length, 0);
+    assert.equal(oldWorker.terminated, true);
+    assert.equal(newWorker.messages.at(-1).prepare_compiler, true);
+    await complete(newWorker);
+    await newJob;
+  } finally {
+    gate.resolve();
+    delete globalThis.__engineTestToolchainLoad;
+    await engine.dispose();
+  }
+});
+
+test('a cancelled early rejection cannot poison the next submission', async () => {
+  const gate = Promise.withResolvers();
+  let loads = 0;
+  globalThis.__engineTestToolchainLoad = () => {
+    loads++;
+    return loads === 1 ? gate.promise : Promise.resolve();
+  };
+  const engine = await Engine.create('c', options());
+  try {
+    const oldJob = engine.prepareCompiler();
+    await engine.cancelCurrentOperation();
+    await oldJob;
+    gate.reject(new Error('cancelled load failed'));
+    await new Promise((resolve) => setImmediate(resolve));
+    const next = engine.prepareCompiler();
+    const worker = workers.at(-1);
+    await ready(worker);
+    assert.equal(loads, 2);
+    assert.equal(worker.messages.at(-1).prepare_compiler, true);
+    await complete(worker);
+    assert.equal((await next).type, 'completed');
+  } finally {
+    delete globalThis.__engineTestToolchainLoad;
+    await engine.dispose();
+  }
+});
+
+test('dispose before worker ready aborts and drains early initialization without resurrection', async () => {
+  const gate = Promise.withResolvers();
+  let signal;
+  globalThis.__engineTestToolchainLoad = (_urls, _cache, suppliedSignal) => {
+    signal = suppliedSignal;
+    return gate.promise;
+  };
+  const engine = await Engine.create('c', options());
+  try {
+    const job = engine.prepareCompiler();
+    const worker = workers.at(-1);
+    let drained = false;
+    const disposal = engine.dispose().then(() => {
+      drained = true;
+    });
+    assert.equal(signal.aborted, true);
+    await ready(worker);
+    assert.equal(drained, false);
+    assert.equal((await job).type, 'stopped');
+    gate.resolve();
+    await disposal;
+    assert.equal(worker.messages.length, 0);
+    assert.equal(engine.cacheStats.workerRetained, false);
+    assert.equal(engine.cacheStats.toolchainIdentityBytes, 0);
+  } finally {
+    gate.resolve();
+    delete globalThis.__engineTestToolchainLoad;
+    await engine.dispose();
+  }
+});
+
+test('release after early cancellation aborts and drains initialization', async () => {
+  const gate = Promise.withResolvers();
+  let signal;
+  globalThis.__engineTestToolchainLoad = (_urls, _cache, suppliedSignal) => {
+    signal = suppliedSignal;
+    return gate.promise;
+  };
+  const engine = await Engine.create('c', options());
+  try {
+    const job = engine.prepareCompiler();
+    const worker = workers.at(-1);
+    await engine.cancelCurrentOperation();
+    await job;
+    let drained = false;
+    const release = engine.releaseCompilerResources().then((result) => {
+      drained = true;
+      return result;
+    });
+    assert.equal(signal.aborted, true);
+    await ready(worker);
+    assert.equal(drained, false);
+    gate.resolve();
+    assert.equal(await release, 'released');
+    assert.equal(worker.messages.length, 0);
+    assert.equal(engine.cacheStats.toolchainIdentityBytes, 0);
+  } finally {
+    gate.resolve();
+    delete globalThis.__engineTestToolchainLoad;
+    await engine.dispose();
+  }
+});
 
 test('snapshot and mode captured before readiness; one job active', async () => {
   const engine = await Engine.create('c', options());

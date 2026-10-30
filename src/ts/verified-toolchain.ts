@@ -31,14 +31,33 @@ export class VerifiedToolchain {
     const manifest = requireToolchainManifest(profile);
     urls = manifest.urls ?? urls;
     if (urls.length !== 2) throw new Error('Missing C++ toolchain assets');
-    const [compiler, sysroot] = await Promise.all(
+    let fetchFailure: { error: unknown } | undefined;
+    const assets = await Promise.allSettled(
       urls.map(async (url) => {
-        const response = await fetch(url, { cache: 'force-cache', signal });
-        if (!response.ok) throw new Error(`Cannot load C++ toolchain (${response.status})`);
-        return new Uint8Array(await response.arrayBuffer());
+        try {
+          const response = await fetch(url, { cache: 'force-cache', signal });
+          if (!response.ok) throw new Error(`Cannot load C++ toolchain (${response.status})`);
+          return new Uint8Array(await response.arrayBuffer());
+        } catch (error) {
+          fetchFailure ??= { error };
+          throw error;
+        }
       })
     );
-    const owner = await VerifiedToolchain.ingestOwned(compiler, sysroot, false, exceptionsHash);
+    if (assets[0].status === 'rejected' || assets[1].status === 'rejected')
+      throw fetchFailure?.error;
+    const [compiler, sysroot] = [assets[0].value, assets[1].value];
+    // Both operations consume the same private, immutable bytes. Compiling does
+    // not execute them; no module or seed can escape before integrity succeeds.
+    // Drain both promises on failure so disposal cannot leave work unobserved.
+    const [ingestion, compilation] = await Promise.allSettled([
+      VerifiedToolchain.ingestOwned(compiler, sysroot, false, exceptionsHash),
+      cacheModule
+        ? Promise.resolve().then(() => WebAssembly.compile(compiler as Uint8Array<ArrayBuffer>))
+        : Promise.resolve(undefined)
+    ]);
+    if (ingestion.status === 'rejected') throw ingestion.reason;
+    const owner = ingestion.value;
     if (
       owner.#seed.compilerHash !== manifest.digests.compiler ||
       owner.#seed.sysrootHash !== manifest.digests.sysroot ||
@@ -46,12 +65,10 @@ export class VerifiedToolchain {
     )
       throw new Error('C++ toolchain integrity mismatch');
     if (signal?.aborted) throw new DOMException('Toolchain loading aborted', 'AbortError');
+    if (compilation.status === 'rejected') throw compilation.reason;
     owner.#seed.receiptAbi = manifest.receiptAbi;
     owner.#seed.stockProfile = manifest.profile === 'stock-certified-v1';
-    if (cacheModule)
-      owner.#seed.module = await WebAssembly.compile(
-        owner.#seed.compiler as Uint8Array<ArrayBuffer>
-      );
+    owner.#seed.module = compilation.value;
     return owner;
   }
 
@@ -78,7 +95,10 @@ export class VerifiedToolchain {
     exceptionsHash: string
   ): Promise<VerifiedToolchain> {
     const started = performance.now();
-    const [compilerHash, sysrootHash] = await Promise.all([digest(compiler), digest(sysroot)]);
+    const hashes = await Promise.allSettled([digest(compiler), digest(sysroot)]);
+    if (hashes[0].status === 'rejected') throw hashes[0].reason;
+    if (hashes[1].status === 'rejected') throw hashes[1].reason;
+    const [compilerHash, sysrootHash] = [hashes[0].value, hashes[1].value];
     const module = cacheModule ? await WebAssembly.compile(compiler) : undefined;
     return new VerifiedToolchain(
       { compiler, sysroot, compilerHash, sysrootHash, exceptionsHash, module },
