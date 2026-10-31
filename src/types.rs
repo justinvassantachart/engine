@@ -111,6 +111,8 @@ pub struct WorkerStart {
     #[serde(default)]
     pub prepare_compiler: bool,
     #[serde(default)]
+    pub validate_cache_inputs: bool,
+    #[serde(default)]
     pub scope_epoch: u32,
     #[serde(default)]
     pub operation_id: u32,
@@ -149,6 +151,9 @@ pub struct CppArtifacts {
     pub precompiled_header: Option<String>,
     #[serde(default)]
     pub required_toolchain: Option<CppToolchainIdentity>,
+    /// Exact metadata document, never mounted into the guest namespace.
+    #[serde(default)]
+    pub cache_certificate: Option<String>,
 }
 
 /// Optional companion expectation. It can reject a mismatched tuple, never grant trust.
@@ -165,6 +170,8 @@ pub struct CppToolchainIdentity {
 pub struct CppCacheRequest {
     pub generation: u32,
     pub entries: Vec<CppCacheEntry>,
+    #[serde(default)]
+    pub max_entry_metadata_bytes: Option<usize>,
 }
 
 #[derive(Debug, Tsify, Deserialize)]
@@ -172,6 +179,8 @@ pub struct CppCacheEntry {
     pub source: String,
     pub key: String,
     pub object_hash: String,
+    #[serde(default)]
+    pub receipt: Option<String>,
     #[tsify(type = "Uint8Array")]
     pub object: serde_bytes::ByteBuf,
 }
@@ -249,6 +258,8 @@ pub enum WorkerOut<'a> {
         source: String,
         key: String,
         object_hash: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        receipt: Option<String>,
         #[tsify(type = "Uint8Array")]
         #[serde(with = "serde_bytes")]
         object: &'a [u8],
@@ -262,6 +273,14 @@ pub enum WorkerOut<'a> {
         generation: u32,
         stats: CppCacheStats,
     },
+    #[serde(rename = "cpp_cache_eligibility")]
+    CppCacheEligibility {
+        eligible: bool,
+        certificate_sha256: Option<String>,
+        snapshot: Option<String>,
+        reason: Option<String>,
+    },
+
     /// Indicate that execution has paused.
     ///
     /// DWARF backends send `reason`; Python sends a `frame` snapshot it derives the

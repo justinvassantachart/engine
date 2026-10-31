@@ -317,6 +317,11 @@ test('companion identity is an expectation and cannot authorize a different comp
     {}
   );
   const seed = captured[0].toolchain;
+  assert.equal(
+    seed.stockProfile,
+    undefined,
+    'Arbitrary owned test bytes cannot acquire stock-cache authority'
+  );
   const expectation = {
     compilerSha256: seed.compilerHash,
     sysrootSha256: seed.sysrootHash,

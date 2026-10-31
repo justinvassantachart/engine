@@ -25,6 +25,7 @@ use crate::types::{StdoutMode, WorkerOut};
 
 use super::io::{Stdin, Stdout};
 use super::runtime::JsRuntime;
+use super::cpp_stock_trace_host::{InvocationTrace, TraceImport};
 
 use std::fmt::Debug;
 
@@ -40,13 +41,14 @@ pub struct CompilerToolchain {
     pub compiler: Vec<u8>,
     pub sysroot: Vec<u8>,
     pub identities: (String, String, String),
+    pub stock_profile: bool,
 }
 
 #[wasm_bindgen]
-pub fn configure_compiler_toolchain(compiler: Vec<u8>, sysroot: Vec<u8>, compiler_hash: String, sysroot_hash: String, exceptions_hash: String) {
+pub fn configure_compiler_toolchain(compiler: Vec<u8>, sysroot: Vec<u8>, compiler_hash: String, sysroot_hash: String, exceptions_hash: String, stock_profile: bool) {
     // Only the private worker entrypoint accepts this parent-owned seed. Its hashes
     // were computed from owned bytes before transport; guest filesystem bytes never enter it.
-    TOOLCHAIN.with(|slot| *slot.borrow_mut() = Some(Rc::new(CompilerToolchain { compiler, sysroot, identities: (compiler_hash, sysroot_hash, exceptions_hash) })));
+    TOOLCHAIN.with(|slot| *slot.borrow_mut() = Some(Rc::new(CompilerToolchain { compiler, sysroot, identities: (compiler_hash, sysroot_hash, exceptions_hash), stock_profile })));
 }
 
 pub fn compiler_toolchain() -> Option<Rc<CompilerToolchain>> {
@@ -104,6 +106,8 @@ pub struct Step<'a> {
     union_fs: Option<Box<dyn FileSystem>>,
     debug: bool,
     compiler: bool,
+    stock_profile: bool,
+    stock_trace: Option<InvocationTrace>,
     envs: Vec<(String, String)>,
     device_files: Vec<(PathBuf, Box<dyn wasmer_wasix::virtual_fs::VirtualFile + Send + Sync>)>,
 }
@@ -131,6 +135,8 @@ impl Execution {
             union_fs: None,
             debug: false,
             compiler: false,
+            stock_profile: false,
+            stock_trace: None,
             envs: Vec::new(),
             device_files: Vec::new(),
         }
@@ -183,6 +189,14 @@ impl<'a> Step<'a> {
     /// Only LLVM compiler/linker steps may use immutable compiler Module retention.
     pub fn compiler(mut self) -> Self {
         self.compiler = true;
+        self
+    }
+
+    /// Observe only the fixed stock compiler invocation; never a student program.
+    pub fn compiler_stock(mut self, trace: Option<InvocationTrace>) -> Self {
+        self.compiler = true;
+        self.stock_profile = true;
+        self.stock_trace = trace;
         self
     }
 
@@ -344,6 +358,12 @@ impl<'a> Step<'a> {
         for (k, v) in &self.envs {
             self.builder.add_env(k, v);
         }
+        if self.stock_profile {
+            // The stock environment is enforced here, never inferred from
+            // WASI defaults or the student's interactive input queue.
+            self.builder.get_env_mut().clear();
+            self.builder.set_current_dir("/");
+        }
         let mut builder = self
             .builder
             .runtime(JsRuntime::instance())
@@ -351,6 +371,10 @@ impl<'a> Step<'a> {
             .stdout(Box::new(Stdout::new_counted(StdoutMode::Out, self.exec.output_bytes.clone())))
             .stderr(Box::new(Stdout::new_counted(StdoutMode::Err, self.exec.output_bytes.clone())))
             .stdin(Box::new(Stdin::new(&self.exec.stdin_buffer)));
+        if self.stock_profile {
+            builder = builder.stdin(Box::new(wasmer_wasix::virtual_fs::NullFile::default()));
+        }
+
         builder
             .add_preopen_dir("/")
             .ensure("Preopened root directory")?;
@@ -373,6 +397,15 @@ impl<'a> Step<'a> {
                 .initialize(&mut store, instance.clone())
                 .ensure("Initialized WASI")?;
 
+            instance
+        } else if self.stock_profile && self.stock_trace.is_some() {
+            let wasi_env = builder.build().ensure("Built stock compiler WASI environment")?;
+            let mut wasi_func_env = WasiFunctionEnv::new(&mut store, wasi_env);
+            let mut imports = wasi_func_env.import_object(&mut store, &module).ensure("Created stock compiler WASI imports")?;
+            let trace = TraceImport::attach(&mut store, &mut imports, &module, self.stock_trace.take().expect("stock trace"));
+            let instance = wasmer::Instance::new(&mut store, &module, &imports).ensure("Created stock compiler instance with observation")?;
+            TraceImport::bind(&trace, &mut store, &instance);
+            wasi_func_env.initialize(&mut store, instance.clone()).ensure("Initialized stock compiler WASI")?;
             instance
         } else {
             let (instance, _env) = builder

@@ -775,13 +775,91 @@ test('Stop during parent validation waits for its drain and prevents late commit
   await engine.dispose();
 });
 
-test('partial parent publication failure clears all optional cache storage', async () => {
-  const engine = await Engine.create('c', options());
+// Public transport/lease tests use the real fixed profile registry and mocked
+// worker messages; they do not prove compiler admission or grant cache trust.
+test('stock validation owns its plan and binds eligibility to the current operation', async () => {
+  const engine = await Engine.create('c', options({ toolchainProfile: 'stock-certified-v1' }));
+  engine.debugger.enabled = false;
+  engine.fs = { 'main.cpp': 'int main(){}' };
+  engine.cppArtifacts = { cacheCertificate: 'exact metadata bytes' };
+  const preparation = engine.prepareCompiler({ validateCacheInputs: true });
+  const worker = workers.at(-1);
+  engine.fs['main.cpp'] = 'later';
+  await ready(worker);
+  const start = worker.messages.at(-1);
+  assert.equal(start.validate_cache_inputs, true);
+  assert.equal(start.fs['main.cpp'], 'int main(){}');
+  assert.equal(start.cpp_artifacts.cacheCertificate, 'exact metadata bytes');
+  const certificate = 'a'.repeat(64),
+    snapshot = 'b'.repeat(64);
+  worker.emit({
+    type: 'cpp_cache_eligibility',
+    eligible: true,
+    certificate_sha256: certificate,
+    snapshot,
+    operationId: start.operation_id - 1
+  });
+  assert.equal(engine.cacheStats.cacheEligible, false);
+  worker.emit({
+    type: 'cpp_cache_eligibility',
+    eligible: true,
+    certificate_sha256: certificate,
+    snapshot
+  });
+  worker.emit({ type: 'stop', exit_code: 0, build_ms: 1, run_ms: 0 });
+  await preparation;
+  assert.equal(engine.cacheStats.cacheEligibilityOperationId, start.operation_id);
+  assert.equal(engine.cacheStats.cacheEligibilitySnapshot, snapshot);
+  assert.equal(engine.cacheStats.cacheEligible, true);
+  const compile = engine.compile();
+  assert.equal(engine.cacheStats.cacheEligible, false);
+  worker.emit({
+    type: 'cpp_cache_eligibility',
+    eligible: false,
+    certificate_sha256: certificate,
+    snapshot: null,
+    reason: 'stock-temporal'
+  });
+  await complete(worker);
+  await compile;
+  assert.equal(engine.cacheStats.cacheEligible, false);
+  assert.equal(engine.cacheStats.stockCertificateSha256, certificate);
+  assert.equal(engine.cacheStats.cacheEligibilityReason, 'stock-temporal');
+  await engine.dispose();
+  assert.equal(engine.cacheStats.stockCertificateSha256, undefined);
+});
+
+test('zero per-entry metadata capacity keeps stock preparation toolchain-only', async () => {
+  const engine = await Engine.create(
+    'c',
+    options({ toolchainProfile: 'stock-certified-v1', objectCache: { maxEntryMetadataBytes: 0 } })
+  );
+  engine.fs = { 'main.cpp': '#error not compiled' };
+  const preparation = engine.prepareCompiler({ validateCacheInputs: true });
+  const worker = workers.at(-1);
+  await ready(worker);
+  const start = worker.messages.at(-1);
+  assert.equal(start.validate_cache_inputs, false);
+  assert.deepEqual(start.fs, {});
+  worker.emit({ type: 'stop', exit_code: 0, build_ms: 1, run_ms: 0 });
+  await preparation;
+  assert.equal(engine.cacheStats.cacheEligible, false);
+  await engine.dispose();
+});
+
+test('failed parent publication clears stock eligibility without failing compilation', async () => {
+  const engine = await Engine.create('c', options({ toolchainProfile: 'stock-certified-v1' }));
   engine.debugger.enabled = false;
   const compile = engine.compile();
   const worker = workers.at(-1);
   await ready(worker);
   record(worker, engine);
+  worker.emit({
+    type: 'cpp_cache_eligibility',
+    eligible: true,
+    certificate_sha256: 'a'.repeat(64),
+    snapshot: 'b'.repeat(64)
+  });
   const commitOriginal = engine.objects.commitBatch.bind(engine.objects);
   engine.objects.commitBatch = () => {
     commitOriginal();
@@ -789,7 +867,30 @@ test('partial parent publication failure clears all optional cache storage', asy
   };
   await complete(worker);
   assert.equal((await compile).exitCode, 0);
+  assert.equal(engine.cacheStats.cacheEligible, false);
+  assert.equal(engine.cacheStats.cacheEligibilitySnapshot, undefined);
+  assert.equal(engine.cacheStats.stockCertificateSha256, 'a'.repeat(64));
   assert.equal(engine.cacheStats.entries, 0);
   assert.equal(engine.cacheStats.stagingEntries, 0);
+  assert.equal(engine.cacheStats.cacheEligibilityReason, 'stock-publication-failure');
   await engine.dispose();
+});
+
+test('invalid optional certificate metadata cannot change ordinary job transport', async () => {
+  for (const cacheCertificate of ['x'.repeat(1024 * 1024 + 1), 'é'.repeat(600000), 42]) {
+    const engine = await Engine.create('c', options({ toolchainProfile: 'stock-certified-v1' }));
+    engine.debugger.enabled = false;
+    engine.fs = { 'main.cpp': 'int main(){}' };
+    engine.cppArtifacts = { cacheCertificate, archivePaths: ['/a.a'] };
+    const compile = engine.compile();
+    const worker = workers.at(-1);
+    await ready(worker);
+    const start = worker.messages.at(-1);
+    assert.equal(start.cpp_artifacts.cacheCertificate, undefined);
+    assert.deepEqual(start.cpp_artifacts.archivePaths, ['/a.a']);
+    assert.equal(start.fs['main.cpp'], 'int main(){}');
+    await complete(worker);
+    assert.equal((await compile).exitCode, 0);
+    await engine.dispose();
+  }
 });
