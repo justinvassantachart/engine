@@ -22,7 +22,7 @@ makes `dist/debugger-sh.js` load `engine_bg.wasm` from
 `https://cdn.jsdelivr.net/npm/debugger-sh@<version>/dist/` — a URL that does not exist for a fork
 version, and which would serve upstream bytes if it did. The normal build base64-embeds the engine
 WASM into the bundle, so the packed artifact needs neither the network nor a local path for its own
-WASM. Compiler and sysroot URLs fetched at run time are unchanged from upstream.
+WASM. The compiler and sysroot keep their original URLs.
 
 `--ignore-scripts` packs the `dist/` you just built without running any lifecycle script. Do not run
 `npm publish` in this fork (not even `--dry-run`): publish runs `prepublishOnly`, which is

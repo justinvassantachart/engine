@@ -10,13 +10,14 @@ const engine = await Engine.create('c', {
     objectCache: true,
     retainWorker: true,
     cacheCompilerModule: true,
-    idleTimeoutMs: 30_000
+    compilerLifetime: 'project' // defaults to bounded idle retention
   }
 });
 engine.debugger.enabled = false;
 engine.fs = frozenFiles;
 engine.binaryFiles = frozenBinaries;
 engine.cppArtifacts = frozenArtifacts;
+await engine.prepareCompiler(); // No student input, Clang TU action, link, or devices
 await engine.compile(); // Run-profile translation units only; no linking or program execution
 const result = await engine.run(); // Always links and executes a new student runtime
 console.log(engine.cacheStats);
@@ -47,7 +48,7 @@ The v1 length-prefixed SHA-256 key includes schema and release metadata, actual
 fetched compiler/sysroot bytes, embedded exception support, ordered compilation
 and link arguments, profile, source path/content, the full user path set, and all
 other resource/header/binary bytes. Other selected TU contents are excluded only
-because direct, indirect and dynamic source includes fail closed. Actual depfiles
+because direct, indirect and dynamic source includes fail closed. Under the default legacy profile, actual depfiles
 validate transitive dependencies before admission. Headers and source use
 conservative preprocessor guards; unexpected, volatile, diagnostic, system-header
 and binary-text inputs bypass. Trusted toolchain headers are bound to the actual
@@ -55,20 +56,27 @@ sysroot bytes and checked for volatile builtins. Actual trusted-header definitio
 that paste tokens or invoke pragmas taint all referring aliases and wrappers;
 user/support references to these macros bypass. Analysis normalizes dependency
 paths before classification, admits harmless comments, and fails closed on
-unsupported lexical forms or analysis bounds. Opaque PCH inputs currently bypass
+unsupported lexical forms or analysis bounds. Under the legacy profile, opaque PCH inputs bypass
 TU caching because their hidden macro and diagnostic state cannot be verified;
 PCH compilation and archives retain their original behavior. PCH bytes still
 participate in resource identity. Unused unsafe headers do not bypass unrelated TUs.
 
-Only successful silent object compilations are candidates. A failed compile, link
-or nonzero execution publishes no new entries. Every replay verifies the input key,
+Only successful silent object compilations are candidates. The entire optional batch
+commits after every TU succeeds, before linking or guest execution, after the parent
+validates owned object hashes and acknowledges publication. Compile failure or
+cancellation discards an uncommitted batch. Link failure and nonzero guest exit
+preserve already committed objects. Staging and committed entries share one byte,
+entry and metadata budget; a batch that cannot fit is discarded atomically. Every replay verifies the input key,
 object SHA-256, Wasm validation and relocatable linking metadata, then copies bytes
 into the fresh job filesystem. A hit counts only when clang object compilation is
 omitted. Current warnings and errors are forwarded unchanged.
 
 The compiler constructor is an explicit internal interface; it never intercepts
 global WebAssembly prototypes. At most one immutable LLVM Module is retained, with
-actual-byte SHA-256 and full-byte equality checks. A fresh Store, WASI environment,
+actual-byte SHA-256 checked once at ingestion against the build-fixed legacy asset
+manifest. The embedded exception runtime is verified as part of the same identity.
+A worker receives one private seed per toolchain; compiler steps never read their
+authority from the mutable guest filesystem, and no TU rehashes compiler bytes. A fresh Store, WASI environment,
 Instance, filesystem, globals, stdin and devices are still created for every job
 and compiler invocation as applicable. Student Modules and Instances are not cached.
 A parent identity copy and a worker identity copy can both remain live; their byte
@@ -77,20 +85,39 @@ transient copies. They are not a claim of total browser memory.
 
 ## Lifecycle and measurements
 
-`clearCaches()` advances the generation synchronously. An active job can finish,
-but its staged/late results cannot repopulate storage; it retires afterward.
-In-flight worker resources remain until settlement. `stop()` immediately fences
-output and completion, terminates the worker, clears both caches and returns a
-drain promise. `dispose()` also makes the Engine permanently unusable. Errors,
-nonzero outcomes and Debug retire the worker. Successful idle retention is bounded
-to 30 seconds by default, configurable from 1 ms to 5 minutes. Turning options off
-requires creating a new Engine; no shared global seeds, export/import, persistence
-or cross-project reuse exists.
+`clearCaches()` advances the cache epoch synchronously. An active job can finish
+and deliver output, but staged/late results cannot repopulate storage; its worker
+retires afterward. `stop()` fences output and completion, terminates the worker,
+clears both caches and returns a drain promise. `cancelCurrentOperation()` also
+terminates a noncooperative guest but preserves committed objects and verified
+compiler resources. Callers must explicitly choose this additive policy.
+
+`releaseCompilerResources({ signal })` releases the idle worker, Module and restart
+seed while keeping bounded objects. It defers behind an active operation and can
+be cancelled with its signal; it never kills a guest for memory release. The next
+preparation verifies the toolchain again before any object lookup. `dispose()`
+synchronously closes the scope, drains pending work, clears callbacks/inputs and
+permanently prevents reuse. Scope, operation and cache identities fence effects
+independently, and retired worker slots cannot impersonate replacements.
+
+Errors, nonzero outcomes and Debug retire the worker but preserve committed valid
+objects and immutable code. Idle retention defaults to 30 seconds, configurable
+from 1 ms to 5 minutes. Explicit `compilerLifetime: 'project'` omits that timer;
+the host must implement visibility release and permanent disposal. No heartbeat,
+global seed, export/import, persistence or cross-project reuse exists. The existing conservative scanner
+and opaque-PCH rules remain unchanged.
 
 `cacheStats` is an owned snapshot: bytes, entries, evictions, oversize admissions,
-generation, worker retention/retirement and latest-job measurements. Worker cache
+scope/operation/cache identities, worker retention/retirement and active or latest
+job measurements. `stagingObjectBytes` and `stagingMetadataBytes` are included in
+the total byte counters, not an additional allowance. Toolchain ingestion/hash
+counts and Module clone support are reported separately. Worker cache
 statistics distinguish hashing, lookup/validation, hits/misses/bypass reasons,
-object compiler-step time and linking. Compiler Module statistics distinguish
+object compiler-step time and linking. `clang_invocations` and `link_invocations`
+count actual step dispatches. Completed compiler/linker statistics are published
+before guest entry, so an infinite loop or GUI Stop retains the completed build
+counters. These optional public fields are absent in older engine reports.
+Compiler Module statistics distinguish
 module compilation, byte hashing/comparison, hits and fresh compiler instantiation.
 Compiler-step time includes module/instance setup; it is not an isolated native
 clang execution clock. `timing.buildMs` includes toolchain fetching/extraction and
@@ -132,8 +159,9 @@ behavior, counterbalances three arms and separates cold, unchanged, equal-length
 semantic edits and header edits. Its synthetic six-TU matrix is distinct from
 real Marble/Vector staging validation. JS heap and available browser-attributed
 memory measurements have explicit limits; unavailable endpoints remain unavailable.
-In the exact Marble snapshot, the generated driver is eligible but its other
-translation units currently bypass due to volatile or unsupported system macros.
+In the historical legacy Marble baseline, the generated driver was eligible but
+its other translation units bypassed the older conservative system-macro guard.
+That baseline does not establish broader object-cache admission or timing.
 Compiler worker/Module reuse still applies to eligible ordinary Run-profile jobs.
 Actual Safari automation was unavailable because remote automation is disabled;
 new course optimizations remain off there and the prior compiler trap is unresolved.
