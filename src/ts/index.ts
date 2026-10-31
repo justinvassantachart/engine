@@ -709,6 +709,9 @@ export class Engine {
     slot.remove();
     this.stdout[Internals].detach(slot.worker);
     this.stderr[Internals].detach(slot.worker);
+    // Termination is asynchronous; queued errors still belong to this retired
+    // worker. Keep them from bubbling without retaining the Engine or its job.
+    slot.worker.onerror = (event) => event.preventDefault();
     slot.worker.terminate();
     this.retirements++;
   }

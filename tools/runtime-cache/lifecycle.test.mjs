@@ -21,6 +21,16 @@ class FakeWorker {
   terminate() {
     this.terminated = true;
   }
+  emitError(message) {
+    const event = new Event('error', { cancelable: true });
+    Object.defineProperty(event, 'message', { value: message });
+    // Listeners added during dispatch do not handle that same event.
+    const onerror = this.onerror;
+    for (const callback of [...(this.listeners.get('error') ?? [])])
+      if (this.listeners.get('error').has(callback)) callback(event);
+    onerror?.(event);
+    return event;
+  }
   emit(data) {
     const start = this.messages.findLast((message) => typeof message.operation_id === 'number');
     if (start)
@@ -485,6 +495,54 @@ test('nonzero outcomes never populate; errors recover; Debug retires retained wo
   await complete(worker);
   await job;
   assert.ok(worker.terminated);
+  await engine.dispose();
+});
+
+test('retired worker errors are contained without affecting the replacement job', async () => {
+  const engine = await Engine.create('c', options());
+  engine.debugger.enabled = false;
+  const run = engine.run();
+  const retired = workers.at(-1);
+  await ready(retired);
+  let terminationError;
+  retired.terminate = () => {
+    retired.terminated = true;
+    terminationError = retired.emitError('termination trap');
+  };
+  await engine.cancelCurrentOperation();
+  assert.equal((await run).type, 'stopped');
+  assert.equal(terminationError.defaultPrevented, true);
+  assert.equal(retired.count(), 0);
+
+  const replacementRun = engine.run();
+  const replacement = workers.at(-1);
+  await ready(replacement);
+  const active = engine.active;
+  assert.equal(retired.emitError('late queued trap').defaultPrevented, true);
+  assert.equal(engine.active, active);
+  assert.equal(replacement.terminated, false);
+  await complete(replacement);
+  assert.equal((await replacementRun).type, 'completed');
+  await engine.dispose();
+  assert.equal(replacement.emitError('late disposal trap').defaultPrevented, true);
+});
+
+test('current worker errors still fail the operation and clear committed objects', async () => {
+  const engine = await Engine.create('c', options());
+  engine.debugger.enabled = false;
+  const run = engine.run();
+  const worker = workers.at(-1);
+  await ready(worker);
+  record(worker, engine);
+  await commit(worker);
+  assert.equal(engine.cacheStats.entries, 1);
+  const error = worker.emitError('current worker fault');
+  const result = await run;
+  assert.equal(result.type, 'error');
+  assert.match(result.error.message, /current worker fault/);
+  assert.equal(error.defaultPrevented, false);
+  assert.equal(engine.cacheStats.entries, 0);
+  assert.equal(worker.terminated, true);
   await engine.dispose();
 });
 
