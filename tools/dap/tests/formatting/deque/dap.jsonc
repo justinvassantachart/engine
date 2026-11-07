@@ -620,11 +620,7 @@
     },
     {
       "type": "event",
-      "event": "runResult",
-      "body": {
-        "type": "completed",
-        "exitCode": 0
-      },
+      "event": "terminated",
       "$timeout": 10000
     }
   ]

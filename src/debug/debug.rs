@@ -192,7 +192,7 @@ impl Debugger {
             .filter(|l| {
                 let file = self.info.dwarf.file_at(l.1.file_index);
                 let loc_line = l.1.line as i64;
-                file.map_or(false, |f| *f == target) && loc_line >= line
+                file.is_some_and(|f| *f == target) && loc_line >= line
             })
             .min_by(|l1, l2| {
                 l1.1.line

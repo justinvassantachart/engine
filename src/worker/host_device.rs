@@ -22,14 +22,11 @@ unsafe impl Send for Mailbox {}
 unsafe impl Sync for Mailbox {}
 
 impl Mailbox {
-    fn new(buffer: &js_sys::SharedArrayBuffer) -> Result<Self> {
-        if buffer.byte_length() != 4 + CAPACITY {
-            return Err(FsError::InvalidInput);
-        }
-        Ok(Self {
+    fn new(buffer: &js_sys::SharedArrayBuffer) -> Self {
+        Self {
             length: js_sys::Int32Array::new_with_byte_offset_and_length(buffer, 0, 1),
             bytes: js_sys::Uint8Array::new_with_byte_offset(buffer, 4),
-        })
+        }
     }
 
     fn load(&self) -> io::Result<i32> {
@@ -64,15 +61,12 @@ pub struct HostDeviceFile {
 }
 
 impl HostDeviceFile {
-    pub fn new(start: HostDeviceStart) -> Result<Self> {
-        if js_sys::Object::is(&start.guest_to_host, &start.host_to_guest) {
-            return Err(FsError::InvalidInput);
-        }
-        Ok(Self {
-            incoming: Mailbox::new(&start.host_to_guest)?,
-            outgoing: Mailbox::new(&start.guest_to_host)?,
+    pub fn new(start: HostDeviceStart) -> Self {
+        Self {
+            incoming: Mailbox::new(&start.host_to_guest),
+            outgoing: Mailbox::new(&start.guest_to_host),
             read_offset: 0,
-        })
+        }
     }
 }
 

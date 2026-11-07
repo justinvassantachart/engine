@@ -430,11 +430,10 @@ export class Engine {
     }
     const debug = !buildOnly && this.debugger.enabled;
     const opener = buildOnly ? undefined : this.hostDevice;
-    if (
-      opener !== undefined &&
-      (typeof opener !== 'function' || !['c', 'python'].includes(this.lang))
-    )
-      return Promise.resolve(errorResult(new TypeError('Invalid host device configuration')));
+    if (opener !== undefined && !['c', 'python'].includes(this.lang))
+      return Promise.resolve(
+        errorResult(new TypeError('Host devices are supported only for C/C++ and Python execution'))
+      );
     clearTimeout(this.idleTimer);
     if (debug) {
       this.retireWorker();
@@ -573,6 +572,8 @@ export class Engine {
           });
         } else if (message.type === 'error') {
           this.finish(job, errorResult(new Error(message.message)));
+        } else if (message.type === 'host_wake') {
+          job.device?.drain();
         } else if (
           message.type === 'cpp_cache_object' &&
           message.generation === this.generation &&
@@ -739,7 +740,6 @@ export class Engine {
       if (!job.prepareOnly) this.debugger[Internals].beginRun();
       if (job.opener) {
         job.device = new HostDeviceSession((error) => this.finish(job, errorResult(error)));
-        job.device.attach(worker);
         job.device.open(job.opener);
         if (!this.current(job)) return;
         job.start.host_device = job.device.workerStart;
@@ -770,8 +770,7 @@ export class Engine {
       this.stdout[Internals].detach(worker);
       this.stderr[Internals].detach(worker);
     }
-    const cleanupError = job.device?.close();
-    if (cleanupError) result = errorResult(cleanupError);
+    job.device?.close();
     const healthy =
       result.type === 'completed' &&
       result.exitCode === 0 &&

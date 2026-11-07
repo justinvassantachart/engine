@@ -181,8 +181,8 @@ try {
   await complete('Debug: PCH, archive, source breakpoint, Step Over and continue');
 
   for (const [invalid, message] of [
-    ['source', 'C++ sources must select existing source files'],
-    ['empty sources', 'C++ sources must select existing source files'],
+    ['source', 'C/C++ sources must select existing source files'],
+    ['empty sources', 'C/C++ sources must select existing source files'],
     ['missing archive', 'Missing binary build input: /missing.a'],
     ['missing PCH', 'Missing binary build input: /missing.pch'],
     ['binary path', 'Invalid binary input path: /bad/../file']
@@ -190,7 +190,7 @@ try {
     await begin({ invalid });
     const state = await complete(`Reject ${invalid}`, false);
     assert.equal(state.result.type, 'error', JSON.stringify(state));
-    assert.equal(state.result.error.type, 'EngineError');
+    assert.equal(state.result.error.type, 'Error');
     assert.ok(state.result.error.message.includes(message), JSON.stringify(state));
   }
   await begin({ invalid: 'corrupt archive' });

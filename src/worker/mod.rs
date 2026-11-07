@@ -204,12 +204,6 @@ async fn start(msg: WorkerStart) {
     if msg.lang != Lang::C && (msg.cpp_artifacts.is_some() || !msg.binary_files.is_empty()) {
         return WorkerOut::Error { message: "Binary build inputs require C/C++".into() }.send();
     }
-    if msg.host_device.is_some() && !matches!(msg.lang, Lang::C | Lang::Python) {
-        return WorkerOut::Error {
-            message: "Host devices are supported only for C/C++ and Python execution".into(),
-        }
-        .send();
-    }
     match msg.lang {
         Lang::Python => crate::python::worker::start(msg).await,
         Lang::C | Lang::Rust => start_native(msg).await,
@@ -223,7 +217,7 @@ async fn start_native(msg: WorkerStart) {
     let mut artifacts = msg.cpp_artifacts.unwrap_or_default();
     if let Some(selected) = artifacts.sources.take() {
         if selected.is_empty() || selected.iter().any(|path| !sources.contains(path)) {
-            return WorkerOut::Error { message: "C++ sources must select existing source files".into() }.send();
+            return WorkerOut::Error { message: "C/C++ sources must select existing source files".into() }.send();
         }
         sources = selected;
     } else { sources.sort(); }
@@ -271,15 +265,7 @@ async fn start_native(msg: WorkerStart) {
 
     match msg.lang {
         Lang::C => {
-            let host_device = match msg.host_device.filter(|_| !msg.build_only).map(HostDeviceFile::new).transpose() {
-                Ok(device) => device,
-                Err(error) => {
-                    return WorkerOut::Error {
-                        message: format!("Invalid host device: {error}"),
-                    }
-                    .send();
-                }
-            };
+            let host_device = msg.host_device.filter(|_| !msg.build_only).map(HostDeviceFile::new);
             let toolchain = execution::compiler_toolchain().expect("verified toolchain");
             start_cpp(is_debug, msg.build_only, msg.prepare_compiler, build_start, sources, exec, fs, host_device, artifacts, msg.cpp_cache, cache_inputs, stock_inputs, toolchain, input_hash_ms).await;
         }

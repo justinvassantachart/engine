@@ -99,7 +99,7 @@ window.probe = {
           requestAnimationFrame(() => { if (jobState === this.state && this.state.drawFrameCallbackMs === null) this.state.drawFrameCallbackMs = performance.now() - this.state.apiStarted; });
         }
       });
-      return () => { this.state.deviceCleanups++; };
+      device.signal.addEventListener('abort', () => { jobState.deviceCleanups++; }, { once: true });
     };
     return { creationMs: this.creationMs, memory: memory(), stats: this.engine.cacheStats };
   },

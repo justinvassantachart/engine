@@ -2,7 +2,7 @@
 export const HOST_DEVICE_PATH = '/dev/debugger-sh-host';
 
 export interface HostDevice {
-  /** Aborted on completion, stop, or callback failure. */
+  /** Aborted on completion, stop, or callback failure; use it for cleanup. */
   readonly signal: AbortSignal;
   /** Arbitrary byte chunks. Returns an unsubscribe function. */
   onData(listener: (chunk: Uint8Array) => void): () => void;
@@ -10,7 +10,7 @@ export interface HostDevice {
   write(chunk: Uint8Array): Promise<void>;
 }
 
-export type HostDeviceOpener = (device: HostDevice) => void | (() => void);
+export type HostDeviceOpener = (device: HostDevice) => void;
 
 // Each direction has one fixed slot: length 0 = empty, -1 = closed.
 class Mailbox {
@@ -24,28 +24,6 @@ class Mailbox {
   }
 }
 
-function callbackError(reason: unknown): Error {
-  try {
-    return new Error(
-      `Host device callback failed: ${reason instanceof Error ? reason.message : String(reason)}`
-    );
-  } catch {
-    return new Error('Host device callback failed');
-  }
-}
-
-function runCleanup(cleanup?: () => void): Error | undefined {
-  try {
-    const result: unknown = cleanup?.();
-    if (result && typeof (result as { then?: unknown }).then === 'function') {
-      void Promise.resolve(result).catch(() => {});
-      return new TypeError('Host device cleanup must be synchronous');
-    }
-  } catch (reason) {
-    return callbackError(reason);
-  }
-}
-
 /** Internal transport; framing belongs to the application. */
 export class HostDeviceSession {
   private readonly incoming = new Mailbox();
@@ -56,47 +34,20 @@ export class HostDeviceSession {
   };
   private readonly abort = new AbortController();
   private readonly listeners = new Set<(chunk: Uint8Array) => void>();
-  private cleanup?: () => void;
-  private worker?: Worker;
   private writing = false;
 
-  constructor(private readonly onFailure: (error: Error) => void) {}
+  constructor(private readonly onFailure: (error: unknown) => void) {}
 
   open(opener: HostDeviceOpener) {
-    let cleanup: ReturnType<HostDeviceOpener>;
-    try {
-      cleanup = opener({
-        signal: this.abort.signal,
-        onData: (listener) => {
-          this.assertOpen();
-          if (typeof listener !== 'function')
-            throw new TypeError('Host device listener must be a function');
-          this.listeners.add(listener);
-          return () => {
-            this.listeners.delete(listener);
-          };
-        },
-        write: (bytes) => this.write(bytes)
-      });
-    } catch (reason) {
-      throw callbackError(reason);
-    }
-    if (cleanup !== undefined && typeof cleanup !== 'function') {
-      void Promise.resolve(cleanup).catch(() => {});
-      throw new TypeError('Host device opener must return a cleanup function or undefined');
-    }
-    if (typeof cleanup === 'function') {
-      if (this.abort.signal.aborted) {
-        const error = runCleanup(cleanup);
-        if (error) throw error;
-      } else this.cleanup = cleanup;
-    }
-  }
-
-  attach(worker: Worker) {
-    this.assertOpen();
-    this.worker = worker;
-    worker.addEventListener('message', this.onMessage);
+    opener({
+      signal: this.abort.signal,
+      onData: (listener) => {
+        this.assertOpen();
+        this.listeners.add(listener);
+        return () => this.listeners.delete(listener);
+      },
+      write: (bytes) => this.write(bytes)
+    });
   }
 
   private assertOpen() {
@@ -105,24 +56,21 @@ export class HostDeviceSession {
 
   private async write(bytes: Uint8Array): Promise<void> {
     this.assertOpen();
-    if (!(bytes instanceof Uint8Array))
-      throw new TypeError('Host device writes require Uint8Array');
     if (this.writing) throw new Error('Await the previous host device write before writing again');
     this.writing = true;
     try {
-      const snapshot = new Uint8Array(bytes),
-        slot = this.outgoing;
+      const snapshot = new Uint8Array(bytes);
       let offset = 0;
       while (offset < snapshot.length) {
         this.assertOpen();
-        const length = Atomics.load(slot.length, 0);
+        const length = Atomics.load(this.outgoing.length, 0);
         if (length !== 0) {
-          await Atomics.waitAsync(slot.length, 0, length).value;
+          await Atomics.waitAsync(this.outgoing.length, 0, length).value;
           continue;
         }
-        const chunk = snapshot.subarray(offset, offset + slot.bytes.length);
-        slot.bytes.set(chunk);
-        slot.publish(chunk.length);
+        const chunk = snapshot.subarray(offset, offset + this.outgoing.bytes.length);
+        this.outgoing.bytes.set(chunk);
+        this.outgoing.publish(chunk.length);
         offset += chunk.length;
       }
     } finally {
@@ -130,39 +78,27 @@ export class HostDeviceSession {
     }
   }
 
-  private readonly onMessage = (event: MessageEvent<{ type: string }>) => {
-    if (this.abort.signal.aborted || event.data?.type !== 'host_wake') return;
-    try {
-      const length = Atomics.load(this.incoming.length, 0);
-      if (length <= 0) return;
-      // Copy before releasing the slot; callbacks may synchronously write back.
-      const bytes = this.incoming.bytes.slice(0, length);
-      this.incoming.publish(0);
-      for (const listener of this.listeners) {
-        if (this.abort.signal.aborted) break;
-        void Promise.resolve(listener(bytes)).catch((reason: unknown) => this.fail(reason));
-      }
-    } catch (reason) {
-      this.fail(reason);
-    }
-  };
-
-  private fail(reason: unknown) {
+  /** Called by the engine for each `host_wake` worker message. */
+  drain() {
     if (this.abort.signal.aborted) return;
-    this.close();
-    this.onFailure(callbackError(reason));
+    const length = Atomics.load(this.incoming.length, 0);
+    if (length <= 0) return;
+    // Copy before releasing the slot; listeners may synchronously write back.
+    const bytes = this.incoming.bytes.slice(0, length);
+    this.incoming.publish(0);
+    for (const listener of this.listeners) {
+      if (this.abort.signal.aborted) break;
+      void Promise.resolve(listener(bytes)).catch((error: unknown) => {
+        if (!this.abort.signal.aborted) this.onFailure(error);
+      });
+    }
   }
 
-  close(): Error | undefined {
+  close() {
     if (this.abort.signal.aborted) return;
-    this.worker?.removeEventListener('message', this.onMessage);
-    this.worker = undefined;
     this.incoming.publish(-1);
     this.outgoing.publish(-1);
     this.abort.abort();
     this.listeners.clear();
-    const cleanup = this.cleanup;
-    this.cleanup = undefined;
-    return runCleanup(cleanup);
   }
 }

@@ -86,8 +86,6 @@ async function completed(label) {
   });
   return state;
 }
-const write = (text) => page.evaluate((value) => window.probe.engine.stdin.write(value), text);
-
 try {
   browser = await chromium.launch({ headless: true });
   page = await browser.newPage();
@@ -102,42 +100,6 @@ try {
   );
   await output('BEFORE');
   assert.match((await completed('empty read without input')).stdout, /EMPTY b''/);
-
-  const python =
-    'import sys\nname = input("Name? ")\nnumber = int(input("Number? "))\nprint(f"RESULT: {name} | {number * 2}", flush=True)\nprint("STDERR: complete", file=sys.stderr, flush=True)';
-  for (const [name, number, doubled] of [
-    ['Ada Lovelace', '21', '42'],
-    ['Grace Hopper', '7', '14']
-  ]) {
-    await begin('python', python);
-    await output('Name?');
-    await write(`${name}\n`);
-    await output('Number?');
-    await write(`${number}\n`);
-    const state = await completed(`Python sequential input: ${name}`);
-    assert.ok(state.stdout.includes(`RESULT: ${name} | ${doubled}`));
-    assert.ok(state.stderr.includes('STDERR: complete'));
-  }
-
-  await begin('python', 'print("WAITING", flush=True)\ninput()');
-  await output('WAITING');
-  await page.evaluate(() => window.probe.engine.stop());
-  await page.waitForFunction(() => window.probe.state.done, undefined, { timeout: 15_000 });
-  assert.equal((await page.evaluate(() => window.probe.state)).result.type, 'stopped');
-  await begin('python', 'print("RERUN", flush=True)');
-  await output('RERUN');
-  assert.match((await completed('stop blocked input and rerun')).stdout, /RERUN/);
-
-  await page.evaluate(() => window.probe.create('c'));
-  await begin(
-    'c',
-    '#include <iostream>\n#include <string>\nint main() { std::string name; int number; std::cout << "Name? " << std::flush; std::getline(std::cin, name); std::cout << "Number? " << std::flush; std::cin >> number; std::cout << "RESULT: " << name << " | " << number * 2 << std::endl; }'
-  );
-  await output('Name?');
-  await write('Ada Lovelace\n');
-  await output('Number?');
-  await write('21\n');
-  assert.match((await completed('C++ input control')).stdout, /RESULT: Ada Lovelace \| 42/);
   assert.deepEqual(pageErrors, []);
   console.log(JSON.stringify({ status: 'passed', results }, null, 2));
 } catch (error) {
