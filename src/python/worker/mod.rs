@@ -38,11 +38,7 @@ pub async fn start(msg: WorkerStart) {
 }
 
 async fn run(msg: WorkerStart, build_start: Instant) -> Result<WorkerOut<'static>, String> {
-    let host_device = msg
-        .host_device
-        .map(HostDeviceFile::new)
-        .transpose()
-        .map_err(|e| format!("Invalid host device: {e}"))?;
+    let host_device = msg.host_device.map(HostDeviceFile::new);
     let fs = crate::worker::create_user_fs(FsNode::Dir(msg.fs))
         .await
         .map_err(|e| format!("Failed to prepare the filesystem: {e}"))?;

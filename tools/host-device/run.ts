@@ -29,7 +29,7 @@ int main() {
     if (n <= 0) return 4;
     offset += n;
   }
-  return 0; // No final acknowledgement: output must arrive before cleanup.
+  return 0; // No final acknowledgement: output must arrive before the run resolves.
 }`,
     blocked: `#include <fcntl.h>
 #include <unistd.h>
@@ -38,8 +38,7 @@ int main() {
   char byte = 'r';
   if (fd < 0 || write(fd, &byte, 1) != 1) return 1;
   return read(fd, &byte, 1) < 0;
-}`,
-    empty: 'int main() { return 0; }'
+}`
   },
   python: {
     file: 'main.py',
@@ -58,14 +57,13 @@ while offset < len(data):
     count = os.write(fd, data[offset:])
     assert count > 0
     offset += count
-# No final acknowledgement: output must arrive before cleanup.
+# No final acknowledgement: output must arrive before the run resolves.
 `,
     blocked: `import os
 fd = os.open("${HOST_DEVICE_PATH}", os.O_RDWR)
 assert os.write(fd, b'r') == 1
 os.read(fd, 1)
-`,
-    empty: 'pass'
+`
   }
 };
 
@@ -73,12 +71,6 @@ async function testLanguage(lang: keyof typeof programs) {
   const program = programs[lang];
   const engine = await Engine.create(lang);
   let handle!: HostDevice;
-  let cleanups = 0;
-  const unhandled: unknown[] = [];
-  const onUnhandled = (reason: unknown) => {
-    unhandled.push(reason);
-  };
-  process.on('unhandledRejection', onUnhandled);
   const timer = setTimeout(() => {
     engine.stop();
     throw new Error('Host device test timed out');
@@ -88,9 +80,7 @@ async function testLanguage(lang: keyof typeof programs) {
     engine.debugger.enabled = debug;
     engine.fs = { [program.file]: program.exchange };
     const chunks: Uint8Array[] = [];
-    let writing!: Promise<void>,
-      overlap!: Promise<void>,
-      bytesAtCleanup = 0;
+    let writing!: Promise<void>, overlap!: Promise<void>;
     engine.hostDevice = (device) => {
       handle = device;
       device.onData((bytes) => {
@@ -100,16 +90,11 @@ async function testLanguage(lang: keyof typeof programs) {
       writing = device.write(input);
       input.fill(0); // write() must snapshot before its first wait for space.
       overlap = assert.rejects(device.write(new Uint8Array([1])), /previous host device write/);
-      return () => {
-        cleanups++;
-        bytesAtCleanup = chunks.reduce((total, chunk) => total + chunk.length, 0);
-      };
     };
     const result = await engine.run();
     await Promise.all([writing, overlap]);
     assert.equal(result.type, 'completed', JSON.stringify(result));
     if (result.type === 'completed') assert.equal(result.exitCode, 0);
-    assert.equal(bytesAtCleanup, size);
     assert.deepEqual(Buffer.concat(chunks), Buffer.from(expected));
     assert.equal(handle.signal.aborted, true);
     await assert.rejects(handle.write(new Uint8Array([1])), /closed/);
@@ -117,7 +102,6 @@ async function testLanguage(lang: keyof typeof programs) {
 
   try {
     await exchange(false);
-    assert.equal(cleanups, 1);
 
     // Stop an actual blocked guest read, then reuse the same Engine in Debug.
     engine.fs = { [program.file]: program.blocked };
@@ -128,15 +112,11 @@ async function testLanguage(lang: keyof typeof programs) {
     engine.hostDevice = (device) => {
       handle = device;
       device.onData(() => ready());
-      return () => {
-        cleanups++;
-      };
     };
     const running = engine.run();
     await waiting;
-    engine.stop();
+    await engine.stop();
     assert.equal((await running).type, 'stopped');
-    assert.equal(cleanups, 2);
     await assert.rejects(handle.write(new Uint8Array([1])), /closed/);
 
     let sequence = 1;
@@ -153,23 +133,8 @@ async function testLanguage(lang: keyof typeof programs) {
       arguments: { adapterID: 'host-device' }
     });
     await exchange(true);
-    assert.equal(cleanups, 3);
-    engine.debugger.enabled = false;
-    engine.fs = { [program.file]: program.empty };
-    engine.hostDevice = () => async () => {
-      cleanups++;
-      throw new Error('Async cleanup is not supported');
-    };
-    const failed = await engine.run();
-    assert.equal(failed.type, 'error');
-    if (failed.type === 'error') {
-      assert.equal(failed.error.type, 'TypeError');
-      assert.match(failed.error.message, /cleanup must be synchronous/);
-    }
-    await new Promise<void>((resolve) => setImmediate(resolve));
-    assert.equal(cleanups, 4);
-    assert.deepEqual(unhandled, []);
     if (lang === 'python') {
+      engine.debugger.enabled = false;
       engine.hostDevice = undefined;
       engine.fs = {
         'main.py': `import os
@@ -179,15 +144,13 @@ assert not os.path.exists("${HOST_DEVICE_PATH}")
       const absent = await engine.run();
       assert.equal(absent.type, 'completed', JSON.stringify(absent));
       if (absent.type === 'completed') assert.equal(absent.exitCode, 0);
-      assert.equal(cleanups, 4);
     }
     console.log(
-      `PASS ${lang}: Run/Debug byte exchange, partial transfers, backpressure, final delivery, stop/rerun and cleanup`
+      `PASS ${lang}: Run/Debug byte exchange, partial transfers, backpressure, stop/rerun`
     );
   } finally {
-    process.off('unhandledRejection', onUnhandled);
     clearTimeout(timer);
-    engine.stop();
+    await engine.dispose();
   }
 }
 
@@ -202,4 +165,5 @@ if (unsupported.type === 'error') {
   assert.equal(unsupported.error.type, 'TypeError');
   assert.match(unsupported.error.message, /supported only for C\/C\+\+ and Python/);
 }
+await rust.dispose();
 console.log('PASS: Python device is opt-in; Rust remains unsupported');

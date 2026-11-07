@@ -12,11 +12,13 @@ pub struct StdDequeFormatter;
 
 struct DequeData {
     begin: Variable,
+    pointer_type: Type,
     element_type: Type,
     element_size: usize,
     block_size: usize,
     start: usize,
     count: usize,
+    memory_size: usize,
 }
 
 impl DequeData {
@@ -111,11 +113,13 @@ impl DequeData {
         );
         Ok(Self {
             begin,
+            pointer_type,
             element_type,
             element_size,
             block_size,
             start,
             count,
+            memory_size,
         })
     }
 }
@@ -141,23 +145,13 @@ impl VariableFormatter for StdDequeFormatter {
             end.saturating_sub(start) <= 10_000,
             "std::deque page exceeds 10000 elements"
         );
-        let pointer_type = data
-            .begin
-            .ty()
-            .pointee()
-            .context("std::deque block type is unavailable")?;
-        let memory_size = value
-            .debugger()
-            .context("no debugger")?
-            .memory()
-            .byte_size() as u64;
         (start..end)
             .map(|index| {
                 let position = data.start + index;
                 let block = data
                     .begin
                     .child_at_offset((position / data.block_size * 4) as isize)
-                    .with_type(&pointer_type);
+                    .with_type(&data.pointer_type);
                 let address = block
                     .pointer_value()
                     .context("std::deque block is unavailable")?;
@@ -165,7 +159,7 @@ impl VariableFormatter for StdDequeFormatter {
                 ensure!(
                     !address.is_null()
                         && u64::from(address) + offset as u64 + data.element_size as u64
-                            <= memory_size,
+                            <= data.memory_size as u64,
                     "std::deque element is outside memory"
                 );
                 Ok(block

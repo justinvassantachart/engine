@@ -48,11 +48,11 @@ await engine.run();
 
 > Programs compile in **debug mode** by default, so a [DAP](https://microsoft.github.io/debug-adapter-protocol/) handshake is required before `run()` will proceed — see the [integration guide](./docs/integration.md#debugger-dap). To skip it, set `engine.debugger.enabled = false`.
 
-C++ source `throw`/`catch` and RAII work in Run and Debug. Prebuilt libc++ error
-helpers can still abort instead of throwing. The worker embeds a small LLVM
-exception supplement; compiler/sysroot URLs stay unchanged. Exact upstream
-notices and payload provenance are in `share/licenses/cpp-exceptions/` inside
-[runtime.tar.gz](./assets/cpp-exceptions/runtime.tar.gz).
+C++ `throw`/`catch` and destructors during unwinding work in Run and Debug. Some
+errors raised inside the prebuilt standard library still end the program instead of
+being catchable, because that library was built without exception support. Upstream
+notices and provenance for the embedded runtime pieces are in `share/licenses/cpp-exceptions/`
+inside [runtime.tar.gz](./assets/cpp-exceptions/runtime.tar.gz).
 
 ---
 
@@ -111,12 +111,6 @@ Build artifacts with the same compiler, sysroot, and flags as the engine. A PCH
 also needs its original header files at their original virtual paths. These
 inputs work in Run and Debug for C/C++ only; Python and Rust reject them.
 
-After building, run the browser regression with an existing Playwright installation:
-
-```bash
-PLAYWRIGHT_MODULE=/absolute/path/to/playwright/index.mjs node tools/cpp-artifacts/run.mjs --exceptions
-```
-
 ---
 
 ## Wiring stdin
@@ -130,19 +124,17 @@ await engine.stdin.write(new TextEncoder().encode('42\n'));
 
 ---
 
-For C/C++ or Python host I/O, set `engine.hostDevice` to a synchronous opener receiving
-`{ signal, onData, write }`; return an optional synchronous cleanup function. The guest opens
-`HOST_DEVICE_PATH` with `O_RDWR` for blocking reads/writes; polling is unsupported.
-`write` snapshots bytes; await each write. Stop/exit aborts the per-run signal,
-rejects pending writes and calls cleanup once. Terminal I/O stays separate.
+For C/C++ or Python host I/O, set `engine.hostDevice` to a function receiving
+`{ signal, onData, write }`. The guest opens `HOST_DEVICE_PATH` with `O_RDWR` for
+blocking reads/writes; polling is unsupported. `write` snapshots bytes; await each
+write. Stop/exit aborts the per-run signal and rejects pending writes. Terminal I/O
+stays separate.
 
 Python uses the same device through `os.open("/dev/debugger-sh-host", os.O_RDWR)`,
 `os.read(fd, size)`, and `os.write(fd, data)`. Reads and writes may be partial;
 loop until a complete application-defined message has transferred. The device
 is a byte stream: framing, request/response matching, and graphics or AI behavior
 belong to the application. It is absent when no opener is supplied.
-
-Test after building: `npx -y bun tools/host-device/run.ts`.
 
 ## Example project
 
@@ -161,6 +153,14 @@ npm run build   # wasm-pack build --target web && vite build
 npm run dev     # local development
 ```
 
+After building, run the browser regression with an existing Playwright installation:
+
+```bash
+PLAYWRIGHT_MODULE=/absolute/path/to/playwright/index.mjs node tools/cpp-artifacts/run.mjs --exceptions
+```
+
+Test after building: `npx -y bun tools/host-device/run.ts`.
+
 After building, run the stdin browser regression checks with an installed Playwright
 module and Chromium browser:
 
@@ -168,8 +168,7 @@ module and Chromium browser:
 PLAYWRIGHT_MODULE=/absolute/path/to/playwright/index.mjs node tools/stdin/run.mjs
 ```
 
-The checks cover an empty read without input, sequential Python input across reruns,
-stopping blocked input, and C++ input. Pass a built or unpacked release's
+The check covers an empty read without input. Pass a built or unpacked release's
 `dist/debugger-sh.js` as the first argument to test that artifact.
 
 To test against the reference IDE, clone [debugger-sh/debugger.sh](https://github.com/debugger-sh/debugger.sh) alongside this repo and link:

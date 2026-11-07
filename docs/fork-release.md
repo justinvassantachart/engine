@@ -68,8 +68,8 @@ PLAYWRIGHT_MODULE=/absolute/path/to/playwright/index.mjs node tools/stdin/run.mj
 ```
 
 An optional first argument selects the public `dist/debugger-sh.js` from an unpacked tarball.
-The test covers empty reads without input, sequential Python input, C++ input and stopping a
-blocked read before rerunning. It starts an isolated loopback server and closes its browser.
+The test covers an empty read without input. It starts an isolated loopback server and closes
+its browser. The runtime-cache browser suite retains terminal input and stop/rerun coverage.
 
 ## Upstream coverage
 
@@ -98,6 +98,44 @@ and runtime-asset changes to that upstream feature branch reproduces this fork's
 This synchronization does not replace the already-published
 `0.3.15-webide.0.7.3.1` release or its immutable source tag (`cf7fcdd`). A future
 fork artifact needs a new version and its own build, test, and integrity evidence.
+
+## Cleanup integration (2026-11-06)
+
+The six upstream branches now include the reviewed cleanup commits:
+
+| Upstream PR                                          | Cleanup commit |
+| ---------------------------------------------------- | -------------- |
+| [#18](https://github.com/debugger-sh/engine/pull/18) | `92613b6`      |
+| [#19](https://github.com/debugger-sh/engine/pull/19) | `4ce5898`      |
+| [#20](https://github.com/debugger-sh/engine/pull/20) | `7f0d347`      |
+| [#21](https://github.com/debugger-sh/engine/pull/21) | `57ee228`      |
+| [#22](https://github.com/debugger-sh/engine/pull/22) | `9bb1049`      |
+| [#23](https://github.com/debugger-sh/engine/pull/23) | `42de7cb`      |
+
+This fork carries the compatible cleanups alongside the compiler preparation, object caching,
+worker retention, cancellation, disposal, and debugger fixes already on fork `main`. Jacob's
+DWARF evaluation-resume fix (`018f029`, fork PR #8) remains part of its history. The source-match
+statements above describe their named historical commits; the current fork intentionally differs
+from the independent upstream branches in these areas:
+
+- Binary bytes, source files, and artifact options are snapshotted before worker readiness.
+  Fork PR #6 established owned copies for `Buffer` and `Uint8Array` subclasses; its snapshot
+  regression remains in the C++ artifact suite.
+- Shared initialization, verified C/C++ toolchain loading, non-C response draining, the local
+  `StdoutMode` type, and the public NodeNext declaration fixes remain in place.
+- Host devices use the existing operation lifecycle and identity checks. A session is assigned
+  before the opener runs so synchronous stop and disposal can close it. Async listener failures
+  still belong to the active operation. Cleanup uses `device.signal.addEventListener('abort',
+cleanup, { once: true })`; opener return values no longer register cleanup callbacks.
+- The fork DAP harness keeps its completion signal for failures before debugger initialization.
+  The exceptions, deque, and unavailable scenarios now finish on the standard `terminated`
+  event.
+
+For this integration, run the normal build, TypeScript and source lint checks, the runtime-cache
+Node and Rust tests, the host-device suite, DAP `multi-file exceptions basic formatting python`,
+and the stdin, C++ artifact (`--exceptions`), and runtime-cache Chromium regressions. The
+package version, compiler payloads, certificate registry, and published releases keep their
+existing identities; packaging a later release requires its own version and integrity evidence.
 
 ## Notices
 

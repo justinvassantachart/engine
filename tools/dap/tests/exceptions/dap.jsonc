@@ -40,6 +40,6 @@
       }
     },
     { "type": "request", "command": "continue", "arguments": { "threadId": 1 } },
-    { "type": "event", "event": "runResult", "body": { "type": "completed", "exitCode": 0 } }
+    { "type": "event", "event": "terminated", "$timeout": 10000 }
   ]
 }

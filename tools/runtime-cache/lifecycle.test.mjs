@@ -550,7 +550,11 @@ test('compile never opens devices; synchronous opener Stop prevents start', asyn
   const engine = await Engine.create('c', options());
   engine.debugger.enabled = false;
   let opens = 0;
-  engine.hostDevice = () => {
+  let cleanups = 0;
+  let handle;
+  engine.hostDevice = (device) => {
+    handle = device;
+    device.signal.addEventListener('abort', () => cleanups++, { once: true });
     opens++;
     void engine.stop();
   };
@@ -565,9 +569,101 @@ test('compile never opens devices; synchronous opener Stop prevents start', asyn
   worker = workers.at(-1);
   assert.equal((await job).type, 'stopped');
   assert.equal(opens, 1);
+  assert.equal(handle.signal.aborted, true);
+  assert.equal(cleanups, 1);
+  await assert.rejects(handle.write(new Uint8Array([1])), /closed/);
   assert.equal(worker.messages.filter((m) => m.lang).length, 1);
   await engine.dispose();
+  assert.equal(cleanups, 1);
 });
+
+test('host wakes and delayed callback failures cannot cross retained-worker jobs', async () => {
+  const engine = await Engine.create('c', options());
+  engine.debugger.enabled = false;
+  let delivered = 0;
+  let cleanups = 0;
+  let rejectOld;
+  engine.hostDevice = (device) => {
+    device.signal.addEventListener('abort', () => cleanups++, { once: true });
+    device.onData(() => {
+      delivered++;
+      return new Promise((_, reject) => {
+        rejectOld = reject;
+      });
+    });
+  };
+  const first = engine.run();
+  const worker = workers.at(-1);
+  await ready(worker);
+  const firstStart = worker.messages.at(-1);
+  const firstLength = new Int32Array(firstStart.host_device.guest_to_host, 0, 1);
+  Atomics.store(firstLength, 0, 1);
+  worker.emit({ type: 'host_wake', operationId: firstStart.operation_id - 1 });
+  assert.equal(delivered, 0);
+  assert.equal(Atomics.load(firstLength, 0), 1);
+  worker.emit({ type: 'host_wake' });
+  assert.equal(delivered, 1);
+  await complete(worker);
+  assert.equal((await first).type, 'completed');
+  assert.equal(cleanups, 1);
+
+  let handle;
+  engine.hostDevice = (device) => {
+    handle = device;
+    device.signal.addEventListener('abort', () => cleanups++, { once: true });
+    device.onData(() => {
+      delivered++;
+    });
+  };
+  const second = engine.run();
+  await new Promise((resolve) => setImmediate(resolve));
+  const secondStart = worker.messages.at(-1);
+  const secondLength = new Int32Array(secondStart.host_device.guest_to_host, 0, 1);
+  Atomics.store(secondLength, 0, 1);
+  worker.emit({ type: 'host_wake', operationId: firstStart.operation_id });
+  rejectOld(new Error('retired callback failure'));
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(handle.signal.aborted, false);
+  assert.equal(delivered, 1);
+  assert.equal(Atomics.load(secondLength, 0), 1);
+  worker.emit({ type: 'host_wake' });
+  assert.equal(delivered, 2);
+  await complete(worker);
+  assert.equal((await second).type, 'completed');
+  await engine.dispose();
+  assert.equal(cleanups, 2);
+});
+
+for (const asynchronous of [false, true]) {
+  test(`host callback failure closes its job (${asynchronous ? 'async' : 'sync'})`, async () => {
+    const engine = await Engine.create('c', options());
+    engine.debugger.enabled = false;
+    let handle;
+    let cleanups = 0;
+    engine.hostDevice = (device) => {
+      handle = device;
+      device.signal.addEventListener('abort', () => cleanups++, { once: true });
+      device.onData(() => {
+        const error = new Error('host callback failure');
+        if (asynchronous) return Promise.reject(error);
+        throw error;
+      });
+    };
+    const job = engine.run();
+    const worker = workers.at(-1);
+    await ready(worker);
+    const start = worker.messages.at(-1);
+    Atomics.store(new Int32Array(start.host_device.guest_to_host, 0, 1), 0, 1);
+    worker.emit({ type: 'host_wake' });
+    const result = await job;
+    assert.equal(result.type, 'error');
+    assert.match(result.error.message, /host callback failure/);
+    assert.equal(handle.signal.aborted, true);
+    assert.equal(worker.terminated, true);
+    await engine.dispose();
+    assert.equal(cleanups, 1);
+  });
+}
 
 test('scope fixed and isolated; disposed engines reject; idle timeout releases worker', async () => {
   const engine = await Engine.create('c', options({ idleTimeoutMs: 5 }));
