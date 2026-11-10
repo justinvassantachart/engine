@@ -4,10 +4,10 @@ A browser-based execution engine powered by WebAssembly. Compile and run C/C++ a
 
 ## Installation
 
-This is the WebIDE fork build `0.3.15-webide.0.9.0.1`, not an upstream npm release: `npm install debugger-sh` resolves to the upstream package. Install the fork from the release tarball published by this repository (see [docs/fork-release.md](./docs/fork-release.md)):
+This is the WebIDE fork build `0.3.15-webide.0.9.0.2`, not an upstream npm release: `npm install debugger-sh` resolves to the upstream package. Install the fork from its release tarball when published by this repository (see [docs/fork-release.md](./docs/fork-release.md)):
 
 ```bash
-npm install https://github.com/justinvassantachart/engine/releases/download/debugger-sh-v0.3.15-webide.0.9.0.1/debugger-sh-0.3.15-webide.0.9.0.1.tgz
+npm install https://github.com/justinvassantachart/engine/releases/download/debugger-sh-v0.3.15-webide.0.9.0.2/debugger-sh-0.3.15-webide.0.9.0.2.tgz
 ```
 
 > **Requires** these response headers (the engine uses `SharedArrayBuffer` for stdin):
@@ -62,7 +62,7 @@ inside [runtime.tar.gz](./assets/cpp-exceptions/runtime.tar.gz).
 const engine = await Engine.create('c'); // 'c' | 'python'
 
 engine.fs; // DirNode  — virtual filesystem, set before run()
-engine.binaryFiles; // Record<string, Uint8Array> — optional C/C++ binary files
+engine.binaryFiles; // Record<string, Uint8Array> — Python and C/C++ opaque runtime files
 engine.cppArtifacts; // Optional selected sources, archives, and precompiled header
 engine.stdout; // Stdout   — .on('data', (chunk: Uint8Array) => …) / .off(...)
 engine.stderr; // Stdout
@@ -86,10 +86,16 @@ See [Presentation filtering (Python)](./docs/integration.md#presentation-filteri
 
 ---
 
-## Precompiled C++ inputs
+## Binary runtime files and precompiled C++ inputs
 
-Set `binaryFiles` to bytes keyed by absolute virtual paths. Set `cppArtifacts`
-to select source files, link archives, or use a precompiled header:
+Set `binaryFiles` to bytes keyed by absolute virtual paths for Python or C/C++.
+These are opaque files: students can read and write them with ordinary guest file
+APIs. The engine does not decode images or interpret file extensions. Python Run
+and Debug use the same mounting path as C/C++, including ownership snapshots,
+path validation and collision rejection. Rust does not support this input yet.
+
+For C/C++, set `cppArtifacts` to select source files, link archives, or use a
+precompiled header:
 
 ```ts
 engine.binaryFiles = { '/support.a': archiveBytes, '/headers.pch': headerBytes };
@@ -109,7 +115,12 @@ Clear them before reusing an engine for an ordinary source-only run.
 
 Build artifacts with the same compiler, sysroot, and flags as the engine. A PCH
 also needs its original header files at their original virtual paths. These
-inputs work in Run and Debug for C/C++ only; Python and Rust reject them.
+artifact options work in Run and Debug for C/C++ only; Python and Rust reject
+`cppArtifacts` even when no archive or PCH is selected.
+
+The real Chromium test `tools/binary-files/browser.mjs` exercises Run and Debug,
+Unicode filenames, invalid UTF-8 and NUL bytes, immediate caller-buffer mutation,
+guest write/readback, and invalid paths/collisions for both supported languages.
 
 ---
 

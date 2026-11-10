@@ -42,6 +42,7 @@ async fn run(msg: WorkerStart, build_start: Instant) -> Result<WorkerOut<'static
     let fs = crate::worker::create_user_fs(FsNode::Dir(msg.fs))
         .await
         .map_err(|e| format!("Failed to prepare the filesystem: {e}"))?;
+    crate::worker::mount_binary_files(&fs, &msg.binary_files).await?;
 
     let exec = Execution::new(msg.stdin_buffer);
 
