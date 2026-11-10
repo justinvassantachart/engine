@@ -1,0 +1,209 @@
+{
+  "browser": "158.0.8127.18",
+  "results": [
+    {
+      "lang": "python",
+      "scenario": false,
+      "stdout": "BINARY PASS\n",
+      "stderr": "",
+      "stops": 0,
+      "done": true,
+      "result": {
+        "type": "completed",
+        "exitCode": 0,
+        "timing": {
+          "totalMs": 2379.3250000476837,
+          "buildMs": 1.2650000000000001,
+          "runMs": 1190.99
+        }
+      }
+    },
+    {
+      "lang": "python",
+      "scenario": true,
+      "stdout": "BINARY PASS\n",
+      "stderr": "",
+      "stops": 2,
+      "done": true,
+      "result": {
+        "type": "completed",
+        "exitCode": 0,
+        "timing": {
+          "totalMs": 2993.8799998760223,
+          "buildMs": 1.625,
+          "runMs": 1548.245001
+        }
+      }
+    },
+    {
+      "lang": "python",
+      "scenario": "collision",
+      "stdout": "",
+      "stderr": "",
+      "stops": 0,
+      "done": true,
+      "result": {
+        "type": "error",
+        "error": {
+          "type": "Error",
+          "message": "Cannot mount binary input /main.py: entity already exists"
+        }
+      }
+    },
+    {
+      "lang": "python",
+      "scenario": "traversal",
+      "stdout": "",
+      "stderr": "",
+      "stops": 0,
+      "done": true,
+      "result": {
+        "type": "error",
+        "error": {
+          "type": "Error",
+          "message": "Invalid binary input path: /images/../escape"
+        }
+      }
+    },
+    {
+      "lang": "python",
+      "scenario": "alias",
+      "stdout": "",
+      "stderr": "",
+      "stops": 0,
+      "done": true,
+      "result": {
+        "type": "error",
+        "error": {
+          "type": "Error",
+          "message": "Invalid binary input path: /images//alias"
+        }
+      }
+    },
+    {
+      "lang": "python",
+      "scenario": "relative",
+      "stdout": "",
+      "stderr": "",
+      "stops": 0,
+      "done": true,
+      "result": {
+        "type": "error",
+        "error": {
+          "type": "Error",
+          "message": "Invalid binary input path: images/relative"
+        }
+      }
+    },
+    {
+      "lang": "python",
+      "scenario": "artifacts",
+      "stdout": "",
+      "stderr": "",
+      "stops": 0,
+      "done": true,
+      "result": {
+        "type": "error",
+        "error": {
+          "type": "Error",
+          "message": "Binary build inputs require C/C++"
+        }
+      }
+    },
+    {
+      "lang": "c",
+      "scenario": false,
+      "stdout": "BINARY PASS\n",
+      "stderr": "",
+      "stops": 0,
+      "done": true,
+      "result": {
+        "type": "completed",
+        "exitCode": 0,
+        "timing": {
+          "totalMs": 8334.465000152588,
+          "buildMs": 6274.175001,
+          "runMs": 29.214999
+        }
+      }
+    },
+    {
+      "lang": "c",
+      "scenario": true,
+      "stdout": "BINARY PASS\n",
+      "stderr": "",
+      "stops": 1,
+      "done": true,
+      "result": {
+        "type": "completed",
+        "exitCode": 0,
+        "timing": {
+          "totalMs": 8705.130000114441,
+          "buildMs": 6561.54,
+          "runMs": 263.34000000000003
+        }
+      }
+    },
+    {
+      "lang": "c",
+      "scenario": "collision",
+      "stdout": "",
+      "stderr": "",
+      "stops": 0,
+      "done": true,
+      "result": {
+        "type": "error",
+        "error": {
+          "type": "Error",
+          "message": "Cannot mount binary input /main.cpp: entity already exists"
+        }
+      }
+    },
+    {
+      "lang": "c",
+      "scenario": "traversal",
+      "stdout": "",
+      "stderr": "",
+      "stops": 0,
+      "done": true,
+      "result": {
+        "type": "error",
+        "error": {
+          "type": "Error",
+          "message": "Invalid binary input path: /images/../escape"
+        }
+      }
+    },
+    {
+      "lang": "c",
+      "scenario": "alias",
+      "stdout": "",
+      "stderr": "",
+      "stops": 0,
+      "done": true,
+      "result": {
+        "type": "error",
+        "error": {
+          "type": "Error",
+          "message": "Invalid binary input path: /images//alias"
+        }
+      }
+    },
+    {
+      "lang": "c",
+      "scenario": "relative",
+      "stdout": "",
+      "stderr": "",
+      "stops": 0,
+      "done": true,
+      "result": {
+        "type": "error",
+        "error": {
+          "type": "Error",
+          "message": "Invalid binary input path: images/relative"
+        }
+      }
+    }
+  ],
+  "errors": []
+}
