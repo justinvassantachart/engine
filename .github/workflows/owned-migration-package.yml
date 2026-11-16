@@ -33,22 +33,22 @@ jobs:
       - name: Build main plus PR23 using owned distribution policy
         run: |
           npm version --no-git-tag-version "0.3.16-upstream.${GITHUB_SHA::12}"
+          cargo clean --release -p engine --target wasm32-unknown-unknown
           npm run build:rs
-          ENGINE_PACKAGE_SOURCE="$GITHUB_SHA" npx vite build --config owned/vite.config.ts
-          npm pack --json > pack.json
-          node -e 'process.stdout.write(JSON.parse(require("fs").readFileSync("pack.json"))[0].filename)' > tarball.txt
+          ENGINE_PACKAGE_SOURCE="$GITHUB_SHA" node owned/prove-package.mjs
       - name: Verify browser behavior and separately installed consumer
         run: |
           npx vitest run --config owned/browser.config.ts
           ENGINE_BROWSER=webkit npx vitest run --config owned/browser.config.ts tests/devices.ts tests/process.ts tests/toolchains/cpp.ts tests/toolchains/python.ts ../../owned/tests
           node owned/smoke.mjs "$(cat tarball.txt)"
-          npm run test:dap
+          set -o pipefail
+          npm run test:dap | tee dap-verification.log
       - name: Publish owned immutable candidate
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          sha256sum "$(cat tarball.txt)" dist/*.js dist/assets/*.js dist/*.wasm dist/*.json mirrors/release-assets/* > SHA256SUMS
-          gh release create "upstream-${GITHUB_SHA}" "$(cat tarball.txt)" SHA256SUMS pack.json toolchains-verified.jsonl mirrors/release-assets/* --target "$GITHUB_SHA" --prerelease --title "Owned main plus PR23 package ${GITHUB_SHA::12}" --notes "Owned distribution of upstream main plus PR23. See source.json in the archive and the source commit for the complete source and owned build recipe. No stable npm publication or upstream pull request."
+          sha256sum "$(cat tarball.txt)" dist/*.js dist/assets/*.js dist/*.wasm dist/*.json initialization-*.json reproducibility.json compiled-wasm-lineage.json dap-verification.log mirrors/release-assets/* > SHA256SUMS
+          gh release create "upstream-${GITHUB_SHA}" "$(cat tarball.txt)" SHA256SUMS pack.json toolchains-verified.jsonl initialization-before.json initialization-after.json reproducibility.json compiled-wasm-lineage.json dap-verification.log mirrors/release-assets/* --target "$GITHUB_SHA" --prerelease --title "Owned main plus PR23 package ${GITHUB_SHA::12}" --notes "Owned distribution of upstream main plus PR23. See source.json in the archive and the source commit for the complete source and owned build recipe. No stable npm publication or upstream pull request."
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -58,3 +58,7 @@ jobs:
             pack.json
             SHA256SUMS
             toolchains-verified.jsonl
+            initialization-*.json
+            reproducibility.json
+            compiled-wasm-lineage.json
+            dap-verification.log
