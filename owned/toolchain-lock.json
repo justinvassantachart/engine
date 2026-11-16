@@ -1,0 +1,23 @@
+{
+  "llvm": {
+    "revision": "392dfff97d29b59d77e5cac6d4b6ef2585fe7117",
+    "sha256": {
+      "llvm": "8da7e06bf24341e85e0261bc727c65f0ff4b1f191a71f2af431e44f345bc6bd6",
+      "sysroot": "c549ba2c715645298ddec4609859b6982188ab4662326ad023a4568a289f3a7b"
+    }
+  },
+  "python": {
+    "revision": "5e58eaad7c58df58dfa8ea549c87996e01dd1077",
+    "sha256": {
+      "python": "76976d2fe91a0970106430642d4dfce2301f9f0674fd1ef7e6ee263c9bf05838",
+      "sysroot": "26d969709d7f45b8a44800388d97e302cd3a663b327f0d9d720ae7bf8bd0e63d"
+    }
+  },
+  "rust": {
+    "revision": "0ef1bc386059596dada8fb65b50425aab2ea637a",
+    "sha256": {
+      "rustc": "b633bde043f54b0cef70969a59c77f1d568fde53a47476616e1228cc8c4b881f",
+      "sysroot": "06d8ae9fe4b18a55dad755d95e6e149fbbba045523b1396a84b891147f8305cb"
+    }
+  }
+}
