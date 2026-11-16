@@ -31,7 +31,7 @@ jobs:
           test ! -e dist
           node owned/check-source.mjs
       - run: rustup toolchain install
-      - run: cargo install wasm-pack --version 0.15.0 --locked
+      - run: cargo install wasm-pack --version 0.15.0 --locked --target-dir "$RUNNER_TEMP/wasm-pack-install"
       - run: npm ci
       - name: Rebuild every Rust crate, then TypeScript and the npm archive
         run: |
