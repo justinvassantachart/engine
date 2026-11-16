@@ -1,0 +1,16 @@
+diff --git a/src/ts/index.ts b/src/ts/index.ts
+index 431bd9c..eeea1a4 100644
+--- a/src/ts/index.ts
++++ b/src/ts/index.ts
+@@ -109,7 +109,10 @@ export class Engine {
+       );
+       const exports = await init({ module_or_path: module });
+       return { module, exports };
+-    })();
++    })().catch((error) => {
++      runtime = undefined;
++      throw error;
++    });
+ 
+     const engine = new Engine(Internals, await runtime);
+     if (options?.fs) await engine.fs.mount(options.fs);

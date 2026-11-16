@@ -1,0 +1,28 @@
+{
+  "upstreamMain": "d14753f4ee78f3655db8f555f685102f64b61dc2",
+  "upstreamBase": "28b6738e5746e2c2950c5b60e0b5a7cc746429b0",
+  "distributionOwner": "justinvassantachart/engine",
+  "runtimePatches": [
+    {
+      "id": "retry-failed-initialization",
+      "scope": "src/ts/index.ts Engine.create",
+      "reason": "The private module-level initialization promise retains a rejection forever; no public API can reset it after a transient cold-load failure.",
+      "regression": "owned/tests/initialization.ts",
+      "upstreamApproval": "not requested; owned patch only"
+    }
+  ],
+  "ownedDistributionPolicy": [
+    "Package-relative Engine WASM and worker assets",
+    "Build-time verified toolchain digests and content-addressed mirror URLs",
+    "Source and toolchain receipts in dist",
+    "Clean installed-package browser verification"
+  ],
+  "excludedRuntimeChanges": [
+    "compileOnly",
+    "toolchainProvenance export",
+    "ProcessResult.error",
+    "compiler cache implementation",
+    "cancellation guards",
+    "runtime checksum interception"
+  ]
+}

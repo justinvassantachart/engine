@@ -109,7 +109,10 @@ export class Engine {
       );
       const exports = await init({ module_or_path: module });
       return { module, exports };
-    })();
+    })().catch((error) => {
+      runtime = undefined;
+      throw error;
+    });
 
     const engine = new Engine(Internals, await runtime);
     if (options?.fs) await engine.fs.mount(options.fs);

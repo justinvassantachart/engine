@@ -1,0 +1,64 @@
+name: Owned upstream migration package
+on:
+  push:
+    branches: [codex/main-pr23-owned-package]
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: owned-engine-package
+  cancel-in-progress: true
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      ENGINE_TOOLCHAIN_BASE_URL: https://justinvassantachart.github.io/engine/toolchains/sha256/
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.22.0'
+          cache: npm
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo install wasm-pack --version 0.15.0 --locked
+      - run: npm ci
+      - run: node owned/check-source.mjs
+      - run: npx playwright install --with-deps chromium webkit
+      - name: Verify source-qualified toolchain inputs
+        run: node owned/verify-toolchains.mjs mirrors > toolchains-verified.jsonl
+      - name: Build main plus PR23 using owned distribution policy
+        run: |
+          npm version --no-git-tag-version "0.3.16-upstream.${GITHUB_SHA::12}"
+          cargo clean --release -p engine --target wasm32-unknown-unknown
+          npm run build:rs
+          ENGINE_PACKAGE_SOURCE="$GITHUB_SHA" node owned/prove-package.mjs
+      - name: Verify browser behavior and separately installed consumer
+        run: |
+          npx vitest run --config owned/browser.config.ts
+          ENGINE_BROWSER=webkit npx vitest run --config owned/browser.config.ts tests/devices.ts tests/process.ts tests/toolchains/cpp.ts tests/toolchains/python.ts ../../owned/tests
+          node owned/smoke.mjs "$(cat tarball.txt)"
+          set -o pipefail
+          npm run test:dap | tee dap-verification.log
+      - name: Publish owned immutable candidate
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          sha256sum "$(cat tarball.txt)" dist/*.js dist/assets/*.js dist/*.wasm dist/*.json initialization-*.json reproducibility.json compiled-wasm-lineage.json dap-verification.log mirrors/release-assets/* > SHA256SUMS
+          gh release create "upstream-${GITHUB_SHA}" "$(cat tarball.txt)" SHA256SUMS pack.json toolchains-verified.jsonl initialization-before.json initialization-after.json reproducibility.json compiled-wasm-lineage.json dap-verification.log mirrors/release-assets/* --target "$GITHUB_SHA" --prerelease --title "Owned main plus PR23 package ${GITHUB_SHA::12}" --notes "Owned distribution of upstream main plus PR23. See source.json in the archive and the source commit for the complete source and owned build recipe. No stable npm publication or upstream pull request."
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: owned-engine-${{ github.sha }}
+          path: |
+            *.tgz
+            pack.json
+            SHA256SUMS
+            toolchains-verified.jsonl
+            initialization-*.json
+            reproducibility.json
+            compiled-wasm-lineage.json
+            dap-verification.log
