@@ -1,0 +1,97 @@
+name: Verify frozen Engine full rebuild
+on:
+  push:
+    branches: [codex/verify-e7-full-rebuild]
+permissions:
+  contents: read
+jobs:
+  rebuild:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      ENGINE_PACKAGE_SOURCE: e7a53c8d02e7e611a8312e6e734d5c86094c88e6
+      ENGINE_TOOLCHAIN_BASE_URL: https://justinvassantachart.github.io/engine/toolchains/sha256/
+      # A new hosted runner, with no Rust cache restore. Keep the original build
+      # location so this independently repeats the published recipe exactly.
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: e7a53c8d02e7e611a8312e6e734d5c86094c88e6
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.22.0'
+      - name: Require frozen source and no previous build outputs
+        run: |
+          test "$(git rev-parse HEAD)" = "$ENGINE_PACKAGE_SOURCE"
+          test ! -e "$CARGO_TARGET_DIR"
+          test ! -e pkg
+          test ! -e dist
+          node owned/check-source.mjs
+      - run: rustup toolchain install
+      - run: cargo install wasm-pack --version 0.15.0 --locked
+      - run: npm ci
+      - name: Rebuild every Rust crate, then TypeScript and the npm archive
+        run: |
+          test ! -e "$CARGO_TARGET_DIR"
+          npm version --no-git-tag-version "0.3.16-upstream.${ENGINE_PACKAGE_SOURCE::12}"
+          npm run build:rs
+          npx vite build --config owned/vite.config.ts
+          npm pack --json > rebuilt-pack.json
+      - name: Compare published bytes without modifying the release
+        run: |
+          mkdir published
+          curl --fail --location --retry 3 "https://github.com/justinvassantachart/engine/releases/download/upstream-${ENGINE_PACKAGE_SOURCE}/debugger-sh-0.3.16-upstream.${ENGINE_PACKAGE_SOURCE::12}.tgz" -o published/package.tgz
+          tar -xzf published/package.tgz -C published
+          node --input-type=module <<'JS'
+          import assert from 'node:assert/strict';
+          import { execFileSync } from 'node:child_process';
+          import { createHash } from 'node:crypto';
+          import { readFileSync, readdirSync, writeFileSync } from 'node:fs';
+          import { join } from 'node:path';
+
+          const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');
+          const pack = JSON.parse(readFileSync('rebuilt-pack.json'))[0];
+          const rebuilt = readFileSync(pack.filename);
+          const published = readFileSync('published/package.tgz');
+          const rebuiltWasm = readFileSync('dist/engine_bg.wasm');
+          const publishedWasm = readFileSync('published/package/dist/engine_bg.wasm');
+          const expected = {
+            packageSha256: '303a7429e32882835635eb7b1331aac499f2368330f4443a5868d2e294f68a0f',
+            wasmSha256: '9bee7ec873c0d182fbb4238ca03924d314b8e746628c1e9ea91de066e4538cd7'
+          };
+          const version = (command, args) => execFileSync(command, args, { encoding: 'utf8' }).trim();
+          const files = directory => readdirSync(directory, { withFileTypes: true }).flatMap(entry => {
+            const file = join(directory, entry.name);
+            return entry.isDirectory() ? files(file) : [{ file, sha256: sha256(readFileSync(file)) }];
+          });
+          const proof = {
+            source: process.env.ENGINE_PACKAGE_SOURCE,
+            verificationWorkflowCommit: process.env.GITHUB_SHA,
+            run: `https://github.com/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`,
+            comparedRelease: `upstream-${process.env.ENGINE_PACKAGE_SOURCE}`,
+            scope: 'Independent Ubuntu hosted runner; empty Rust target; all Rust crates, WASM optimization, TypeScript distribution and npm archive rebuilt from frozen source; no Rust build cache restored',
+            expected,
+            published: { packageSha256: sha256(published), wasmSha256: sha256(publishedWasm) },
+            rebuilt: { packageSha256: sha256(rebuilt), wasmSha256: sha256(rebuiltWasm), packageBytes: rebuilt.length, wasmBytes: rebuiltWasm.length, sri: pack.integrity },
+            identical: { package: rebuilt.equals(published), wasm: rebuiltWasm.equals(publishedWasm) },
+            toolchain: { node: process.version, npm: version('npm', ['--version']), rustc: version('rustc', ['--version']), wasmPack: version('wasm-pack', ['--version']) },
+            files: files('dist')
+          };
+          writeFileSync('full-rebuild-proof.json', JSON.stringify(proof, null, 2) + '\n');
+          assert.equal(proof.published.packageSha256, expected.packageSha256, 'Published archive changed');
+          assert.equal(proof.published.wasmSha256, expected.wasmSha256, 'Published WASM changed');
+          assert(proof.identical.wasm, 'Independent Rust/WASM rebuild differs');
+          assert(proof.identical.package, 'Independent full package rebuild differs');
+          console.log(JSON.stringify(proof, null, 2));
+          JS
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: engine-e7-independent-full-rebuild
+          path: |
+            *.tgz
+            rebuilt-pack.json
+            full-rebuild-proof.json
